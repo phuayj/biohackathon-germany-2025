@@ -50,6 +50,26 @@ BioHackathon Germany 2025 event page: [4th BioHackathon Germany — Detection an
   pytest
   ```
 
+## Run the UI
+
+Launch the Streamlit audit card demo:
+
+```bash
+uv run streamlit run src/kg_skeptic/app.py
+```
+
+Or with conda:
+
+```bash
+streamlit run src/kg_skeptic/app.py
+```
+
+This opens a browser with the "Hello Audit Card" demo:
+- Click **Run Audit** to evaluate a canned biomedical claim
+- View the **PASS/FAIL** verdict based on rule evaluation
+- See **normalized entity IDs** (HGNC, MONDO, etc.)
+- Inspect **fired rules** with scores and explanations
+
 ## Repository layout
 - `src/kg_skeptic/`: Python package with pipeline components, MCP tools, rules engine, and models.
 - `docs/`: Design notes, architecture, and roadmap.

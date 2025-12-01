@@ -16,10 +16,10 @@
 ### Rule Engine (Done)
 - [x] Implement rule DSL (50–100 lines) covering type constraints, ontology closure (is-a/part-of), inheritance/tissue plausibility, and a clear "because" message per rule.
 
-### UI "Hello Audit Card" (Pending)
-- [ ] Static card with placeholders in Streamlit.
-- [ ] Wire button that calls agent with canned claim → shows PASS/FAIL.
-- [ ] Display normalized IDs and one rule firing.
+### UI "Hello Audit Card" (Done)
+- [x] Static card with placeholders in Streamlit.
+- [x] Wire button that calls agent with canned claim → shows PASS/FAIL.
+- [x] Display normalized IDs and one rule firing.
 
 **Definition of Done:** python script → card for a canned claim, IDs normalized, one rule firing.
 

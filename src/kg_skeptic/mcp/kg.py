@@ -433,7 +433,7 @@ class KGTool:
         Args:
             subject: Subject node ID (e.g., "HGNC:1100", "MONDO:0007254")
             object: Object node ID
-            predicate: Optional predicate to filter by (e.g., "biolink:causes")
+            predicate: Optional predicate to filter by (e.g., "biolink:gene_associated_with_condition")
 
         Returns:
             EdgeQueryResult with existence flag and matching edges

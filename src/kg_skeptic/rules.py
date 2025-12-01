@@ -105,11 +105,46 @@ class _FactFormatter(dict):
         super().__init__()
         self.facts = facts
 
+        # Seed top-level keys (e.g., "claim", "context") with dot-access proxies
+        for key, value in facts.items():
+            if isinstance(value, Mapping):
+                self[key] = _DotAccessor(value)
+            else:
+                self[key] = value
+
     def __missing__(self, key: str) -> str:
         value = _get_fact_value(self.facts, key)
         if value is None:
             return "?"
+        if isinstance(value, Mapping):
+            return _DotAccessor(value)
         return str(value)
+
+
+class _DotAccessor:
+    """Proxy object to support {claim.entity_count} style templates."""
+
+    def __init__(self, data: Mapping[str, Any]) -> None:
+        self._data = data
+
+    def __getattr__(self, name: str) -> Any:
+        value = self._data.get(name)
+        if isinstance(value, Mapping):
+            return _DotAccessor(value)
+        if value is None:
+            return "?"
+        return value
+
+    def __getitem__(self, key: str) -> Any:
+        value = self._data.get(key)
+        if isinstance(value, Mapping):
+            return _DotAccessor(value)
+        if value is None:
+            return "?"
+        return value
+
+    def __str__(self) -> str:
+        return str(self._data)
 
 
 @dataclass

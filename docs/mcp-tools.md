@@ -174,7 +174,7 @@ from kg_skeptic.mcp.kg import KGTool, InMemoryBackend, KGEdge
 backend = InMemoryBackend()
 backend.add_edge(KGEdge(
     subject="HGNC:1100",
-    predicate="biolink:causes",
+    predicate="biolink:gene_associated_with_condition",
     object="MONDO:0007254",
 ))
 

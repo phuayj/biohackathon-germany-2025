@@ -24,8 +24,8 @@
 - [x] Implement engine that loads `rules.yaml`, returns rule features (floats) and RuleTrace.
 
 ### UI "Hello Audit Card"
-- [ ] Static card with placeholders.
-- [ ] Wire button that calls agent with canned claim → shows PASS/FAIL.
+- [x] Static card with placeholders.
+- [x] Wire button that calls agent with canned claim → shows PASS/FAIL.
 
 **Definition of Done:** python script → card for a canned claim, IDs normalized, one rule firing.
 
