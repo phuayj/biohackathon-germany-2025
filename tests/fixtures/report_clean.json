@@ -1,0 +1,79 @@
+{
+  "task_id": "task-001",
+  "agent_name": "bio-qa-agent",
+  "summary": "Audit completed with no issues. All claims verified against knowledge sources.",
+  "claims": [
+    {
+      "id": "claim-001",
+      "text": "TP53 is a tumor suppressor gene located on chromosome 17.",
+      "entities": [
+        {
+          "mention": "TP53",
+          "norm_id": "HGNC:11998",
+          "norm_label": "tumor protein p53",
+          "source": "dictionary",
+          "metadata": {
+            "symbol": "TP53",
+            "alias": ["p53", "LFS1"]
+          }
+        },
+        {
+          "mention": "chromosome 17",
+          "norm_id": "CHR:17",
+          "norm_label": "Chromosome 17",
+          "source": "rule",
+          "metadata": {}
+        }
+      ],
+      "support_span": "According to HGNC, TP53 (HGNC:11998) is located on chr17p13.1.",
+      "evidence": ["PMID:12345678", "HGNC:11998"],
+      "metadata": {
+        "confidence": 0.95,
+        "extraction_method": "rule"
+      }
+    },
+    {
+      "id": "claim-002",
+      "text": "BRCA1 interacts with TP53 in the DNA damage response pathway.",
+      "entities": [
+        {
+          "mention": "BRCA1",
+          "norm_id": "HGNC:1100",
+          "norm_label": "BRCA1 DNA repair associated",
+          "source": "dictionary",
+          "metadata": {}
+        },
+        {
+          "mention": "TP53",
+          "norm_id": "HGNC:11998",
+          "norm_label": "tumor protein p53",
+          "source": "dictionary",
+          "metadata": {}
+        },
+        {
+          "mention": "DNA damage response pathway",
+          "norm_id": "GO:0006974",
+          "norm_label": "DNA damage response",
+          "source": "dictionary",
+          "metadata": {}
+        }
+      ],
+      "support_span": "BRCA1-TP53 interaction is documented in STRING and Reactome.",
+      "evidence": ["PMID:23456789", "REACT:R-HSA-69473"],
+      "metadata": {
+        "confidence": 0.92,
+        "extraction_method": "rule"
+      }
+    }
+  ],
+  "findings": [],
+  "suggested_fixes": [],
+  "stats": {
+    "total_claims": 2,
+    "total_findings": 0,
+    "findings_by_severity": {},
+    "findings_by_kind": {},
+    "entities_normalized": 5,
+    "entities_unresolved": 0
+  }
+}

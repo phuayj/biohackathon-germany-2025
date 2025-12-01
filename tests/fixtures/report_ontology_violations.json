@@ -1,0 +1,176 @@
+{
+  "task_id": "task-002",
+  "agent_name": "bio-qa-agent",
+  "summary": "Audit found 3 issues: 1 ontology violation, 1 unnormalized entity, 1 taxon mismatch.",
+  "claims": [
+    {
+      "id": "claim-001",
+      "text": "BRCA1 is a kinase that phosphorylates p53.",
+      "entities": [
+        {
+          "mention": "BRCA1",
+          "norm_id": "HGNC:1100",
+          "norm_label": "BRCA1 DNA repair associated",
+          "source": "dictionary",
+          "metadata": {
+            "type": "gene"
+          }
+        },
+        {
+          "mention": "p53",
+          "norm_id": "HGNC:11998",
+          "norm_label": "tumor protein p53",
+          "source": "dictionary",
+          "metadata": {}
+        }
+      ],
+      "support_span": null,
+      "evidence": [],
+      "metadata": {
+        "confidence": 0.6,
+        "extraction_method": "llm"
+      }
+    },
+    {
+      "id": "claim-002",
+      "text": "The mouse gene Trp53 is expressed in human liver tissue.",
+      "entities": [
+        {
+          "mention": "Trp53",
+          "norm_id": "MGI:98834",
+          "norm_label": "transformation related protein 53",
+          "source": "dictionary",
+          "metadata": {
+            "taxon": "Mus musculus",
+            "taxon_id": "NCBITaxon:10090"
+          }
+        },
+        {
+          "mention": "human liver tissue",
+          "norm_id": "UBERON:0002107",
+          "norm_label": "liver",
+          "source": "dictionary",
+          "metadata": {
+            "taxon": "Homo sapiens",
+            "taxon_id": "NCBITaxon:9606"
+          }
+        }
+      ],
+      "support_span": null,
+      "evidence": [],
+      "metadata": {
+        "confidence": 0.5,
+        "extraction_method": "llm"
+      }
+    },
+    {
+      "id": "claim-003",
+      "text": "The XYZ123 protein regulates apoptosis.",
+      "entities": [
+        {
+          "mention": "XYZ123 protein",
+          "norm_id": null,
+          "norm_label": null,
+          "source": "unknown",
+          "metadata": {}
+        },
+        {
+          "mention": "apoptosis",
+          "norm_id": "GO:0006915",
+          "norm_label": "apoptotic process",
+          "source": "dictionary",
+          "metadata": {}
+        }
+      ],
+      "support_span": null,
+      "evidence": [],
+      "metadata": {
+        "confidence": 0.3,
+        "extraction_method": "llm"
+      }
+    }
+  ],
+  "findings": [
+    {
+      "id": "finding-001",
+      "kind": "ontology_violation",
+      "severity": "error",
+      "message": "BRCA1 is not classified as a kinase. BRCA1 is annotated as 'DNA repair associated' (GO:0006281) and does not have kinase activity (GO:0016301).",
+      "claim_id": "claim-001",
+      "provenance": {
+        "rule_id": "rule-kinase-check",
+        "rule_name": "Verify kinase classification",
+        "kg_source": "GO",
+        "kg_query": "SELECT ?activity WHERE { HGNC:1100 :hasActivity ?activity }",
+        "evidence_ids": ["GO:0006281"]
+      },
+      "suggested_fix": {
+        "target_claim_id": "claim-001",
+        "patch": "Replace 'BRCA1 is a kinase' with 'BRCA1 is a DNA repair protein'. The phosphorylation of p53 is performed by kinases such as ATM and CHK2, which BRCA1 may recruit.",
+        "rationale": "BRCA1 functions in DNA repair complexes but does not itself possess kinase activity.",
+        "confidence": 0.85,
+        "metadata": {
+          "alternative_genes": ["ATM", "CHK2", "ATR"]
+        }
+      }
+    },
+    {
+      "id": "finding-002",
+      "kind": "taxon_mismatch",
+      "severity": "error",
+      "message": "Taxon mismatch: Trp53 (Mus musculus) cannot be expressed in human tissue. Use TP53 (Homo sapiens) for human contexts.",
+      "claim_id": "claim-002",
+      "provenance": {
+        "rule_id": "rule-taxon-consistency",
+        "rule_name": "Check taxon consistency",
+        "kg_source": "NCBITaxon",
+        "evidence_ids": ["NCBITaxon:10090", "NCBITaxon:9606"]
+      },
+      "suggested_fix": {
+        "target_claim_id": "claim-002",
+        "patch": "Replace 'Trp53' with 'TP53' when discussing human tissue expression.",
+        "rationale": "Trp53 is the mouse ortholog; TP53 (HGNC:11998) is the human gene.",
+        "confidence": 0.95,
+        "metadata": {
+          "human_ortholog": "HGNC:11998"
+        }
+      }
+    },
+    {
+      "id": "finding-003",
+      "kind": "unnormalized_entity",
+      "severity": "warning",
+      "message": "Entity 'XYZ123 protein' could not be normalized to any known identifier in HGNC, UniProt, or other reference databases.",
+      "claim_id": "claim-003",
+      "provenance": {
+        "rule_id": "rule-entity-normalization",
+        "rule_name": "Require entity normalization",
+        "kg_source": "HGNC,UniProt",
+        "evidence_ids": []
+      },
+      "suggested_fix": {
+        "target_claim_id": "claim-003",
+        "patch": "Verify the protein name 'XYZ123' and provide a valid identifier (e.g., HGNC symbol, UniProt accession). If this is a novel/hypothetical protein, mark it explicitly.",
+        "rationale": "Unnormalized entities cannot be validated against knowledge graphs.",
+        "confidence": 0.7,
+        "metadata": {}
+      }
+    }
+  ],
+  "suggested_fixes": [],
+  "stats": {
+    "total_claims": 3,
+    "total_findings": 3,
+    "findings_by_severity": {
+      "error": 2,
+      "warning": 1
+    },
+    "findings_by_kind": {
+      "ontology_violation": 1,
+      "taxon_mismatch": 1,
+      "unnormalized_entity": 1
+    },
+    "entities_normalized": 5,
+    "entities_unresolved": 1
+  }
+}

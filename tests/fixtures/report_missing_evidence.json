@@ -1,0 +1,157 @@
+{
+  "task_id": "task-003",
+  "agent_name": "bio-literature-agent",
+  "summary": "Audit found 2 issues related to missing or insufficient evidence.",
+  "claims": [
+    {
+      "id": "claim-001",
+      "text": "EGFR mutations are associated with improved response to gefitinib in non-small cell lung cancer.",
+      "entities": [
+        {
+          "mention": "EGFR",
+          "norm_id": "HGNC:3236",
+          "norm_label": "epidermal growth factor receptor",
+          "source": "dictionary",
+          "metadata": {}
+        },
+        {
+          "mention": "gefitinib",
+          "norm_id": "CHEBI:49668",
+          "norm_label": "gefitinib",
+          "source": "dictionary",
+          "metadata": {
+            "drug_class": "EGFR tyrosine kinase inhibitor"
+          }
+        },
+        {
+          "mention": "non-small cell lung cancer",
+          "norm_id": "MONDO:0005233",
+          "norm_label": "non-small cell lung carcinoma",
+          "source": "dictionary",
+          "metadata": {}
+        }
+      ],
+      "support_span": "Multiple clinical trials have demonstrated...",
+      "evidence": ["PMID:15118073", "PMID:16014882"],
+      "metadata": {
+        "confidence": 0.98,
+        "extraction_method": "rule"
+      }
+    },
+    {
+      "id": "claim-002",
+      "text": "Novel compound ABC-999 inhibits tumor growth in pancreatic cancer models.",
+      "entities": [
+        {
+          "mention": "ABC-999",
+          "norm_id": null,
+          "norm_label": null,
+          "source": "unknown",
+          "metadata": {}
+        },
+        {
+          "mention": "pancreatic cancer",
+          "norm_id": "MONDO:0005192",
+          "norm_label": "pancreatic carcinoma",
+          "source": "dictionary",
+          "metadata": {}
+        }
+      ],
+      "support_span": null,
+      "evidence": [],
+      "metadata": {
+        "confidence": 0.4,
+        "extraction_method": "llm"
+      }
+    },
+    {
+      "id": "claim-003",
+      "text": "KRAS G12C mutation confers resistance to standard chemotherapy.",
+      "entities": [
+        {
+          "mention": "KRAS",
+          "norm_id": "HGNC:6407",
+          "norm_label": "KRAS proto-oncogene, GTPase",
+          "source": "dictionary",
+          "metadata": {}
+        },
+        {
+          "mention": "G12C mutation",
+          "norm_id": "ClinVar:12345",
+          "norm_label": "KRAS p.Gly12Cys",
+          "source": "dictionary",
+          "metadata": {
+            "hgvs": "NP_004976.2:p.Gly12Cys"
+          }
+        }
+      ],
+      "support_span": "Studies suggest that KRAS mutations may affect treatment response.",
+      "evidence": ["PMID:99999999"],
+      "metadata": {
+        "confidence": 0.6,
+        "extraction_method": "llm"
+      }
+    }
+  ],
+  "findings": [
+    {
+      "id": "finding-001",
+      "kind": "missing_evidence",
+      "severity": "blocker",
+      "message": "Claim about 'ABC-999' lacks any supporting evidence. No citations, tool outputs, or database references provided.",
+      "claim_id": "claim-002",
+      "provenance": {
+        "rule_id": "rule-require-evidence",
+        "rule_name": "Require supporting evidence for novel claims",
+        "evidence_ids": []
+      },
+      "suggested_fix": {
+        "target_claim_id": "claim-002",
+        "patch": "Add supporting evidence: Provide at least one PMID, clinical trial ID (NCT number), or database reference supporting the efficacy of ABC-999.",
+        "rationale": "Claims about novel compounds require verifiable evidence before they can be trusted.",
+        "confidence": 0.9,
+        "metadata": {
+          "required_evidence_types": ["PMID", "NCT", "preprint DOI"]
+        }
+      }
+    },
+    {
+      "id": "finding-002",
+      "kind": "evidence_insufficient",
+      "severity": "warning",
+      "message": "Evidence citation PMID:99999999 could not be verified. The PMID may be invalid or the article may not support the stated claim.",
+      "claim_id": "claim-003",
+      "provenance": {
+        "rule_id": "rule-verify-pmid",
+        "rule_name": "Verify PMID validity",
+        "kg_source": "PubMed",
+        "kg_query": "efetch.fcgi?db=pubmed&id=99999999",
+        "evidence_ids": ["PMID:99999999"]
+      },
+      "suggested_fix": {
+        "target_claim_id": "claim-003",
+        "patch": "Verify and correct the PMID citation. If PMID:99999999 is invalid, replace with a valid reference supporting KRAS G12C resistance claims.",
+        "rationale": "Invalid PMIDs undermine the credibility of the claim.",
+        "confidence": 0.85,
+        "metadata": {
+          "suggested_pmids": ["PMID:33299946", "PMID:34051098"]
+        }
+      }
+    }
+  ],
+  "suggested_fixes": [],
+  "stats": {
+    "total_claims": 3,
+    "total_findings": 2,
+    "findings_by_severity": {
+      "blocker": 1,
+      "warning": 1
+    },
+    "findings_by_kind": {
+      "missing_evidence": 1,
+      "evidence_insufficient": 1
+    },
+    "entities_normalized": 7,
+    "entities_unresolved": 1
+  }
+}

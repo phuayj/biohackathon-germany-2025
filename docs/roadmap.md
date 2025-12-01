@@ -1,8 +1,8 @@
 # Roadmap (hackathon-focused)
 
 ## Phase 0 — Setup
-- [ ] Lock Python version (>=3.11) and dependencies; add lint/format/test tooling (ruff, mypy, pytest).
-- [ ] Define Skeptic report schema (claims, findings, suggested fixes) and example fixtures.
+- [x] Lock Python version (>=3.11) and dependencies; add lint/format/test tooling (ruff, mypy, pytest).
+- [x] Define Skeptic report schema (claims, findings, suggested fixes) and example fixtures.
 - [ ] Establish deterministic test harness for rule-based checks.
 
 ## Phase 1 — Ingest + Claim extraction
@@ -29,4 +29,3 @@
 - [ ] Integration tests with a demo bio-agent via MCP.
 - [ ] KG-backed contradiction checks using external literature evidence (cached).
 - [ ] Packaging for containerized deployment.
-

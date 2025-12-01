@@ -1,0 +1,142 @@
+{
+  "task_id": "task-004",
+  "agent_name": "bio-reasoning-agent",
+  "summary": "Audit found 2 contradictions: 1 internal contradiction between claims, 1 contradiction with established knowledge.",
+  "claims": [
+    {
+      "id": "claim-001",
+      "text": "TP53 is a tumor suppressor that prevents uncontrolled cell growth.",
+      "entities": [
+        {
+          "mention": "TP53",
+          "norm_id": "HGNC:11998",
+          "norm_label": "tumor protein p53",
+          "source": "dictionary",
+          "metadata": {}
+        }
+      ],
+      "support_span": "TP53 is well-established as a tumor suppressor.",
+      "evidence": ["PMID:12345678"],
+      "metadata": {
+        "confidence": 0.99,
+        "extraction_method": "rule"
+      }
+    },
+    {
+      "id": "claim-002",
+      "text": "TP53 promotes tumor formation and cancer progression.",
+      "entities": [
+        {
+          "mention": "TP53",
+          "norm_id": "HGNC:11998",
+          "norm_label": "tumor protein p53",
+          "source": "dictionary",
+          "metadata": {}
+        }
+      ],
+      "support_span": null,
+      "evidence": [],
+      "metadata": {
+        "confidence": 0.5,
+        "extraction_method": "llm"
+      }
+    },
+    {
+      "id": "claim-003",
+      "text": "BRAF V600E mutation is not associated with melanoma.",
+      "entities": [
+        {
+          "mention": "BRAF",
+          "norm_id": "HGNC:1097",
+          "norm_label": "B-Raf proto-oncogene, serine/threonine kinase",
+          "source": "dictionary",
+          "metadata": {}
+        },
+        {
+          "mention": "V600E mutation",
+          "norm_id": "ClinVar:13961",
+          "norm_label": "BRAF p.Val600Glu",
+          "source": "dictionary",
+          "metadata": {
+            "hgvs": "NP_004324.2:p.Val600Glu"
+          }
+        },
+        {
+          "mention": "melanoma",
+          "norm_id": "MONDO:0005105",
+          "norm_label": "melanoma",
+          "source": "dictionary",
+          "metadata": {}
+        }
+      ],
+      "support_span": null,
+      "evidence": [],
+      "metadata": {
+        "confidence": 0.3,
+        "extraction_method": "llm"
+      }
+    }
+  ],
+  "findings": [
+    {
+      "id": "finding-001",
+      "kind": "contradiction",
+      "severity": "error",
+      "message": "Internal contradiction: claim-001 states TP53 is a tumor suppressor that prevents cell growth, while claim-002 states TP53 promotes tumor formation. These claims are mutually exclusive.",
+      "claim_id": "claim-002",
+      "provenance": {
+        "rule_id": "rule-contradiction-detection",
+        "rule_name": "Detect contradictory claims about same entity",
+        "evidence_ids": ["claim-001", "claim-002"]
+      },
+      "suggested_fix": {
+        "target_claim_id": "claim-002",
+        "patch": "Remove or correct claim-002. TP53 is a well-established tumor suppressor. Note: Gain-of-function TP53 mutants can have oncogenic properties, but wild-type TP53 suppresses tumors. Clarify whether referring to wild-type or mutant TP53.",
+        "rationale": "The two claims about TP53 function are contradictory. Claim-001 aligns with established knowledge.",
+        "confidence": 0.95,
+        "metadata": {
+          "dominant_claim": "claim-001",
+          "resolution": "retain_claim-001"
+        }
+      }
+    },
+    {
+      "id": "finding-002",
+      "kind": "contradiction",
+      "severity": "blocker",
+      "message": "Contradiction with established knowledge: BRAF V600E is strongly associated with melanoma (found in ~50% of melanomas). The claim that it is 'not associated' contradicts extensive literature and clinical evidence.",
+      "claim_id": "claim-003",
+      "provenance": {
+        "rule_id": "rule-kg-contradiction",
+        "rule_name": "Check claims against knowledge graph",
+        "kg_source": "ClinVar,COSMIC,DisGeNET",
+        "kg_query": "SELECT ?disease WHERE { ClinVar:13961 :associatedWith ?disease }",
+        "evidence_ids": ["PMID:12068308", "PMID:20818844", "COSMIC:BRAF"]
+      },
+      "suggested_fix": {
+        "target_claim_id": "claim-003",
+        "patch": "Remove or invert this claim. BRAF V600E is one of the most common mutations in melanoma and is a validated therapeutic target (e.g., vemurafenib, dabrafenib).",
+        "rationale": "This claim directly contradicts well-established clinical knowledge with extensive evidence.",
+        "confidence": 0.99,
+        "metadata": {
+          "supporting_evidence": ["PMID:12068308", "PMID:20818844"],
+          "prevalence": "~50% of melanomas"
+        }
+      }
+    }
+  ],
+  "suggested_fixes": [],
+  "stats": {
+    "total_claims": 3,
+    "total_findings": 2,
+    "findings_by_severity": {
+      "error": 1,
+      "blocker": 1
+    },
+    "findings_by_kind": {
+      "contradiction": 2
+    },
+    "entities_normalized": 5,
+    "entities_unresolved": 0
+  }
+}
