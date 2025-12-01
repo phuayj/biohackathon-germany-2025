@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.Python
+.venv/
+env/
+venv/
+ENV/
+.env
+.env.*
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+
+# Tools
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# OS
+.DS_Store
+.python-version
