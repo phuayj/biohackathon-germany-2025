@@ -25,6 +25,7 @@ from kg_skeptic.mcp import (
     load_mini_kg_backend,
     mini_kg_edge_count,
 )
+from kg_skeptic.mcp.kg import KGBackend
 
 
 def section(title: str) -> None:
@@ -104,7 +105,7 @@ def demo_crossref(doi: Optional[str] = None, verbose: bool = False) -> None:
         print("   Some retractions may not be flagged in CrossRef data.")
 
 
-def demo_id_normalization(verbose: bool = False) -> tuple[str, str]:
+def demo_id_normalization(verbose: bool = False) -> tuple[str | None, str | None]:
     """Demo ID normalization tools."""
     section("🧬 ID NORMALIZATION: Standardize Identifiers")
 
@@ -153,10 +154,10 @@ def demo_id_normalization(verbose: bool = False) -> tuple[str, str]:
 
 
 def demo_kg_queries(
-    gene_id: str,
-    disease_id: str,
+    gene_id: str | None,
+    disease_id: str | None,
     verbose: bool = False,
-    backend: object | None = None,
+    backend: KGBackend | None = None,
     use_mini_kg: bool = False,
 ) -> None:
     """Demo Knowledge Graph queries."""
@@ -175,6 +176,10 @@ def demo_kg_queries(
     subsection("Edge Query: Gene → Disease Association")
     print(f"   Subject: {gene_id} (BRCA1)")
     print(f"   Object: {disease_id} (breast cancer)")
+
+    if gene_id is None or disease_id is None:
+        print("   ⚠️  Missing gene or disease ID, skipping edge query")
+        return
 
     edge = kg.query_edge(gene_id, disease_id)
     print(f"   Exists: {'✓ YES' if edge.exists else '✗ NO'}")
@@ -195,7 +200,7 @@ def demo_kg_queries(
 
     if verbose:
         # Categorize nodes
-        categories = {}
+        categories: dict[str, int] = {}
         for node in ego.nodes:
             prefix = node.id.split(":")[0] if ":" in node.id else "other"
             categories[prefix] = categories.get(prefix, 0) + 1
@@ -204,7 +209,7 @@ def demo_kg_queries(
 
 def demo_integration(
     verbose: bool = False,
-    backend: object | None = None,
+    backend: KGBackend | None = None,
     use_mini_kg: bool = False,
 ) -> None:
     """Demo integrated claim verification workflow."""
@@ -228,6 +233,9 @@ def demo_integration(
 
     # Step 2: Query KG
     print("\n   [Step 2] Check knowledge graph")
+    if tp53.normalized_id is None or cancer.normalized_id is None:
+        print("      ⚠️  Missing normalized IDs, skipping KG query")
+        return
     edge = kg.query_edge(tp53.normalized_id, cancer.normalized_id)
     if edge.exists:
         print(f"      ✓ Relationship found: {edge.edges[0].predicate if edge.edges else 'unknown'}")

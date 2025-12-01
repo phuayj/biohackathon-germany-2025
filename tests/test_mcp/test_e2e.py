@@ -123,6 +123,7 @@ class TestIDNormalizerE2E:
         result = tool.normalize_hgnc("TP53")
 
         assert result.found
+        assert result.normalized_id is not None
         assert "HGNC:" in result.normalized_id
         print(f"\nTP53 -> {result.normalized_id}")
 
@@ -257,12 +258,14 @@ class TestIntegrationScenarios:
         id_tool = IDNormalizerTool()
         gene_result = id_tool.normalize_hgnc("BRCA1")
         assert gene_result.found
+        assert gene_result.normalized_id is not None
         gene_id = gene_result.normalized_id
         print(f"1. Gene normalized: BRCA1 -> {gene_id}")
 
         # Step 2: Normalize disease
         disease_result = id_tool.normalize_mondo("breast cancer")
         assert disease_result.found
+        assert disease_result.normalized_id is not None
         disease_id = disease_result.normalized_id
         print(f"2. Disease normalized: breast cancer -> {disease_id}")
 
@@ -330,6 +333,9 @@ class TestIntegrationScenarios:
             return
 
         disease_id = disease_result.normalized_id
+        if disease_id is None:
+            print("Disease ID is None")
+            return
         print(f"1. Disease: {disease_result.label} ({disease_id})")
 
         # Step 2: Get ego network
