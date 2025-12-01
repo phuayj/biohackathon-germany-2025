@@ -5,4 +5,4 @@ This package will host the neuro-symbolic auditor that checks LLM bio-agent outp
 against ontologies and knowledge graphs, then produces a structured critique.
 """
 
-__all__ = ["models"]
+__all__ = ["models", "mcp"]

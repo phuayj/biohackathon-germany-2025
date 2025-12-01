@@ -2,6 +2,8 @@
 
 A neuro-symbolic, knowledge-graph–verified “skeptic” that audits MCP-connected LLM bio-agents. It catches ontology violations, weak or contradictory claims, and missing evidence, then proposes minimal fixes that keep the agent’s intent intact.
 
+BioHackathon Germany 2025 event page: [4th BioHackathon Germany — Detection and extraction of datasets for training machine learning methods from literature](https://www.denbi.de/de-nbi-events/1935-4th-biohackathon-germany-detection-and-extraction-of-datasets-for-training-machine-learning-methods-from-literature).
+
 ## What this aims to do
 - Treat agent outputs as structured claims, not just text, and validate them against domain ontologies/knowledge graphs.
 - Detect missing entity normalization, impossible relationships, underspecified evidence, and internal contradictions.

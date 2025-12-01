@@ -30,3 +30,9 @@ strict = false
 [tool.black]
 line-length = 100
 target-version = ['py313']
+
+[tool.pytest.ini_options]
+markers = [
+    "e2e: end-to-end tests that make network requests (deselect with '-m not e2e')",
+]
+addopts = "-m 'not e2e'"

@@ -1,0 +1,312 @@
+# MCP Tools Documentation
+
+The KG-Skeptic MCP (Model Context Protocol) tools provide adapters for querying external biomedical data sources. These tools are used to validate claims made by LLM bio-agents against authoritative databases.
+
+## Quick Start
+
+```bash
+# Run the interactive demo
+uv run python scripts/mcp_demo.py
+
+# Quick smoke test
+uv run python scripts/mcp_demo.py --quick
+
+# Verbose output with all details
+uv run python scripts/mcp_demo.py --verbose
+```
+
+## Available Tools
+
+### 1. PubMed Tool
+
+Search and fetch publication metadata from NCBI PubMed.
+
+```python
+from kg_skeptic.mcp import PubMedTool
+
+pubmed = PubMedTool()
+
+# Search PubMed
+results = pubmed.search("BRCA1 breast cancer", max_results=10)
+print(f"Found {results.count} articles")
+print(f"PMIDs: {results.pmids}")
+
+# Fetch article metadata
+article = pubmed.fetch("12345678")
+print(f"Title: {article.title}")
+print(f"Abstract: {article.abstract}")
+print(f"DOI: {article.doi}")
+print(f"MeSH terms: {article.mesh_terms}")
+print(f"Authors: {article.authors}")
+
+# Batch fetch multiple articles
+articles = pubmed.fetch_batch(["12345678", "87654321"])
+
+# Look up PMID from DOI
+pmid = pubmed.pmid_from_doi("10.1038/nature12373")
+```
+
+**API Configuration:**
+```python
+# Optional: Use NCBI API key for higher rate limits
+pubmed = PubMedTool(
+    api_key="your_ncbi_api_key",
+    email="your@email.com"
+)
+```
+
+### 2. CrossRef Tool
+
+Check retraction status of publications via CrossRef.
+
+```python
+from kg_skeptic.mcp import CrossRefTool
+
+crossref = CrossRefTool()
+
+# Check by DOI
+result = crossref.retractions("10.1038/nature12373")
+print(f"Status: {result.status.value}")  # none, retracted, concern, correction
+print(f"Message: {result.message}")
+
+# Also accepts DOI URLs
+result = crossref.retractions("https://doi.org/10.1038/nature12373")
+
+# Check by PMID (requires PubMed tool for DOI lookup)
+from kg_skeptic.mcp import PubMedTool
+pubmed = PubMedTool()
+result = crossref.check_pmid("12345678", pubmed_tool=pubmed)
+```
+
+**Retraction Status Values:**
+- `none`: No retraction or concern
+- `retracted`: Article has been retracted
+- `concern`: Expression of concern issued
+- `correction`: Correction/erratum published
+
+### 3. ID Normalizer Tool
+
+Normalize biomedical identifiers across different databases.
+
+```python
+from kg_skeptic.mcp import IDNormalizerTool
+
+ids = IDNormalizerTool()
+
+# Gene symbol → HGNC
+gene = ids.normalize_hgnc("BRCA1")
+print(f"HGNC ID: {gene.normalized_id}")      # HGNC:1100
+print(f"Symbol: {gene.label}")                # BRCA1
+print(f"Name: {gene.metadata['name']}")       # BRCA1 DNA repair associated
+print(f"UniProt: {gene.metadata['uniprot_ids']}")
+
+# HGNC ID → Gene info
+gene = ids.normalize_hgnc("HGNC:1100")
+
+# UniProt accession → Protein info
+protein = ids.normalize_uniprot("P38398")
+print(f"Protein: {protein.label}")
+print(f"Organism: {protein.metadata['organism']}")
+
+# Disease term → MONDO
+disease = ids.normalize_mondo("breast cancer")
+print(f"MONDO ID: {disease.normalized_id}")  # MONDO:0007254
+print(f"Label: {disease.label}")
+
+# MONDO ID → Disease info
+disease = ids.normalize_mondo("MONDO:0007254")
+
+# Phenotype term → HPO
+phenotype = ids.normalize_hpo("seizure")
+print(f"HPO ID: {phenotype.normalized_id}")  # HP:0001250
+print(f"Label: {phenotype.label}")
+
+# Cross-references
+uniprot_ids = ids.hgnc_to_uniprot("HGNC:1100")  # ['P38398']
+hgnc_id = ids.uniprot_to_hgnc("P38398")          # HGNC:1100
+hgnc_id = ids.symbol_to_hgnc("BRCA1")            # HGNC:1100
+```
+
+**Supported ID Types:**
+- `HGNC`: Human gene nomenclature
+- `UniProt`: Protein sequences
+- `MONDO`: Disease ontology
+- `HPO`: Human Phenotype Ontology
+
+### 4. Knowledge Graph Tool
+
+Query biomedical knowledge graphs (default: Monarch Initiative).
+
+```python
+from kg_skeptic.mcp import KGTool
+
+kg = KGTool()
+
+# Check if an edge exists between two entities
+result = kg.query_edge(
+    subject="HGNC:1100",      # BRCA1
+    object="MONDO:0007254",   # breast cancer
+    predicate=None            # any predicate (optional filter)
+)
+print(f"Edge exists: {result.exists}")
+print(f"Edges: {len(result.edges)}")
+for edge in result.edges:
+    print(f"  {edge.subject} --{edge.predicate}--> {edge.object}")
+
+# Get ego network (k-hop neighborhood)
+ego = kg.ego(
+    node_id="HGNC:1100",
+    k=2,  # 2-hop neighborhood
+)
+print(f"Nodes: {len(ego.nodes)}")
+print(f"Edges: {len(ego.edges)}")
+
+# Filter by direction
+from kg_skeptic.mcp.kg import EdgeDirection
+ego = kg.ego("HGNC:1100", k=1, direction=EdgeDirection.OUTGOING)
+```
+
+**Using Custom Backends:**
+```python
+from kg_skeptic.mcp.kg import KGTool, InMemoryBackend, KGEdge
+
+# In-memory backend for testing
+backend = InMemoryBackend()
+backend.add_edge(KGEdge(
+    subject="HGNC:1100",
+    predicate="biolink:causes",
+    object="MONDO:0007254",
+))
+
+kg = KGTool(backend=backend)
+result = kg.query_edge("HGNC:1100", "MONDO:0007254")
+```
+
+## Integration Example
+
+Verify a biomedical claim using all tools:
+
+```python
+from kg_skeptic.mcp import PubMedTool, CrossRefTool, IDNormalizerTool, KGTool
+
+def verify_claim(claim: str, gene: str, disease: str) -> dict:
+    """Verify a gene-disease association claim."""
+
+    ids = IDNormalizerTool()
+    kg = KGTool()
+    pubmed = PubMedTool()
+    crossref = CrossRefTool()
+
+    result = {
+        "claim": claim,
+        "entities": {},
+        "kg_support": False,
+        "literature_count": 0,
+        "citations_valid": True,
+    }
+
+    # 1. Normalize entities
+    gene_norm = ids.normalize_hgnc(gene)
+    disease_norm = ids.normalize_mondo(disease)
+
+    if not gene_norm.found or not disease_norm.found:
+        result["error"] = "Could not normalize entities"
+        return result
+
+    result["entities"] = {
+        "gene": {"id": gene_norm.normalized_id, "label": gene_norm.label},
+        "disease": {"id": disease_norm.normalized_id, "label": disease_norm.label},
+    }
+
+    # 2. Check knowledge graph
+    edge = kg.query_edge(gene_norm.normalized_id, disease_norm.normalized_id)
+    result["kg_support"] = edge.exists
+    if edge.edges:
+        result["kg_predicates"] = list(set(e.predicate for e in edge.edges))
+
+    # 3. Search literature
+    search = pubmed.search(f"{gene} {disease_norm.label}", max_results=5)
+    result["literature_count"] = search.count
+    result["top_pmids"] = search.pmids
+
+    # 4. Check retractions
+    for pmid in search.pmids[:3]:
+        article = pubmed.fetch(pmid)
+        if article.doi:
+            retraction = crossref.retractions(article.doi)
+            if retraction.status.value != "none":
+                result["citations_valid"] = False
+                result["retracted_doi"] = article.doi
+                break
+
+    return result
+
+# Usage
+result = verify_claim(
+    claim="BRCA1 mutations cause hereditary breast cancer",
+    gene="BRCA1",
+    disease="hereditary breast cancer"
+)
+print(result)
+```
+
+## Testing
+
+```bash
+# Run unit tests (mocked, no network)
+uv run pytest tests/test_mcp/ -v
+
+# Run end-to-end tests (requires network)
+uv run pytest tests/test_mcp/test_e2e.py -v -m e2e
+
+# Run specific e2e test with output
+uv run pytest tests/test_mcp/test_e2e.py::TestIntegrationScenarios -v -m e2e -s
+```
+
+## API Rate Limits
+
+These tools query external APIs with the following considerations:
+
+| Service | Rate Limit | Notes |
+|---------|------------|-------|
+| PubMed/NCBI | 3 req/sec (10 with API key) | Get key at [NCBI](https://www.ncbi.nlm.nih.gov/account/) |
+| CrossRef | Unlimited (polite pool) | Include email for better service |
+| HGNC | No limit | REST API |
+| UniProt | No limit | REST API |
+| OLS (MONDO/HPO) | No limit | EBI Ontology Lookup Service |
+| Monarch | No limit | Biomedical knowledge graph |
+
+## Error Handling
+
+All tools return result objects that indicate success/failure:
+
+```python
+# ID normalization
+result = ids.normalize_hgnc("NOTAREALGENE")
+if not result.found:
+    print(f"Could not normalize: {result.input_value}")
+
+# KG queries
+result = kg.query_edge("UNKNOWN:123", "UNKNOWN:456")
+if not result.exists:
+    print("No relationship found")
+
+# Network errors raise RuntimeError
+try:
+    result = pubmed.search("test")
+except RuntimeError as e:
+    print(f"Network error: {e}")
+```
+
+## Architecture
+
+```
+kg_skeptic/mcp/
+├── __init__.py      # Exports all tools
+├── pubmed.py        # PubMed search/fetch
+├── crossref.py      # Retraction checking
+├── ids.py           # ID normalization (HGNC, UniProt, MONDO, HPO)
+└── kg.py            # Knowledge graph queries (Monarch, in-memory)
+```
+
+All tools use only Python standard library (`urllib`, `json`, `xml.etree`) - no additional dependencies required.
