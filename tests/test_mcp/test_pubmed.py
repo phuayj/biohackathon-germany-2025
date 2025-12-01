@@ -3,8 +3,6 @@
 from unittest.mock import MagicMock, patch
 import json
 
-import pytest
-
 from kg_skeptic.mcp.pubmed import PubMedTool, PubMedArticle, SearchResult
 
 

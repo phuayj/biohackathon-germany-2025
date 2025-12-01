@@ -13,6 +13,7 @@
 ## Phase 2 — Ontology/KG grounding
 - [x] Entity normalizer with pluggable dictionaries (HGNC/UniProt/MONDO/HPO) and clear provenance of mappings.
 - [x] MCP tools for PubMed search/fetch, CrossRef retractions, KG query_edge/ego via Monarch.
+- [x] Offline mini KG slice for deterministic KG queries without Monarch.
 - [ ] Relationship/constraint validator using curated edges/rules; flag out-of-scope entities and impossible relations.
 - [ ] Deterministic tests with synthetic examples covering normalization failures and violations.
 

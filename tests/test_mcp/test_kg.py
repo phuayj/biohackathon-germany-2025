@@ -3,8 +3,6 @@
 from unittest.mock import MagicMock, patch
 import json
 
-import pytest
-
 from kg_skeptic.mcp.kg import (
     KGTool,
     KGNode,

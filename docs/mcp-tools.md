@@ -182,6 +182,26 @@ kg = KGTool(backend=backend)
 result = kg.query_edge("HGNC:1100", "MONDO:0007254")
 ```
 
+### Mini KG slice (offline, fast)
+
+Load a pre-seeded mini KG (≈2,600 edges) that includes gene–disease, gene–phenotype, gene–gene (PPI), and gene–pathway edges with PMIDs/DOIs on each edge.
+
+```python
+from kg_skeptic.mcp import KGTool, load_mini_kg_backend, mini_kg_edge_count
+
+backend = load_mini_kg_backend()  # loads in-memory in under 2 seconds
+print(f"Mini KG edges: {mini_kg_edge_count()}")
+
+kg = KGTool(backend=backend)
+edge = kg.query_edge("HGNC:1100", "MONDO:0007254")
+print(edge.exists)
+```
+
+CLI demo:
+```bash
+uv run python scripts/mcp_demo.py --mini-kg
+```
+
 ## Integration Example
 
 Verify a biomedical claim using all tools:

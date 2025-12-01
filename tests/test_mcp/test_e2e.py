@@ -10,7 +10,7 @@ Run with: pytest tests/test_mcp/test_e2e.py -v -m e2e
 import pytest
 
 from kg_skeptic.mcp.pubmed import PubMedTool
-from kg_skeptic.mcp.crossref import CrossRefTool, RetractionStatus
+from kg_skeptic.mcp.crossref import CrossRefTool
 from kg_skeptic.mcp.ids import IDNormalizerTool
 from kg_skeptic.mcp.kg import KGTool
 
@@ -104,7 +104,7 @@ class TestIDNormalizerE2E:
         assert result.found
         assert result.normalized_id == "HGNC:1100"
         assert result.label == "BRCA1"
-        print(f"\nSymbol: BRCA1")
+        print("\nSymbol: BRCA1")
         print(f"HGNC ID: {result.normalized_id}")
         print(f"Name: {result.metadata.get('name')}")
         print(f"UniProt IDs: {result.metadata.get('uniprot_ids')}")
@@ -195,7 +195,7 @@ class TestKGToolE2E:
         # BRCA1 to breast cancer
         result = tool.query_edge("HGNC:1100", "MONDO:0007254")
 
-        print(f"\nQuery: HGNC:1100 -> MONDO:0007254")
+        print("\nQuery: HGNC:1100 -> MONDO:0007254")
         print(f"Exists: {result.exists}")
         print(f"Edges found: {len(result.edges)}")
         if result.edges:
@@ -212,7 +212,7 @@ class TestKGToolE2E:
             predicate="biolink:gene_associated_with_condition"
         )
 
-        print(f"\nQuery with predicate filter")
+        print("\nQuery with predicate filter")
         print(f"Exists: {result.exists}")
 
     def test_ego_network(self) -> None:
@@ -221,7 +221,7 @@ class TestKGToolE2E:
         # 1-hop network around BRCA1
         result = tool.ego("HGNC:1100", k=1)
 
-        print(f"\nEgo network for HGNC:1100 (k=1)")
+        print("\nEgo network for HGNC:1100 (k=1)")
         print(f"Nodes: {len(result.nodes)}")
         print(f"Edges: {len(result.edges)}")
         if result.nodes:
@@ -233,7 +233,7 @@ class TestKGToolE2E:
         # 1-hop network around breast cancer
         result = tool.ego("MONDO:0007254", k=1)
 
-        print(f"\nEgo network for MONDO:0007254 (k=1)")
+        print("\nEgo network for MONDO:0007254 (k=1)")
         print(f"Nodes: {len(result.nodes)}")
         print(f"Edges: {len(result.edges)}")
 

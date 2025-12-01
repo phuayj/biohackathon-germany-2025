@@ -12,5 +12,14 @@ from .pubmed import PubMedTool
 from .crossref import CrossRefTool
 from .ids import IDNormalizerTool
 from .kg import KGTool
+from .mini_kg import load_mini_kg_backend, mini_kg_edge_count, iter_mini_kg_edges
 
-__all__ = ["PubMedTool", "CrossRefTool", "IDNormalizerTool", "KGTool"]
+__all__ = [
+    "PubMedTool",
+    "CrossRefTool",
+    "IDNormalizerTool",
+    "KGTool",
+    "load_mini_kg_backend",
+    "mini_kg_edge_count",
+    "iter_mini_kg_edges",
+]

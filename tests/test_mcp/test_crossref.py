@@ -3,8 +3,6 @@
 from unittest.mock import MagicMock, patch
 import json
 
-import pytest
-
 from kg_skeptic.mcp.crossref import CrossRefTool, RetractionInfo, RetractionStatus
 
 

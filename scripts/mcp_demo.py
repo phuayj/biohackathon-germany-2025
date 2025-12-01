@@ -17,7 +17,14 @@ import argparse
 import sys
 from typing import Optional
 
-from kg_skeptic.mcp import PubMedTool, CrossRefTool, IDNormalizerTool, KGTool
+from kg_skeptic.mcp import (
+    PubMedTool,
+    CrossRefTool,
+    IDNormalizerTool,
+    KGTool,
+    load_mini_kg_backend,
+    mini_kg_edge_count,
+)
 
 
 def section(title: str) -> None:
@@ -145,11 +152,24 @@ def demo_id_normalization(verbose: bool = False) -> tuple[str, str]:
     return brca1.normalized_id, disease.normalized_id
 
 
-def demo_kg_queries(gene_id: str, disease_id: str, verbose: bool = False) -> None:
+def demo_kg_queries(
+    gene_id: str,
+    disease_id: str,
+    verbose: bool = False,
+    backend: object | None = None,
+    use_mini_kg: bool = False,
+) -> None:
     """Demo Knowledge Graph queries."""
     section("🕸️  KNOWLEDGE GRAPH: Query Monarch Initiative")
 
-    kg = KGTool()
+    backend = backend or (load_mini_kg_backend() if use_mini_kg else None)
+    kg = KGTool(backend=backend) if backend else KGTool()
+
+    if use_mini_kg:
+        print("\n   Using pre-seeded mini KG slice (in-memory)")
+        print(f"   Edges loaded: {mini_kg_edge_count():,}")
+    elif backend:
+        print("\n   Using custom KG backend provided to the demo")
 
     # Edge query
     subsection("Edge Query: Gene → Disease Association")
@@ -182,7 +202,11 @@ def demo_kg_queries(gene_id: str, disease_id: str, verbose: bool = False) -> Non
         print(f"   Node types: {dict(sorted(categories.items(), key=lambda x: -x[1]))}")
 
 
-def demo_integration(verbose: bool = False) -> None:
+def demo_integration(
+    verbose: bool = False,
+    backend: object | None = None,
+    use_mini_kg: bool = False,
+) -> None:
     """Demo integrated claim verification workflow."""
     section("🎯 INTEGRATION: Verify a Biomedical Claim")
 
@@ -190,7 +214,8 @@ def demo_integration(verbose: bool = False) -> None:
     print(f"\n📝 Claim: \"{claim}\"")
 
     ids = IDNormalizerTool()
-    kg = KGTool()
+    backend = backend or (load_mini_kg_backend() if use_mini_kg else None)
+    kg = KGTool(backend=backend) if backend else KGTool()
     pubmed = PubMedTool()
     crossref = CrossRefTool()
 
@@ -211,7 +236,7 @@ def demo_integration(verbose: bool = False) -> None:
 
     # Step 3: Find literature
     print("\n   [Step 3] Search literature")
-    search = pubmed.search(f"TP53 tumor suppressor cancer", max_results=3)
+    search = pubmed.search("TP53 tumor suppressor cancer", max_results=3)
     print(f"      Found {search.count:,} articles")
 
     # Step 4: Validate citations
@@ -257,6 +282,11 @@ Examples:
         action="store_true",
         help="Show detailed output",
     )
+    parser.add_argument(
+        "--mini-kg",
+        action="store_true",
+        help="Use the in-memory mini KG slice instead of Monarch API for KG calls",
+    )
     args = parser.parse_args()
 
     print("\n" + "=" * 60)
@@ -265,18 +295,34 @@ Examples:
     print("\nThese tools power the KG-Skeptic auditor for validating")
     print("biomedical claims from LLM agents.\n")
 
+    mini_backend = load_mini_kg_backend() if args.mini_kg else None
+
     try:
         if args.quick:
             # Quick smoke test
             print("Running quick smoke test...\n")
-            demo_integration(verbose=False)
+            demo_integration(
+                verbose=False,
+                backend=mini_backend,
+                use_mini_kg=args.mini_kg,
+            )
         else:
             # Full demo
             doi = demo_pubmed(verbose=args.verbose)
             demo_crossref(doi=doi, verbose=args.verbose)
             gene_id, disease_id = demo_id_normalization(verbose=args.verbose)
-            demo_kg_queries(gene_id, disease_id, verbose=args.verbose)
-            demo_integration(verbose=args.verbose)
+            demo_kg_queries(
+                gene_id,
+                disease_id,
+                verbose=args.verbose,
+                backend=mini_backend,
+                use_mini_kg=args.mini_kg,
+            )
+            demo_integration(
+                verbose=args.verbose,
+                backend=mini_backend,
+                use_mini_kg=args.mini_kg,
+            )
 
         print("\n" + "=" * 60)
         print("✅ DEMO COMPLETE")
