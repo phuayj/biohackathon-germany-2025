@@ -15,7 +15,7 @@
 Think of it as a lint + static analyzer for biomedical agent outputs.
 
 ## Minimal build (hackathon-sized)
-- **Tools (MCP servers/skills):** HPO & MONDO lookup, HGNC/UniProt, Reactome/GO pathways, Monarch/DisGeNET edges, PubMed/Entrez for PMIDs, BioCypher/Neo4j adapter for a local KG. (see OUP Academic)
+- **Tools (MCP servers/skills):** HPO & MONDO lookup, HGNC/UniProt, Reactome/GO pathways, Monarch/DisGeNET edges, Europe PMC for literature/PMIDs, BioCypher/Neo4j adapter for a local KG. (see OUP Academic)
 - **Rule DSL** (~50–100 lines): encode type constraints, ontology closure, inheritance/tissue checks (rules emit scores + human-readable “because”).
 - **Suspicion GNN**: 2-layer R-GCN on a 2–3 hop subgraph (genes/phenotypes/pathways/papers). Output a per-edge “how likely is this to be the problem?” score.
 - **Incremental module**: store a prototype per error type and run lightweight rehearsal when adding a new one.

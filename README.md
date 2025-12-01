@@ -78,7 +78,7 @@ This opens a browser with the "Hello Audit Card" demo:
 
 ## Features
 - **Skeptic report schema**: Structured format for claims, findings, and suggested fixes with full provenance.
-- **MCP tools**: PubMed search/fetch, CrossRef retractions, HGNC/UniProt/MONDO/HPO entity normalization, KG query via Monarch.
+- **MCP tools**: Europe PMC search/fetch (literature), CrossRef retractions, HGNC/UniProt/MONDO/HPO entity normalization, KG query via Monarch.
 - **Offline KG slice**: In-memory mini KG (gene–disease, phenotype, PPI, pathway) with citation metadata for deterministic offline checks.
 - **Rule DSL**: Declarative rules covering type constraints, ontology closure (is-a/part-of), inheritance/tissue plausibility, with clear explanations per rule.
 

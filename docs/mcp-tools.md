@@ -17,42 +17,61 @@ uv run python scripts/mcp_demo.py --verbose
 
 ## Available Tools
 
-### 1. PubMed Tool
+### 1. Europe PMC Tool
 
-Search and fetch publication metadata from NCBI PubMed.
+Search and fetch publication metadata from Europe PMC (aggregates PubMed, PMC, preprints, and more).
 
 ```python
-from kg_skeptic.mcp import PubMedTool
+from kg_skeptic.mcp import EuropePMCTool
 
-pubmed = PubMedTool()
+epmc = EuropePMCTool()
 
-# Search PubMed
-results = pubmed.search("BRCA1 breast cancer", max_results=10)
+# Search Europe PMC
+results = epmc.search("BRCA1 breast cancer", max_results=10)
 print(f"Found {results.count} articles")
 print(f"PMIDs: {results.pmids}")
 
-# Fetch article metadata
-article = pubmed.fetch("12345678")
+# Search results include full article metadata
+for article in results.articles:
+    print(f"Title: {article.title}")
+    print(f"DOI: {article.doi}")
+    print(f"Open Access: {article.is_open_access}")
+    print(f"Citations: {article.citation_count}")
+
+# Fetch article by PMID
+article = epmc.fetch("12345678")
 print(f"Title: {article.title}")
 print(f"Abstract: {article.abstract}")
 print(f"DOI: {article.doi}")
 print(f"MeSH terms: {article.mesh_terms}")
 print(f"Authors: {article.authors}")
 
+# Fetch by PMC ID
+article = epmc.fetch_by_pmcid("PMC1234567")
+
+# Fetch by DOI
+article = epmc.fetch_by_doi("10.1038/nature12373")
+
 # Batch fetch multiple articles
-articles = pubmed.fetch_batch(["12345678", "87654321"])
+articles = epmc.fetch_batch(["12345678", "87654321"])
 
 # Look up PMID from DOI
-pmid = pubmed.pmid_from_doi("10.1038/nature12373")
+pmid = epmc.pmid_from_doi("10.1038/nature12373")
+
+# Search only open access articles
+oa_results = epmc.search("CRISPR", max_results=10, open_access_only=True)
+
+# Get articles that cite a paper
+citing = epmc.get_citations("12345678", max_results=20)
+
+# Get references from a paper
+refs = epmc.get_references("12345678", max_results=20)
 ```
 
 **API Configuration:**
 ```python
-# Optional: Use NCBI API key for higher rate limits
-pubmed = PubMedTool(
-    api_key="your_ncbi_api_key",
-    email="your@email.com"
-)
+# Optional: Include email for polite pool access
+epmc = EuropePMCTool(email="your@email.com")
 ```
 
 ### 2. CrossRef Tool
@@ -72,10 +91,10 @@ print(f"Message: {result.message}")
 # Also accepts DOI URLs
 result = crossref.retractions("https://doi.org/10.1038/nature12373")
 
-# Check by PMID (requires PubMed tool for DOI lookup)
-from kg_skeptic.mcp import PubMedTool
-pubmed = PubMedTool()
-result = crossref.check_pmid("12345678", pubmed_tool=pubmed)
+# Check by PMID (requires Europe PMC tool for DOI lookup)
+from kg_skeptic.mcp import EuropePMCTool
+epmc = EuropePMCTool()
+result = crossref.check_pmid("12345678", literature_tool=epmc)
 ```
 
 **Retraction Status Values:**
@@ -207,14 +226,14 @@ uv run python scripts/mcp_demo.py --mini-kg
 Verify a biomedical claim using all tools:
 
 ```python
-from kg_skeptic.mcp import PubMedTool, CrossRefTool, IDNormalizerTool, KGTool
+from kg_skeptic.mcp import EuropePMCTool, CrossRefTool, IDNormalizerTool, KGTool
 
 def verify_claim(claim: str, gene: str, disease: str) -> dict:
     """Verify a gene-disease association claim."""
 
     ids = IDNormalizerTool()
     kg = KGTool()
-    pubmed = PubMedTool()
+    epmc = EuropePMCTool()
     crossref = CrossRefTool()
 
     result = {
@@ -245,13 +264,12 @@ def verify_claim(claim: str, gene: str, disease: str) -> dict:
         result["kg_predicates"] = list(set(e.predicate for e in edge.edges))
 
     # 3. Search literature
-    search = pubmed.search(f"{gene} {disease_norm.label}", max_results=5)
+    search = epmc.search(f"{gene} {disease_norm.label}", max_results=5)
     result["literature_count"] = search.count
     result["top_pmids"] = search.pmids
 
     # 4. Check retractions
-    for pmid in search.pmids[:3]:
-        article = pubmed.fetch(pmid)
+    for article in search.articles[:3]:
         if article.doi:
             retraction = crossref.retractions(article.doi)
             if retraction.status.value != "none":
@@ -289,7 +307,7 @@ These tools query external APIs with the following considerations:
 
 | Service | Rate Limit | Notes |
 |---------|------------|-------|
-| PubMed/NCBI | 3 req/sec (10 with API key) | Get key at [NCBI](https://www.ncbi.nlm.nih.gov/account/) |
+| Europe PMC | No strict limit | Include email for polite pool |
 | CrossRef | Unlimited (polite pool) | Include email for better service |
 | HGNC | No limit | REST API |
 | UniProt | No limit | REST API |
@@ -313,7 +331,7 @@ if not result.exists:
 
 # Network errors raise RuntimeError
 try:
-    result = pubmed.search("test")
+    result = epmc.search("test")
 except RuntimeError as e:
     print(f"Network error: {e}")
 ```
@@ -323,10 +341,11 @@ except RuntimeError as e:
 ```
 kg_skeptic/mcp/
 ├── __init__.py      # Exports all tools
-├── pubmed.py        # PubMed search/fetch
+├── europepmc.py     # Europe PMC search/fetch (literature)
 ├── crossref.py      # Retraction checking
 ├── ids.py           # ID normalization (HGNC, UniProt, MONDO, HPO)
-└── kg.py            # Knowledge graph queries (Monarch, in-memory)
+├── kg.py            # Knowledge graph queries (Monarch, in-memory)
+└── mini_kg.py       # Pre-seeded mini KG slice
 ```
 
 All tools use only Python standard library (`urllib`, `json`, `xml.etree`) - no additional dependencies required.

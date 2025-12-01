@@ -9,7 +9,7 @@ Run with: pytest tests/test_mcp/test_e2e.py -v -m e2e
 
 import pytest
 
-from kg_skeptic.mcp.pubmed import PubMedTool
+from kg_skeptic.mcp.europepmc import EuropePMCTool
 from kg_skeptic.mcp.crossref import CrossRefTool
 from kg_skeptic.mcp.ids import IDNormalizerTool
 from kg_skeptic.mcp.kg import KGTool
@@ -19,12 +19,12 @@ from kg_skeptic.mcp.kg import KGTool
 pytestmark = pytest.mark.e2e
 
 
-class TestPubMedE2E:
-    """End-to-end tests for PubMed tool."""
+class TestEuropePMCE2E:
+    """End-to-end tests for Europe PMC tool."""
 
     def test_search_brca1(self) -> None:
         """Search for BRCA1 papers."""
-        tool = PubMedTool()
+        tool = EuropePMCTool()
         result = tool.search("BRCA1 breast cancer", max_results=5)
 
         assert result.count > 0
@@ -34,29 +34,42 @@ class TestPubMedE2E:
 
     def test_fetch_known_article(self) -> None:
         """Fetch a known article by PMID."""
-        tool = PubMedTool()
-        # PMID 7997877 - "Isolation of a gene from the Smith-Magenis syndrome..."
+        tool = EuropePMCTool()
+        # PMID 7997877 - "Cell cycle control and cancer"
         article = tool.fetch("7997877")
 
         assert article.pmid == "7997877"
         assert article.title  # Should have a title
-        assert article.journal
+        assert article.authors  # Should have authors
         print(f"\nTitle: {article.title[:80]}...")
         print(f"Journal: {article.journal}")
+        print(f"Authors: {article.authors[:3]}")
         print(f"MeSH terms: {article.mesh_terms[:5]}")
+        print(f"Open Access: {article.is_open_access}")
+        print(f"Citations: {article.citation_count}")
 
     def test_search_and_fetch(self) -> None:
         """Search then fetch the first result."""
-        tool = PubMedTool()
+        tool = EuropePMCTool()
         search_result = tool.search("CRISPR gene editing", max_results=1)
 
-        assert search_result.pmids
-        pmid = search_result.pmids[0]
+        assert search_result.articles
+        article = search_result.articles[0]
 
-        article = tool.fetch(pmid)
-        assert article.pmid == pmid
+        assert article.pmid
         assert article.title
         print(f"\nFetched: {article.title[:60]}...")
+
+    def test_open_access_filter(self) -> None:
+        """Search with open access filter."""
+        tool = EuropePMCTool()
+        result = tool.search("CRISPR", max_results=5, open_access_only=True)
+
+        assert result.count > 0
+        # All returned articles should be open access
+        for article in result.articles:
+            assert article.is_open_access
+        print(f"\nFound {result.count} open access articles")
 
 
 class TestCrossRefE2E:
@@ -208,9 +221,7 @@ class TestKGToolE2E:
         """Query with specific predicate."""
         tool = KGTool()
         result = tool.query_edge(
-            "HGNC:1100",
-            "MONDO:0007254",
-            predicate="biolink:gene_associated_with_condition"
+            "HGNC:1100", "MONDO:0007254", predicate="biolink:gene_associated_with_condition"
         )
 
         print("\nQuery with predicate filter")
@@ -250,7 +261,7 @@ class TestIntegrationScenarios:
         1. Normalize gene symbol to HGNC ID
         2. Normalize disease to MONDO ID
         3. Query KG for edge between them
-        4. Search PubMed for supporting literature
+        4. Search Europe PMC for supporting literature
         """
         print("\n=== Verifying claim: 'BRCA1 is associated with breast cancer' ===")
 
@@ -277,9 +288,9 @@ class TestIntegrationScenarios:
             print(f"   Predicates: {[e.predicate for e in edge_result.edges[:3]]}")
 
         # Step 4: Search literature
-        pubmed_tool = PubMedTool()
-        search_result = pubmed_tool.search(f"BRCA1 {disease_result.label}", max_results=3)
-        print(f"4. PubMed articles found: {search_result.count}")
+        epmc_tool = EuropePMCTool()
+        search_result = epmc_tool.search(f"BRCA1 {disease_result.label}", max_results=3)
+        print(f"4. Europe PMC articles found: {search_result.count}")
         print(f"   Top PMIDs: {search_result.pmids}")
 
         print("\n=== Claim verification complete ===")
@@ -294,12 +305,12 @@ class TestIntegrationScenarios:
         """
         print("\n=== Checking citation validity ===")
 
-        pubmed_tool = PubMedTool()
+        epmc_tool = EuropePMCTool()
         crossref_tool = CrossRefTool()
 
         # Fetch a known article
         pmid = "7997877"
-        article = pubmed_tool.fetch(pmid)
+        article = epmc_tool.fetch(pmid)
         print(f"1. Article: {article.title[:60]}...")
         print(f"   DOI: {article.doi}")
 
@@ -343,10 +354,7 @@ class TestIntegrationScenarios:
         print(f"2. Ego network: {len(ego_result.nodes)} nodes, {len(ego_result.edges)} edges")
 
         # Step 3: Extract gene associations
-        gene_edges = [
-            e for e in ego_result.edges
-            if "HGNC:" in e.subject or "HGNC:" in e.object
-        ]
+        gene_edges = [e for e in ego_result.edges if "HGNC:" in e.subject or "HGNC:" in e.object]
         print(f"3. Gene associations found: {len(gene_edges)}")
 
         for edge in gene_edges[:5]:

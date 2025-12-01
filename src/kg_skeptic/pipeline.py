@@ -6,17 +6,21 @@ This stub documents the intended orchestration: ingest -> extract -> validate ->
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from collections.abc import Mapping
 
 from .models import Report
+
+
+Config = Mapping[str, object]
+AuditPayload = Mapping[str, object]
 
 
 class SkepticPipeline:
     """Placeholder orchestrator for the skeptic."""
 
-    def __init__(self, config: Dict[str, Any] | None = None) -> None:
-        self.config = config or {}
+    def __init__(self, config: Config | None = None) -> None:
+        self.config: dict[str, object] = dict(config) if config is not None else {}
 
-    def run(self, audit_payload: Dict[str, Any]) -> Report:
+    def run(self, audit_payload: AuditPayload) -> Report:
         """Run the skeptic on a normalized audit payload."""
         raise NotImplementedError("Pipeline logic to be implemented during development.")

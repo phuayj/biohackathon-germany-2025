@@ -8,47 +8,56 @@ steps.
 
 from __future__ import annotations
 
+from collections.abc import Container, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping
+from typing import Iterable, cast
 
 import yaml
 
 DEFAULT_RULES_PATH = Path(__file__).resolve().parents[2] / "rules.yaml"
 
 
-def _get_fact_value(facts: Mapping[str, Any], path: str) -> Any:
+Facts = Mapping[str, object]
+
+
+def _get_fact_value(facts: Facts, path: str) -> object | None:
     """Retrieve a value from nested dictionaries using dot-separated paths."""
-    current: Any = facts
+    current: object | None = facts
     for part in path.split("."):
         if isinstance(current, Mapping) and part in current:
-            current = current[part]
+            if isinstance(current, Mapping):
+                current = current[part]
+            else:
+                return None
         else:
             return None
     return current
 
 
-def _evaluate_op(value: Any, op: str, expected: Any) -> bool:
+def _evaluate_op(value: object | None, op: str, expected: object | None) -> bool:
     """Evaluate a simple operation on a fact value."""
     if op == "exists":
         return bool(value)
     if op == "equals":
         return value == expected
     if op == "contains":
-        if value is None:
+        if value is None or expected is None:
             return False
-        try:
+        if isinstance(value, Container):
             return expected in value
-        except TypeError:
+        return False
+    if op in {"gt", "gte", "lt", "lte"}:
+        if not isinstance(value, (int, float)) or not isinstance(expected, (int, float)):
             return False
-    if op == "gt":
-        return value is not None and expected is not None and value > expected
-    if op == "gte":
-        return value is not None and expected is not None and value >= expected
-    if op == "lt":
-        return value is not None and expected is not None and value < expected
-    if op == "lte":
-        return value is not None and expected is not None and value <= expected
+        if op == "gt":
+            return value > expected
+        if op == "gte":
+            return value >= expected
+        if op == "lt":
+            return value < expected
+        if op == "lte":
+            return value <= expected
     raise ValueError(f"Unsupported operator '{op}'")
 
 
@@ -58,19 +67,19 @@ class RuleCondition:
 
     fact: str
     op: str = "exists"
-    value: Any | None = None
+    value: object | None = None
     negate: bool = False
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "RuleCondition":
+    def from_dict(cls, data: Mapping[str, object]) -> "RuleCondition":
         return cls(
-            fact=data["fact"],
-            op=data.get("op", "exists"),
+            fact=cast(str, data["fact"]),
+            op=cast(str, data.get("op", "exists")),
             value=data.get("value"),
             negate=bool(data.get("negate", False)),
         )
 
-    def evaluate(self, facts: Mapping[str, Any]) -> bool:
+    def evaluate(self, facts: Facts) -> bool:
         result = _evaluate_op(_get_fact_value(facts, self.fact), self.op, self.value)
         return not result if self.negate else result
 
@@ -98,10 +107,10 @@ class RuleTrace:
         return [entry.because for entry in self.entries]
 
 
-class _FactFormatter(dict):
+class _FactFormatter(dict[str, object]):
     """Helper to avoid KeyError during .format_map calls."""
 
-    def __init__(self, facts: Mapping[str, Any]) -> None:
+    def __init__(self, facts: Facts) -> None:
         super().__init__()
         self.facts = facts
 
@@ -112,22 +121,22 @@ class _FactFormatter(dict):
             else:
                 self[key] = value
 
-    def __missing__(self, key: str) -> str:
+    def __missing__(self, key: str) -> object:
         value = _get_fact_value(self.facts, key)
         if value is None:
             return "?"
         if isinstance(value, Mapping):
             return _DotAccessor(value)
-        return str(value)
+        return value
 
 
 class _DotAccessor:
     """Proxy object to support {claim.entity_count} style templates."""
 
-    def __init__(self, data: Mapping[str, Any]) -> None:
+    def __init__(self, data: Mapping[str, object]) -> None:
         self._data = data
 
-    def __getattr__(self, name: str) -> Any:
+    def __getattr__(self, name: str) -> object:
         value = self._data.get(name)
         if isinstance(value, Mapping):
             return _DotAccessor(value)
@@ -135,7 +144,7 @@ class _DotAccessor:
             return "?"
         return value
 
-    def __getitem__(self, key: str) -> Any:
+    def __getitem__(self, key: str) -> object:
         value = self._data.get(key)
         if isinstance(value, Mapping):
             return _DotAccessor(value)
@@ -159,30 +168,51 @@ class Rule:
     any: list[RuleCondition] = field(default_factory=list)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Rule":
+    def from_dict(cls, data: Mapping[str, object]) -> "Rule":
         conditions = data.get("when") or data.get("conditions") or {}
-        all_conds: Iterable[Dict[str, Any]]
-        any_conds: Iterable[Dict[str, Any]]
+        all_conds_raw: Iterable[object] = ()
+        any_conds_raw: Iterable[object] = ()
 
         if isinstance(conditions, Mapping):
-            all_conds = conditions.get("all", [])
-            any_conds = conditions.get("any", [])
+            maybe_all = conditions.get("all", [])
+            maybe_any = conditions.get("any", [])
+            if isinstance(maybe_all, list):
+                all_conds_raw = maybe_all
+            if isinstance(maybe_any, list):
+                any_conds_raw = maybe_any
         elif isinstance(conditions, list):
-            all_conds = conditions
-            any_conds = []
+            all_conds_raw = conditions
         else:
             raise ValueError(f"Unsupported conditions format for rule '{data.get('id')}'")
 
+        all_conds: list[Mapping[str, object]] = [
+            cond for cond in all_conds_raw if isinstance(cond, Mapping)
+        ]
+        any_conds: list[Mapping[str, object]] = [
+            cond for cond in any_conds_raw if isinstance(cond, Mapping)
+        ]
+
+        raw_weight = data.get("weight", 1.0)
+        if isinstance(raw_weight, (int, float)):
+            weight = float(raw_weight)
+        elif isinstance(raw_weight, str):
+            try:
+                weight = float(raw_weight)
+            except ValueError:
+                weight = 1.0
+        else:
+            weight = 1.0
+
         return cls(
-            id=data["id"],
-            description=data.get("description", data["id"]),
-            weight=float(data.get("weight", 1.0)),
-            because=data.get("because"),
+            id=cast(str, data["id"]),
+            description=cast(str, data.get("description", data["id"])),
+            weight=weight,
+            because=cast(str | None, data.get("because")),
             all=[RuleCondition.from_dict(c) for c in all_conds],
             any=[RuleCondition.from_dict(c) for c in any_conds],
         )
 
-    def fires(self, facts: Mapping[str, Any]) -> bool:
+    def fires(self, facts: Facts) -> bool:
         """Determine whether the rule fires given the facts."""
         if self.all and not all(cond.evaluate(facts) for cond in self.all):
             return False
@@ -190,7 +220,7 @@ class Rule:
             return any(cond.evaluate(facts) for cond in self.any)
         return True
 
-    def render_because(self, facts: Mapping[str, Any]) -> str:
+    def render_because(self, facts: Facts) -> str:
         template = self.because or f"{self.description} (rule: {self.id})"
         try:
             return template.format_map(_FactFormatter(facts))
@@ -202,7 +232,7 @@ class Rule:
 class RuleEvaluation:
     """Rule evaluation output: feature vector plus trace."""
 
-    features: Dict[str, float]
+    features: dict[str, float]
     trace: RuleTrace
 
 
@@ -219,14 +249,28 @@ class RuleEngine:
             raise FileNotFoundError(f"Rules file not found at {rules_path}")
 
         with rules_path.open() as f:
-            data = yaml.safe_load(f) or {}
+            raw = yaml.safe_load(f) or {}
 
-        rules = [Rule.from_dict(rule_data) for rule_data in data.get("rules", [])]
+        if not isinstance(raw, dict):
+            raise ValueError("Rules file must contain a top-level mapping")
+
+        data: dict[str, object] = raw
+        rules_data = data.get("rules", [])
+        if not isinstance(rules_data, list):
+            raise ValueError("Rules file must contain a list of rules under 'rules'")
+
+        rules_list: list[Mapping[str, object]] = []
+        for rule_raw in rules_data:
+            if not isinstance(rule_raw, Mapping):
+                raise ValueError("Each rule must be a mapping")
+            rules_list.append(rule_raw)
+
+        rules = [Rule.from_dict(rule_data) for rule_data in rules_list]
         return cls(rules)
 
-    def evaluate(self, facts: Mapping[str, Any]) -> RuleEvaluation:
+    def evaluate(self, facts: Facts) -> RuleEvaluation:
         """Evaluate all rules against the facts."""
-        features: Dict[str, float] = {}
+        features: dict[str, float] = {}
         trace = RuleTrace()
 
         for rule in self.rules:

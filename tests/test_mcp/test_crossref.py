@@ -48,14 +48,16 @@ class TestCrossRefTool:
         mock_response = MagicMock()
         mock_response.__enter__ = MagicMock(return_value=mock_response)
         mock_response.__exit__ = MagicMock(return_value=False)
-        mock_response.read.return_value = json.dumps({
-            "status": "ok",
-            "message": {
-                "DOI": "10.1234/test",
-                "type": "journal-article",
-                "relation": {},
+        mock_response.read.return_value = json.dumps(
+            {
+                "status": "ok",
+                "message": {
+                    "DOI": "10.1234/test",
+                    "type": "journal-article",
+                    "relation": {},
+                },
             }
-        }).encode("utf-8")
+        ).encode("utf-8")
         mock_urlopen.return_value = mock_response
 
         tool = CrossRefTool()
@@ -70,16 +72,18 @@ class TestCrossRefTool:
         mock_response = MagicMock()
         mock_response.__enter__ = MagicMock(return_value=mock_response)
         mock_response.__exit__ = MagicMock(return_value=False)
-        mock_response.read.return_value = json.dumps({
-            "status": "ok",
-            "message": {
-                "DOI": "10.1234/test",
-                "type": "journal-article",
-                "relation": {
-                    "is-retracted-by": [{"id": "10.1234/retraction"}],
+        mock_response.read.return_value = json.dumps(
+            {
+                "status": "ok",
+                "message": {
+                    "DOI": "10.1234/test",
+                    "type": "journal-article",
+                    "relation": {
+                        "is-retracted-by": [{"id": "10.1234/retraction"}],
+                    },
                 },
             }
-        }).encode("utf-8")
+        ).encode("utf-8")
         mock_urlopen.return_value = mock_response
 
         tool = CrossRefTool()
@@ -94,21 +98,23 @@ class TestCrossRefTool:
         mock_response = MagicMock()
         mock_response.__enter__ = MagicMock(return_value=mock_response)
         mock_response.__exit__ = MagicMock(return_value=False)
-        mock_response.read.return_value = json.dumps({
-            "status": "ok",
-            "message": {
-                "DOI": "10.1234/test",
-                "type": "journal-article",
-                "relation": {},
-                "update-to": [
-                    {
-                        "type": "retraction",
-                        "DOI": "10.1234/retraction-notice",
-                        "updated": {"date-time": "2024-01-15T00:00:00Z"},
-                    }
-                ],
+        mock_response.read.return_value = json.dumps(
+            {
+                "status": "ok",
+                "message": {
+                    "DOI": "10.1234/test",
+                    "type": "journal-article",
+                    "relation": {},
+                    "update-to": [
+                        {
+                            "type": "retraction",
+                            "DOI": "10.1234/retraction-notice",
+                            "updated": {"date-time": "2024-01-15T00:00:00Z"},
+                        }
+                    ],
+                },
             }
-        }).encode("utf-8")
+        ).encode("utf-8")
         mock_urlopen.return_value = mock_response
 
         tool = CrossRefTool()
@@ -123,20 +129,22 @@ class TestCrossRefTool:
         mock_response = MagicMock()
         mock_response.__enter__ = MagicMock(return_value=mock_response)
         mock_response.__exit__ = MagicMock(return_value=False)
-        mock_response.read.return_value = json.dumps({
-            "status": "ok",
-            "message": {
-                "DOI": "10.1234/test",
-                "type": "journal-article",
-                "relation": {},
-                "update-to": [
-                    {
-                        "type": "expression_of_concern",
-                        "DOI": "10.1234/concern",
-                    }
-                ],
+        mock_response.read.return_value = json.dumps(
+            {
+                "status": "ok",
+                "message": {
+                    "DOI": "10.1234/test",
+                    "type": "journal-article",
+                    "relation": {},
+                    "update-to": [
+                        {
+                            "type": "expression_of_concern",
+                            "DOI": "10.1234/concern",
+                        }
+                    ],
+                },
             }
-        }).encode("utf-8")
+        ).encode("utf-8")
         mock_urlopen.return_value = mock_response
 
         tool = CrossRefTool()

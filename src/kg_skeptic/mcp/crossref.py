@@ -10,13 +10,26 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Optional, Protocol, cast
 from urllib.parse import quote
 from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
 
 
 CROSSREF_API_URL = "https://api.crossref.org/works"
+
+
+JSONPrimitive = str | int | float | bool | None
+JSONValue = JSONPrimitive | dict[str, "JSONValue"] | list["JSONValue"]
+JSONObject = dict[str, JSONValue]
+
+
+class LiteratureArticle(Protocol):
+    doi: Optional[str]
+
+
+class LiteratureTool(Protocol):
+    def fetch(self, pmid: str) -> LiteratureArticle: ...
 
 
 class RetractionStatus(str, Enum):
@@ -39,7 +52,7 @@ class RetractionInfo:
     notice_url: Optional[str] = None
     message: Optional[str] = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, JSONValue]:
         return {
             "doi": self.doi,
             "status": self.status.value,
@@ -62,7 +75,7 @@ class CrossRefTool:
         """
         self.email = email
 
-    def _fetch_url(self, url: str) -> Dict[str, Any]:
+    def _fetch_url(self, url: str) -> JSONObject:
         """Fetch URL and return JSON."""
         headers = {"User-Agent": "kg-skeptic/0.1 (mailto:biohackathon@example.org)"}
         if self.email:
@@ -71,9 +84,14 @@ class CrossRefTool:
         request = Request(url, headers=headers)
         try:
             with urlopen(request, timeout=30) as response:
-                return json.loads(response.read().decode("utf-8"))
+                payload = json.loads(response.read().decode("utf-8"))
         except (URLError, HTTPError) as e:
             raise RuntimeError(f"Failed to fetch {url}: {e}") from e
+
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"Unexpected JSON payload for {url}: expected object")
+
+        return cast(JSONObject, payload)
 
     def retractions(self, identifier: str) -> RetractionInfo:
         """
@@ -119,32 +137,52 @@ class CrossRefTool:
         if "doi.org/" in identifier:
             return identifier.split("doi.org/")[-1]
 
-        # PMID - would need PubMed lookup (handled by caller if needed)
+        # PMID - would need literature tool lookup (handled by caller if needed)
         if identifier.isdigit():
-            # For PMID, we'd need to look up via PubMed first
+            # For PMID, we'd need to look up via EuropePMC first
             # Return None to signal this needs external resolution
             return None
 
         return identifier
 
-    def _fetch_work(self, doi: str) -> Dict[str, Any]:
+    def _fetch_work(self, doi: str) -> JSONObject:
         """Fetch work metadata from CrossRef."""
         url = f"{CROSSREF_API_URL}/{quote(doi, safe='')}"
         data = self._fetch_url(url)
-        return data.get("message", {})
+        message = data.get("message", {})
+        if isinstance(message, dict):
+            return cast(JSONObject, message)
+        return {}
 
-    def _check_retraction_status(self, doi: str, work: Dict[str, Any]) -> RetractionInfo:
+    def _check_retraction_status(self, doi: str, work: JSONObject) -> RetractionInfo:
         """Check work metadata for retraction indicators."""
-        # Check update-to relationship (this work updates/retracts another)
-        relations = work.get("relation", {})
+        raw_relations = work.get("relation", {})
+        relations: dict[str, JSONValue]
+        if isinstance(raw_relations, dict):
+            relations = raw_relations
+        else:
+            relations = {}
 
-        # Check if this work has been retracted
-        # Look for "is-retracted-by" relationship
-        if "is-retracted-by" in relations:
-            retraction_info = relations["is-retracted-by"]
-            if retraction_info:
-                notice = retraction_info[0] if isinstance(retraction_info, list) else retraction_info
-                notice_doi = notice.get("id") if isinstance(notice, dict) else str(notice)
+        # Check if this work has been retracted via "is-retracted-by"
+        retracted_by = relations.get("is-retracted-by")
+        notice_any: JSONValue | None
+        if isinstance(retracted_by, list) and retracted_by:
+            notice_any = retracted_by[0]
+        elif isinstance(retracted_by, dict):
+            notice_any = retracted_by
+        else:
+            notice_any = None
+
+        if notice_any is not None:
+            notice_doi: str | None = None
+            if isinstance(notice_any, dict):
+                notice_id = notice_any.get("id")
+                if isinstance(notice_id, str):
+                    notice_doi = notice_id
+            else:
+                notice_doi = str(notice_any)
+
+            if notice_doi is not None:
                 return RetractionInfo(
                     doi=doi,
                     status=RetractionStatus.RETRACTED,
@@ -152,43 +190,71 @@ class CrossRefTool:
                     message="This article has been retracted",
                 )
 
-        # Check update-policy for retractions
-        updates = work.get("update-to", [])
+        # Check update-policy for retractions / concerns / corrections
+        updates_value = work.get("update-to", [])
+        updates: list[dict[str, JSONValue]] = []
+        if isinstance(updates_value, list):
+            for item in updates_value:
+                if isinstance(item, dict):
+                    updates.append(item)
+
         for update in updates:
-            update_type = update.get("type", "").lower()
+            update_type_value = update.get("type", "")
+            update_type = update_type_value.lower() if isinstance(update_type_value, str) else ""
+
+            updated_value = update.get("updated", {})
+            updated_mapping = updated_value if isinstance(updated_value, dict) else {}
+            updated_date_value = updated_mapping.get("date-time")
+            updated_date = updated_date_value if isinstance(updated_date_value, str) else None
+
+            doi_value = update.get("DOI")
+            update_doi = doi_value if isinstance(doi_value, str) else None
+
             if update_type == "retraction":
                 return RetractionInfo(
                     doi=doi,
                     status=RetractionStatus.RETRACTED,
-                    notice_doi=update.get("DOI"),
-                    date=update.get("updated", {}).get("date-time"),
+                    notice_doi=update_doi,
+                    date=updated_date,
                     message="This article has been retracted",
                 )
-            elif update_type in ("expression_of_concern", "expression-of-concern"):
+            if update_type in ("expression_of_concern", "expression-of-concern"):
                 return RetractionInfo(
                     doi=doi,
                     status=RetractionStatus.CONCERN,
-                    notice_doi=update.get("DOI"),
-                    date=update.get("updated", {}).get("date-time"),
+                    notice_doi=update_doi,
+                    date=updated_date,
                     message="Expression of concern issued for this article",
                 )
-            elif update_type in ("correction", "erratum"):
+            if update_type in ("correction", "erratum"):
                 return RetractionInfo(
                     doi=doi,
                     status=RetractionStatus.CORRECTION,
-                    notice_doi=update.get("DOI"),
-                    date=update.get("updated", {}).get("date-time"),
+                    notice_doi=update_doi,
+                    date=updated_date,
                     message="Correction/erratum issued for this article",
                 )
 
         # Check if the work type itself indicates retraction
-        work_type = work.get("type", "").lower()
+        work_type_value = work.get("type", "")
+        work_type = work_type_value.lower() if isinstance(work_type_value, str) else ""
         if work_type == "retraction":
-            # This IS a retraction notice
-            retracts = relations.get("retracts", [])
-            if retracts:
-                original = retracts[0] if isinstance(retracts, list) else retracts
-                original_doi = original.get("id") if isinstance(original, dict) else str(original)
+            retracts_value = relations.get("retracts", [])
+            original_any: JSONValue | None
+            if isinstance(retracts_value, list) and retracts_value:
+                original_any = retracts_value[0]
+            else:
+                original_any = retracts_value
+
+            original_doi: str | None = None
+            if isinstance(original_any, dict):
+                original_id = original_any.get("id")
+                if isinstance(original_id, str):
+                    original_doi = original_id
+            elif original_any is not None:
+                original_doi = str(original_any)
+
+            if original_doi is not None:
                 return RetractionInfo(
                     doi=doi,
                     status=RetractionStatus.RETRACTED,
@@ -214,28 +280,30 @@ class CrossRefTool:
         """
         return self.retractions(doi)
 
-    def check_pmid(self, pmid: str, pubmed_tool: Optional[Any] = None) -> RetractionInfo:
+    def check_pmid(
+        self, pmid: str, literature_tool: Optional[LiteratureTool] = None
+    ) -> RetractionInfo:
         """
         Check retraction status by PMID.
 
-        Requires a PubMed tool instance to look up the DOI first.
+        Requires a literature tool instance (e.g., EuropePMCTool) to look up the DOI first.
 
         Args:
             pmid: PubMed ID
-            pubmed_tool: PubMedTool instance for DOI lookup
+            literature_tool: EuropePMCTool instance for DOI lookup
 
         Returns:
             RetractionInfo with status and optional notice details
         """
-        if pubmed_tool is None:
+        if literature_tool is None:
             return RetractionInfo(
                 doi=pmid,
                 status=RetractionStatus.NONE,
-                message="PubMed tool required to look up DOI from PMID",
+                message="Literature tool required to look up DOI from PMID",
             )
 
         # Fetch article to get DOI
-        article = pubmed_tool.fetch(pmid)
+        article = literature_tool.fetch(pmid)
         if not article.doi:
             return RetractionInfo(
                 doi=pmid,

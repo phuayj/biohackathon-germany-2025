@@ -14,7 +14,8 @@ import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set
+from builtins import object as _object
+from typing import Optional, cast
 from urllib.parse import quote
 from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
@@ -35,9 +36,9 @@ class KGNode:
     id: str
     label: Optional[str] = None
     category: Optional[str] = None
-    properties: Dict[str, Any] = field(default_factory=dict)
+    properties: dict[str, _object] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, _object]:
         return {
             "id": self.id,
             "label": self.label,
@@ -55,10 +56,10 @@ class KGEdge:
     object: str
     subject_label: Optional[str] = None
     object_label: Optional[str] = None
-    properties: Dict[str, Any] = field(default_factory=dict)
-    sources: List[str] = field(default_factory=list)
+    properties: dict[str, _object] = field(default_factory=dict)
+    sources: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, _object]:
         return {
             "subject": self.subject,
             "predicate": self.predicate,
@@ -78,10 +79,10 @@ class EdgeQueryResult:
     object: str
     predicate: Optional[str]
     exists: bool
-    edges: List[KGEdge] = field(default_factory=list)
+    edges: list[KGEdge] = field(default_factory=list)
     source: str = "unknown"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, _object]:
         return {
             "subject": self.subject,
             "object": self.object,
@@ -98,11 +99,11 @@ class EgoNetworkResult:
 
     center_node: str
     k_hops: int
-    nodes: List[KGNode] = field(default_factory=list)
-    edges: List[KGEdge] = field(default_factory=list)
+    nodes: list[KGNode] = field(default_factory=list)
+    edges: list[KGEdge] = field(default_factory=list)
     source: str = "unknown"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, _object]:
         return {
             "center_node": self.center_node,
             "k_hops": self.k_hops,
@@ -145,7 +146,7 @@ class MonarchBackend(KGBackend):
         """Initialize Monarch backend."""
         pass
 
-    def _fetch_json(self, url: str) -> Dict[str, Any]:
+    def _fetch_json(self, url: str) -> dict[str, _object]:
         """Fetch URL and return JSON."""
         headers = {
             "Accept": "application/json",
@@ -154,9 +155,14 @@ class MonarchBackend(KGBackend):
         request = Request(url, headers=headers)
         try:
             with urlopen(request, timeout=30) as response:
-                return json.loads(response.read().decode("utf-8"))
+                payload = json.loads(response.read().decode("utf-8"))
         except (URLError, HTTPError) as e:
             raise RuntimeError(f"Failed to fetch {url}: {e}") from e
+
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"Unexpected JSON payload for {url}: expected object")
+
+        return cast(dict[str, _object], payload)
 
     def query_edge(
         self,
@@ -170,7 +176,9 @@ class MonarchBackend(KGBackend):
         Uses the association endpoint to find relationships.
         """
         # Query associations from subject
-        url = f"{self.BASE_URL}/association?subject={quote(subject)}&object={quote(object)}&limit=100"
+        url = (
+            f"{self.BASE_URL}/association?subject={quote(subject)}&object={quote(object)}&limit=100"
+        )
         if predicate:
             url += f"&predicate={quote(predicate)}"
 
@@ -185,20 +193,40 @@ class MonarchBackend(KGBackend):
                 source="monarch",
             )
 
-        edges = []
-        items = data.get("items", [])
-        for item in items:
+        edges: list[KGEdge] = []
+        items_value = data.get("items", [])
+        items_list: list[dict[str, _object]] = []
+        if isinstance(items_value, list):
+            for raw_item in items_value:
+                if isinstance(raw_item, dict):
+                    items_list.append(cast(dict[str, _object], raw_item))
+
+        for item in items_list:
+            subject_value = item.get("subject", subject)
+            predicate_value = item.get("predicate", "")
+            object_value = item.get("object", object)
+            subject_label_value = item.get("subject_label")
+            object_label_value = item.get("object_label")
+            publications_value = item.get("publications", [])
+            sources: list[str] = []
+            if isinstance(publications_value, list):
+                sources = [str(pub) for pub in publications_value]
+
             edge = KGEdge(
-                subject=item.get("subject", subject),
-                predicate=item.get("predicate", ""),
-                object=item.get("object", object),
-                subject_label=item.get("subject_label"),
-                object_label=item.get("object_label"),
+                subject=str(subject_value),
+                predicate=str(predicate_value),
+                object=str(object_value),
+                subject_label=(
+                    str(subject_label_value) if isinstance(subject_label_value, str) else None
+                ),
+                object_label=(
+                    str(object_label_value) if isinstance(object_label_value, str) else None
+                ),
                 properties={
                     "category": item.get("category"),
                     "primary_knowledge_source": item.get("primary_knowledge_source"),
                 },
-                sources=item.get("publications", []),
+                sources=sources,
             )
             edges.append(edge)
 
@@ -222,13 +250,13 @@ class MonarchBackend(KGBackend):
 
         Uses iterative association queries to build the network.
         """
-        visited_nodes: Set[str] = set()
-        all_edges: List[KGEdge] = []
-        all_nodes: Dict[str, KGNode] = {}
+        visited_nodes: set[str] = set()
+        all_edges: list[KGEdge] = []
+        all_nodes: dict[str, KGNode] = {}
         frontier = {node_id}
 
         for hop in range(k):
-            new_frontier: Set[str] = set()
+            new_frontier: set[str] = set()
 
             for current_node in frontier:
                 if current_node in visited_nodes:
@@ -278,7 +306,7 @@ class MonarchBackend(KGBackend):
         node_id: str,
         outgoing: bool = True,
         limit: int = 50,
-    ) -> List[KGEdge]:
+    ) -> list[KGEdge]:
         """Get associations for a node."""
         if outgoing:
             url = f"{self.BASE_URL}/association?subject={quote(node_id)}&limit={limit}"
@@ -290,18 +318,39 @@ class MonarchBackend(KGBackend):
         except RuntimeError:
             return []
 
-        edges = []
-        for item in data.get("items", []):
+        edges: list[KGEdge] = []
+        items_value = data.get("items", [])
+        items_list: list[dict[str, _object]] = []
+        if isinstance(items_value, list):
+            for raw_item in items_value:
+                if isinstance(raw_item, dict):
+                    items_list.append(cast(dict[str, _object], raw_item))
+
+        for item in items_list:
+            subject_value = item.get("subject", "")
+            predicate_value = item.get("predicate", "")
+            object_value = item.get("object", "")
+            subject_label_value = item.get("subject_label")
+            object_label_value = item.get("object_label")
+            publications_value = item.get("publications", [])
+            sources: list[str] = []
+            if isinstance(publications_value, list):
+                sources = [str(pub) for pub in publications_value]
+
             edge = KGEdge(
-                subject=item.get("subject", ""),
-                predicate=item.get("predicate", ""),
-                object=item.get("object", ""),
-                subject_label=item.get("subject_label"),
-                object_label=item.get("object_label"),
+                subject=str(subject_value),
+                predicate=str(predicate_value),
+                object=str(object_value),
+                subject_label=(
+                    str(subject_label_value) if isinstance(subject_label_value, str) else None
+                ),
+                object_label=(
+                    str(object_label_value) if isinstance(object_label_value, str) else None
+                ),
                 properties={
                     "category": item.get("category"),
                 },
-                sources=item.get("publications", []),
+                sources=sources,
             )
             edges.append(edge)
 
@@ -312,13 +361,13 @@ class InMemoryBackend(KGBackend):
     """
     In-memory KG backend for testing and local KG data.
 
-    Edges are stored as (subject, predicate, object) triples.
+        Edges are stored as (subject, predicate, object) triples.
     """
 
     def __init__(self) -> None:
         """Initialize in-memory backend."""
-        self.nodes: Dict[str, KGNode] = {}
-        self.edges: List[KGEdge] = []
+        self.nodes: dict[str, KGNode] = {}
+        self.edges: list[KGEdge] = []
 
     def add_node(self, node: KGNode) -> None:
         """Add a node to the graph."""
@@ -362,13 +411,13 @@ class InMemoryBackend(KGBackend):
         direction: EdgeDirection = EdgeDirection.BOTH,
     ) -> EgoNetworkResult:
         """Get the k-hop ego network around a node."""
-        all_nodes: Set[str] = {node_id}
-        result_edges: List[KGEdge] = []
+        all_nodes: set[str] = {node_id}
+        result_edges: list[KGEdge] = []
         frontier = {node_id}
-        processed: Set[str] = set()
+        processed: set[str] = set()
 
         for _ in range(k):
-            new_frontier: Set[str] = set()
+            new_frontier: set[str] = set()
 
             for current_node in frontier:
                 if current_node in processed:
@@ -391,10 +440,7 @@ class InMemoryBackend(KGBackend):
             frontier = new_frontier - processed
 
         # Collect nodes
-        result_nodes = [
-            self.nodes.get(nid, KGNode(id=nid))
-            for nid in all_nodes
-        ]
+        result_nodes = [self.nodes.get(nid, KGNode(id=nid)) for nid in all_nodes]
 
         return EgoNetworkResult(
             center_node=node_id,

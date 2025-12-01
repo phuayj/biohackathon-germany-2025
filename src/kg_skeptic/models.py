@@ -4,9 +4,8 @@ import json
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TypeVar
-
-T = TypeVar("T")
+from collections.abc import Mapping
+from typing import Optional, cast
 
 
 class Severity(str, Enum):
@@ -24,14 +23,20 @@ class EntityMention:
     norm_id: Optional[str] = None
     norm_label: Optional[str] = None
     source: str = "unknown"  # e.g., "rule", "llm", "dictionary"
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, object] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, object]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> EntityMention:
-        return cls(**data)
+    def from_dict(cls, data: Mapping[str, object]) -> EntityMention:
+        return cls(
+            mention=cast(str, data["mention"]),
+            norm_id=cast(Optional[str], data.get("norm_id")),
+            norm_label=cast(Optional[str], data.get("norm_label")),
+            source=cast(str, data.get("source", "unknown")),
+            metadata=cast(dict[str, object], data.get("metadata", {})),
+        )
 
 
 @dataclass
@@ -40,12 +45,12 @@ class Claim:
 
     id: str
     text: str
-    entities: List[EntityMention] = field(default_factory=list)
+    entities: list[EntityMention] = field(default_factory=list)
     support_span: Optional[str] = None  # snippet or reference
-    evidence: List[str] = field(default_factory=list)  # citations or tool outputs
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    evidence: list[str] = field(default_factory=list)  # citations or tool outputs
+    metadata: dict[str, object] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "id": self.id,
             "text": self.text,
@@ -56,15 +61,19 @@ class Claim:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> Claim:
-        entities = [EntityMention.from_dict(e) for e in data.get("entities", [])]
+    def from_dict(cls, data: Mapping[str, object]) -> Claim:
+        entities_data = cast(list[Mapping[str, object]], data.get("entities", []))
+        entities = [EntityMention.from_dict(e) for e in entities_data]
+        evidence = cast(list[str], data.get("evidence", []))
+        metadata = cast(dict[str, object], data.get("metadata", {}))
+
         return cls(
-            id=data["id"],
-            text=data["text"],
+            id=cast(str, data["id"]),
+            text=cast(str, data["text"]),
             entities=entities,
-            support_span=data.get("support_span"),
-            evidence=data.get("evidence", []),
-            metadata=data.get("metadata", {}),
+            support_span=cast(Optional[str], data.get("support_span")),
+            evidence=evidence,
+            metadata=metadata,
         )
 
 
@@ -76,14 +85,20 @@ class SuggestedFix:
     patch: str  # human-readable minimal change or tool call suggestion
     rationale: str
     confidence: float = 0.0
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, object] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, object]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> SuggestedFix:
-        return cls(**data)
+    def from_dict(cls, data: Mapping[str, object]) -> SuggestedFix:
+        return cls(
+            target_claim_id=cast(Optional[str], data.get("target_claim_id")),
+            patch=cast(str, data["patch"]),
+            rationale=cast(str, data["rationale"]),
+            confidence=cast(float, data.get("confidence", 0.0)),
+            metadata=cast(dict[str, object], data.get("metadata", {})),
+        )
 
 
 @dataclass
@@ -95,10 +110,10 @@ class Finding:
     severity: Severity
     message: str
     claim_id: Optional[str] = None
-    provenance: Dict[str, Any] = field(default_factory=dict)
+    provenance: dict[str, object] = field(default_factory=dict)
     suggested_fix: Optional[SuggestedFix] = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "id": self.id,
             "kind": self.kind,
@@ -110,17 +125,21 @@ class Finding:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> Finding:
-        suggested_fix = None
-        if data.get("suggested_fix"):
-            suggested_fix = SuggestedFix.from_dict(data["suggested_fix"])
+    def from_dict(cls, data: Mapping[str, object]) -> Finding:
+        suggested_fix_data = data.get("suggested_fix")
+        suggested_fix: Optional[SuggestedFix] = None
+        if isinstance(suggested_fix_data, Mapping):
+            suggested_fix = SuggestedFix.from_dict(
+                cast(Mapping[str, object], suggested_fix_data),
+            )
+
         return cls(
-            id=data["id"],
-            kind=data["kind"],
-            severity=Severity(data["severity"]),
-            message=data["message"],
-            claim_id=data.get("claim_id"),
-            provenance=data.get("provenance", {}),
+            id=cast(str, data["id"]),
+            kind=cast(str, data["kind"]),
+            severity=Severity(cast(str, data["severity"])),
+            message=cast(str, data["message"]),
+            claim_id=cast(Optional[str], data.get("claim_id")),
+            provenance=cast(dict[str, object], data.get("provenance", {})),
             suggested_fix=suggested_fix,
         )
 
@@ -132,12 +151,12 @@ class Report:
     task_id: str
     agent_name: str
     summary: str
-    claims: List[Claim] = field(default_factory=list)
-    findings: List[Finding] = field(default_factory=list)
-    suggested_fixes: List[SuggestedFix] = field(default_factory=list)
-    stats: Dict[str, Any] = field(default_factory=dict)
+    claims: list[Claim] = field(default_factory=list)
+    findings: list[Finding] = field(default_factory=list)
+    suggested_fixes: list[SuggestedFix] = field(default_factory=list)
+    stats: dict[str, object] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "task_id": self.task_id,
             "agent_name": self.agent_name,
@@ -149,15 +168,22 @@ class Report:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> Report:
+    def from_dict(cls, data: Mapping[str, object]) -> Report:
+        claims_data = cast(list[Mapping[str, object]], data.get("claims", []))
+        findings_data = cast(list[Mapping[str, object]], data.get("findings", []))
+        suggested_fixes_data = cast(
+            list[Mapping[str, object]],
+            data.get("suggested_fixes", []),
+        )
+
         return cls(
-            task_id=data["task_id"],
-            agent_name=data["agent_name"],
-            summary=data["summary"],
-            claims=[Claim.from_dict(c) for c in data.get("claims", [])],
-            findings=[Finding.from_dict(f) for f in data.get("findings", [])],
-            suggested_fixes=[SuggestedFix.from_dict(sf) for sf in data.get("suggested_fixes", [])],
-            stats=data.get("stats", {}),
+            task_id=cast(str, data["task_id"]),
+            agent_name=cast(str, data["agent_name"]),
+            summary=cast(str, data["summary"]),
+            claims=[Claim.from_dict(c) for c in claims_data],
+            findings=[Finding.from_dict(f) for f in findings_data],
+            suggested_fixes=[SuggestedFix.from_dict(sf) for sf in suggested_fixes_data],
+            stats=cast(dict[str, object], data.get("stats", {})),
         )
 
     def to_json(self, indent: int = 2) -> str:
@@ -165,7 +191,8 @@ class Report:
 
     @classmethod
     def from_json(cls, json_str: str) -> Report:
-        return cls.from_dict(json.loads(json_str))
+        data = json.loads(json_str)
+        return cls.from_dict(cast(Mapping[str, object], data))
 
     def save(self, path: Path | str) -> None:
         path = Path(path)

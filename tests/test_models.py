@@ -79,7 +79,9 @@ class TestFinding:
         )
         d = finding.to_dict()
         assert d["severity"] == "error"
-        assert d["suggested_fix"]["confidence"] == 0.9
+        suggested_fix = d["suggested_fix"]
+        assert isinstance(suggested_fix, dict)
+        assert suggested_fix["confidence"] == 0.9
 
         restored = Finding.from_dict(d)
         assert restored.severity == Severity.ERROR
@@ -131,13 +133,12 @@ class TestReport:
         )
         report_path = tmp_path / "report.json"
         report.save(report_path)
-        
+
         assert report_path.exists()
-        
+
         loaded = Report.load(report_path)
         assert loaded.task_id == report.task_id
         assert loaded.agent_name == report.agent_name
-
 
 
 class TestFixtures:

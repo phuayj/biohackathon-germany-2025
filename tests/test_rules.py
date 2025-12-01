@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from kg_skeptic.rules import DEFAULT_RULES_PATH, RuleEngine
@@ -17,7 +19,7 @@ def test_engine_loads_rules() -> None:
 
 
 @pytest.fixture
-def sample_facts() -> dict:
+def sample_facts() -> dict[str, object]:
     return {
         "claim": {
             "id": "claim-001",
@@ -30,7 +32,7 @@ def sample_facts() -> dict:
     }
 
 
-def test_evaluate_returns_features_and_trace(sample_facts: dict) -> None:
+def test_evaluate_returns_features_and_trace(sample_facts: dict[str, object]) -> None:
     engine = RuleEngine.from_yaml()
     result = engine.evaluate(sample_facts)
 
@@ -46,10 +48,11 @@ def test_evaluate_returns_features_and_trace(sample_facts: dict) -> None:
     assert any("did not cite any evidence" in msg for msg in trace_messages)
 
 
-def test_negated_condition_triggers_when_missing_species(sample_facts: dict) -> None:
+def test_negated_condition_triggers_when_missing_species(sample_facts: dict[str, object]) -> None:
     sample_facts["context"] = {}
-    sample_facts["claim"]["evidence_count"] = 2
-    sample_facts["claim"]["evidence"] = ["PMID:123"]
+    claim = cast(dict[str, object], sample_facts["claim"])
+    claim["evidence_count"] = 2
+    claim["evidence"] = ["PMID:123"]
 
     engine = RuleEngine.from_yaml()
     result = engine.evaluate(sample_facts)
@@ -67,6 +70,7 @@ def test_negated_condition_triggers_when_missing_species(sample_facts: dict) -> 
 class TestRuleConditionEvaluation:
     def test_exists_op(self) -> None:
         from kg_skeptic.rules import RuleCondition
+
         cond = RuleCondition(fact="a.b", op="exists")
         assert cond.evaluate({"a": {"b": 1}}) is True
         assert cond.evaluate({"a": {"b": 0}}) is False  # 0 is falsy
@@ -75,12 +79,14 @@ class TestRuleConditionEvaluation:
 
     def test_equals_op(self) -> None:
         from kg_skeptic.rules import RuleCondition
+
         cond = RuleCondition(fact="status", op="equals", value="active")
         assert cond.evaluate({"status": "active"}) is True
         assert cond.evaluate({"status": "inactive"}) is False
 
     def test_contains_op(self) -> None:
         from kg_skeptic.rules import RuleCondition
+
         cond = RuleCondition(fact="tags", op="contains", value="urgent")
         assert cond.evaluate({"tags": ["urgent", "review"]}) is True
         assert cond.evaluate({"tags": ["review"]}) is False
@@ -88,22 +94,22 @@ class TestRuleConditionEvaluation:
 
     def test_numeric_ops(self) -> None:
         from kg_skeptic.rules import RuleCondition
-        
+
         # Greater than
         gt = RuleCondition(fact="count", op="gt", value=5)
         assert gt.evaluate({"count": 6}) is True
         assert gt.evaluate({"count": 5}) is False
-        
+
         # Greater than or equal
         gte = RuleCondition(fact="count", op="gte", value=5)
         assert gte.evaluate({"count": 5}) is True
         assert gte.evaluate({"count": 4}) is False
-        
+
         # Less than
         lt = RuleCondition(fact="count", op="lt", value=5)
         assert lt.evaluate({"count": 4}) is True
         assert lt.evaluate({"count": 5}) is False
-        
+
         # Less than or equal
         lte = RuleCondition(fact="count", op="lte", value=5)
         assert lte.evaluate({"count": 5}) is True
@@ -111,7 +117,7 @@ class TestRuleConditionEvaluation:
 
     def test_negation(self) -> None:
         from kg_skeptic.rules import RuleCondition
+
         cond = RuleCondition(fact="status", op="equals", value="error", negate=True)
         assert cond.evaluate({"status": "ok"}) is True
         assert cond.evaluate({"status": "error"}) is False
-

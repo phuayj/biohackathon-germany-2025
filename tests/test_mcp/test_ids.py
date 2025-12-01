@@ -57,21 +57,23 @@ class TestIDNormalizerTool:
         mock_response = MagicMock()
         mock_response.__enter__ = MagicMock(return_value=mock_response)
         mock_response.__exit__ = MagicMock(return_value=False)
-        mock_response.read.return_value = json.dumps({
-            "response": {
-                "docs": [
-                    {
-                        "hgnc_id": "HGNC:1100",
-                        "symbol": "BRCA1",
-                        "name": "BRCA1 DNA repair associated",
-                        "alias_symbol": ["BRCC1", "RNF53"],
-                        "locus_group": "protein-coding gene",
-                        "uniprot_ids": ["P38398"],
-                        "ensembl_gene_id": "ENSG00000012048",
-                    }
-                ]
+        mock_response.read.return_value = json.dumps(
+            {
+                "response": {
+                    "docs": [
+                        {
+                            "hgnc_id": "HGNC:1100",
+                            "symbol": "BRCA1",
+                            "name": "BRCA1 DNA repair associated",
+                            "alias_symbol": ["BRCC1", "RNF53"],
+                            "locus_group": "protein-coding gene",
+                            "uniprot_ids": ["P38398"],
+                            "ensembl_gene_id": "ENSG00000012048",
+                        }
+                    ]
+                }
             }
-        }).encode("utf-8")
+        ).encode("utf-8")
         mock_urlopen.return_value = mock_response
 
         tool = IDNormalizerTool()
@@ -89,9 +91,7 @@ class TestIDNormalizerTool:
         mock_response.__enter__ = MagicMock(return_value=mock_response)
         mock_response.__exit__ = MagicMock(return_value=False)
         # First call for symbol lookup returns empty
-        mock_response.read.return_value = json.dumps({
-            "response": {"docs": []}
-        }).encode("utf-8")
+        mock_response.read.return_value = json.dumps({"response": {"docs": []}}).encode("utf-8")
         mock_urlopen.return_value = mock_response
 
         tool = IDNormalizerTool()
@@ -106,17 +106,19 @@ class TestIDNormalizerTool:
         mock_response = MagicMock()
         mock_response.__enter__ = MagicMock(return_value=mock_response)
         mock_response.__exit__ = MagicMock(return_value=False)
-        mock_response.read.return_value = json.dumps({
-            "primaryAccession": "P38398",
-            "proteinDescription": {
-                "recommendedName": {
-                    "fullName": {"value": "Breast cancer type 1 susceptibility protein"}
-                }
-            },
-            "genes": [{"geneName": {"value": "BRCA1"}}],
-            "organism": {"scientificName": "Homo sapiens"},
-            "entryType": "UniProtKB reviewed (Swiss-Prot)",
-        }).encode("utf-8")
+        mock_response.read.return_value = json.dumps(
+            {
+                "primaryAccession": "P38398",
+                "proteinDescription": {
+                    "recommendedName": {
+                        "fullName": {"value": "Breast cancer type 1 susceptibility protein"}
+                    }
+                },
+                "genes": [{"geneName": {"value": "BRCA1"}}],
+                "organism": {"scientificName": "Homo sapiens"},
+                "entryType": "UniProtKB reviewed (Swiss-Prot)",
+            }
+        ).encode("utf-8")
         mock_urlopen.return_value = mock_response
 
         tool = IDNormalizerTool()
@@ -134,17 +136,23 @@ class TestIDNormalizerTool:
         mock_response.__enter__ = MagicMock(return_value=mock_response)
         mock_response.__exit__ = MagicMock(return_value=False)
         # OLS4 API returns results in _embedded.terms array
-        mock_response.read.return_value = json.dumps({
-            "_embedded": {
-                "terms": [{
-                    "obo_id": "MONDO:0007254",
-                    "label": "breast cancer",
-                    "synonyms": ["breast carcinoma", "mammary cancer"],
-                    "description": ["A carcinoma that arises from breast epithelial tissue."],
-                    "iri": "http://purl.obolibrary.org/obo/MONDO_0007254",
-                }]
+        mock_response.read.return_value = json.dumps(
+            {
+                "_embedded": {
+                    "terms": [
+                        {
+                            "obo_id": "MONDO:0007254",
+                            "label": "breast cancer",
+                            "synonyms": ["breast carcinoma", "mammary cancer"],
+                            "description": [
+                                "A carcinoma that arises from breast epithelial tissue."
+                            ],
+                            "iri": "http://purl.obolibrary.org/obo/MONDO_0007254",
+                        }
+                    ]
+                }
             }
-        }).encode("utf-8")
+        ).encode("utf-8")
         mock_urlopen.return_value = mock_response
 
         tool = IDNormalizerTool()
@@ -161,16 +169,20 @@ class TestIDNormalizerTool:
         mock_response.__enter__ = MagicMock(return_value=mock_response)
         mock_response.__exit__ = MagicMock(return_value=False)
         # OLS4 API returns results in _embedded.terms array
-        mock_response.read.return_value = json.dumps({
-            "_embedded": {
-                "terms": [{
-                    "obo_id": "HP:0001250",
-                    "label": "Seizure",
-                    "synonyms": ["Epileptic seizure", "Seizures"],
-                    "iri": "http://purl.obolibrary.org/obo/HP_0001250",
-                }]
+        mock_response.read.return_value = json.dumps(
+            {
+                "_embedded": {
+                    "terms": [
+                        {
+                            "obo_id": "HP:0001250",
+                            "label": "Seizure",
+                            "synonyms": ["Epileptic seizure", "Seizures"],
+                            "iri": "http://purl.obolibrary.org/obo/HP_0001250",
+                        }
+                    ]
+                }
             }
-        }).encode("utf-8")
+        ).encode("utf-8")
         mock_urlopen.return_value = mock_response
 
         tool = IDNormalizerTool()
@@ -186,17 +198,19 @@ class TestIDNormalizerTool:
         mock_response = MagicMock()
         mock_response.__enter__ = MagicMock(return_value=mock_response)
         mock_response.__exit__ = MagicMock(return_value=False)
-        mock_response.read.return_value = json.dumps({
-            "response": {
-                "docs": [
-                    {
-                        "hgnc_id": "HGNC:1100",
-                        "symbol": "BRCA1",
-                        "uniprot_ids": ["P38398"],
-                    }
-                ]
+        mock_response.read.return_value = json.dumps(
+            {
+                "response": {
+                    "docs": [
+                        {
+                            "hgnc_id": "HGNC:1100",
+                            "symbol": "BRCA1",
+                            "uniprot_ids": ["P38398"],
+                        }
+                    ]
+                }
             }
-        }).encode("utf-8")
+        ).encode("utf-8")
         mock_urlopen.return_value = mock_response
 
         tool = IDNormalizerTool()

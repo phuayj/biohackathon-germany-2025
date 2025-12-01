@@ -58,7 +58,7 @@ CANNED_CLAIM = Claim(
 PASS_THRESHOLD = 0.5
 
 
-def build_facts_from_claim(claim: Claim) -> dict:
+def build_facts_from_claim(claim: Claim) -> dict[str, object]:
     """Build a facts dictionary from a claim for rule evaluation."""
     normalized_entities = [e for e in claim.entities if e.norm_id]
     # Species context: prefer explicit metadata, otherwise infer from text.
@@ -110,7 +110,7 @@ def render_entity_badge(entity: EntityMention) -> None:
         st.markdown(
             f'<span style="background-color: #1a472a; color: #98fb98; '
             f'padding: 2px 8px; border-radius: 4px; font-size: 0.9em;">'
-            f'**{entity.mention}** → `{entity.norm_id}`</span>',
+            f"**{entity.mention}** → `{entity.norm_id}`</span>",
             unsafe_allow_html=True,
         )
         if entity.norm_label:
@@ -119,7 +119,7 @@ def render_entity_badge(entity: EntityMention) -> None:
         st.markdown(
             f'<span style="background-color: #8b0000; color: #ffb6c1; '
             f'padding: 2px 8px; border-radius: 4px; font-size: 0.9em;">'
-            f'**{entity.mention}** → ⚠️ unnormalized</span>',
+            f"**{entity.mention}** → ⚠️ unnormalized</span>",
             unsafe_allow_html=True,
         )
 
@@ -221,7 +221,9 @@ def main() -> None:
     st.divider()
 
     # Disclaimer banner
-    st.warning("⚠️ **Not medical advice.** This is a research prototype for auditing biomedical claims.")
+    st.warning(
+        "⚠️ **Not medical advice.** This is a research prototype for auditing biomedical claims."
+    )
 
     # Initialize session state
     if "audit_run" not in st.session_state:

@@ -45,7 +45,9 @@ class TestKGDataClasses:
         assert d["subject"] == "HGNC:1100"
         assert d["predicate"] == "biolink:causes"
         assert d["object"] == "MONDO:0007254"
-        assert "PMID:12345678" in d["sources"]
+        sources = d["sources"]
+        assert isinstance(sources, list)
+        assert "PMID:12345678" in sources
 
     def test_edge_query_result_to_dict(self) -> None:
         """Test EdgeQueryResult serialization."""
@@ -64,8 +66,12 @@ class TestKGDataClasses:
         )
         d = result.to_dict()
         assert d["exists"] is True
-        assert len(d["edges"]) == 1
-        assert d["source"] == "monarch"
+        edges = d["edges"]
+        source = d["source"]
+        assert isinstance(edges, list)
+        assert isinstance(source, str)
+        assert len(edges) == 1
+        assert source == "monarch"
 
     def test_ego_network_result_to_dict(self) -> None:
         """Test EgoNetworkResult serialization."""
@@ -85,7 +91,9 @@ class TestKGDataClasses:
         d = result.to_dict()
         assert d["center_node"] == "HGNC:1100"
         assert d["k_hops"] == 2
-        assert len(d["nodes"]) == 1
+        nodes = d["nodes"]
+        assert isinstance(nodes, list)
+        assert len(nodes) == 1
 
 
 class TestInMemoryBackend:
@@ -235,19 +243,21 @@ class TestMonarchBackend:
         mock_response = MagicMock()
         mock_response.__enter__ = MagicMock(return_value=mock_response)
         mock_response.__exit__ = MagicMock(return_value=False)
-        mock_response.read.return_value = json.dumps({
-            "items": [
-                {
-                    "subject": "HGNC:1100",
-                    "predicate": "biolink:causes",
-                    "object": "MONDO:0007254",
-                    "subject_label": "BRCA1",
-                    "object_label": "breast cancer",
-                    "category": "biolink:GeneToDiseaseAssociation",
-                    "publications": ["PMID:12345678"],
-                }
-            ]
-        }).encode("utf-8")
+        mock_response.read.return_value = json.dumps(
+            {
+                "items": [
+                    {
+                        "subject": "HGNC:1100",
+                        "predicate": "biolink:causes",
+                        "object": "MONDO:0007254",
+                        "subject_label": "BRCA1",
+                        "object_label": "breast cancer",
+                        "category": "biolink:GeneToDiseaseAssociation",
+                        "publications": ["PMID:12345678"],
+                    }
+                ]
+            }
+        ).encode("utf-8")
         mock_urlopen.return_value = mock_response
 
         backend = MonarchBackend()

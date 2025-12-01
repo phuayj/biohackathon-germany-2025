@@ -18,7 +18,7 @@ import sys
 from typing import Optional
 
 from kg_skeptic.mcp import (
-    PubMedTool,
+    EuropePMCTool,
     CrossRefTool,
     IDNormalizerTool,
     KGTool,
@@ -41,40 +41,62 @@ def subsection(title: str) -> None:
     print("-" * 40)
 
 
-def demo_pubmed(verbose: bool = False) -> Optional[str]:
-    """Demo PubMed search and fetch."""
-    section("📚 PUBMED: Search & Fetch Publications")
+def demo_literature(verbose: bool = False) -> Optional[str]:
+    """Demo Europe PMC search and fetch."""
+    section("📚 LITERATURE: Search & Fetch Publications (Europe PMC)")
 
-    pubmed = PubMedTool()
+    epmc = EuropePMCTool()
 
     # Search
     query = "CRISPR gene therapy"
     print(f"\n🔍 Search: '{query}'")
-    results = pubmed.search(query, max_results=3)
+    results = epmc.search(query, max_results=3)
     print(f"   Found: {results.count:,} articles")
     print(f"   Top PMIDs: {results.pmids}")
 
-    if not results.pmids:
+    if not results.articles:
         print("   ⚠️  No results found")
         return None
 
-    # Fetch first article
-    pmid = results.pmids[0]
-    print(f"\n📄 Fetching PMID {pmid}...")
-    article = pubmed.fetch(pmid)
-
-    print(f"   Title: {article.title[:65]}..." if len(article.title) > 65 else f"   Title: {article.title}")
+    # Prefer an article that has a DOI so we can demo CrossRef
+    article = next((a for a in results.articles if a.doi), results.articles[0])
+    # Show best available identifier
+    if article.doi:
+        id_str = f"DOI {article.doi}"
+    elif article.pmid:
+        id_str = f"PMID {article.pmid}"
+    elif article.pmcid:
+        id_str = f"{article.pmcid}"
+    elif article.doi:
+        id_str = f"DOI {article.doi}"
+    else:
+        id_str = "no ID"
+    print(f"\n📄 Top Result ({id_str})...")
+    print(
+        f"   Title: {article.title[:65]}..."
+        if len(article.title) > 65
+        else f"   Title: {article.title}"
+    )
     print(f"   Journal: {article.journal}")
     print(f"   DOI: {article.doi}")
+    print(f"   Open Access: {'Yes' if article.is_open_access else 'No'}")
+    print(f"   Citations: {article.citation_count}")
 
     if verbose:
         print(f"   Date: {article.pub_date}")
+        print(f"   Source: {article.source}")
+        print(f"   PMC ID: {article.pmcid}")
         print(f"   Authors: {', '.join(article.authors[:5])}")
         if len(article.authors) > 5:
             print(f"            ... and {len(article.authors) - 5} more")
         print(f"   MeSH terms: {article.mesh_terms[:5]}")
         if article.abstract:
             print(f"   Abstract: {article.abstract[:150]}...")
+
+    # Demo Open Access filter
+    print("\n🔓 Open Access Search:")
+    oa_results = epmc.search(query, max_results=3, open_access_only=True)
+    print(f"   Open Access articles: {oa_results.count:,}")
 
     return article.doi
 
@@ -216,12 +238,12 @@ def demo_integration(
     section("🎯 INTEGRATION: Verify a Biomedical Claim")
 
     claim = "TP53 is a tumor suppressor gene involved in cancer"
-    print(f"\n📝 Claim: \"{claim}\"")
+    print(f'\n📝 Claim: "{claim}"')
 
     ids = IDNormalizerTool()
     backend = backend or (load_mini_kg_backend() if use_mini_kg else None)
     kg = KGTool(backend=backend) if backend else KGTool()
-    pubmed = PubMedTool()
+    epmc = EuropePMCTool()
     crossref = CrossRefTool()
 
     # Step 1: Normalize entities
@@ -243,15 +265,15 @@ def demo_integration(
         print("      ✗ No direct relationship in KG")
 
     # Step 3: Find literature
-    print("\n   [Step 3] Search literature")
-    search = pubmed.search("TP53 tumor suppressor cancer", max_results=3)
+    print("\n   [Step 3] Search literature (Europe PMC)")
+    search = epmc.search("TP53 tumor suppressor cancer", max_results=3)
     print(f"      Found {search.count:,} articles")
 
     # Step 4: Validate citations
     print("\n   [Step 4] Validate top citation")
-    if search.pmids:
-        article = pubmed.fetch(search.pmids[0])
-        print(f"      PMID: {search.pmids[0]}")
+    if search.articles:
+        article = search.articles[0]
+        print(f"      PMID: {article.pmid}")
         print(f"      Title: {article.title[:50]}...")
         if article.doi:
             retraction = crossref.retractions(article.doi)
@@ -281,12 +303,14 @@ Examples:
         """,
     )
     parser.add_argument(
-        "--quick", "-q",
+        "--quick",
+        "-q",
         action="store_true",
         help="Run quick smoke test only",
     )
     parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         help="Show detailed output",
     )
@@ -316,7 +340,7 @@ Examples:
             )
         else:
             # Full demo
-            doi = demo_pubmed(verbose=args.verbose)
+            doi = demo_literature(verbose=args.verbose)
             demo_crossref(doi=doi, verbose=args.verbose)
             gene_id, disease_id = demo_id_normalization(verbose=args.verbose)
             demo_kg_queries(

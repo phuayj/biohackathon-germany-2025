@@ -8,7 +8,7 @@
 - [x] Wire CI to run lint/type/test plus lightweight smoke of rule checks.
 
 ### MCP Tools (Done)
-- [x] Build MCP adapters (MVP): PubMed search/fetch, CrossRef retractions, HGNC/UniProt/MONDO/HPO normalization, KG query_edge/ego via Monarch.
+- [x] Build MCP adapters (MVP): Europe PMC search/fetch (literature), CrossRef retractions, HGNC/UniProt/MONDO/HPO normalization, KG query_edge/ego via Monarch.
 
 ### Mini KG Slice (Done)
 - [x] Ship an in-memory mini KG slice (gene–disease/phenotype/PPI/pathway) with citation metadata for offline checks.
@@ -36,7 +36,7 @@
 - [ ] Resolve canonical IDs via `ids.*` tools; attach labels and ontology ancestors.
 
 ### Provenance & Caching
-- [ ] For each PMID/DOI, fetch via `pubmed.fetch` and `crossref.retractions`.
+- [ ] For each PMID/DOI, fetch via `europepmc.fetch` and `crossref.retractions`.
 - [ ] Disk cache all responses to `data/cache/*.json`.
 - [ ] Graceful fallback when APIs are down (show WARN, don't auto-PASS).
 

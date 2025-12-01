@@ -251,7 +251,11 @@ def _iter_ppi_edges() -> Iterator[KGEdge]:
         for j in range(i + 1, len(_GENES)):
             partner = _GENES[j]
             citation = _CITATIONS[(i + j) % len(_CITATIONS)]
-            predicate = "biolink:interacts_with" if ((i + j) % 2 == 0) else "biolink:physically_interacts_with"
+            predicate = (
+                "biolink:interacts_with"
+                if ((i + j) % 2 == 0)
+                else "biolink:physically_interacts_with"
+            )
             confidence = 0.7 + 0.01 * (j % 10)
             properties = _edge_properties("gene-gene", citation, confidence, "ppi")
 

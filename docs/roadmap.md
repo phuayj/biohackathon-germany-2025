@@ -11,7 +11,7 @@
 - [x] Establish deterministic test harness for rule-based checks.
 
 ### MCP Tools (Minimum Viable)
-- [x] `pubmed.search(query)` and `pubmed.fetch(pmid)` → title, abstract, DOI, MeSH.
+- [x] `europepmc.search(query)` and `europepmc.fetch(pmid)` → title, abstract, DOI, MeSH, open access status, citations.
 - [x] `crossref.retractions(doi|pmid)` → status, date, notice_doi.
 - [x] `ids.normalize_*` (HGNC/UniProt ↔ symbol; MONDO/HPO lookups).
 - [x] `kg.query_edge(u,v,rel)` and `kg.ego(node_id, k=2)`.
@@ -40,7 +40,7 @@
 - [ ] `ids.*` tools resolve to canonical IDs; attach labels and ontology ancestors.
 
 ### Provenance Fetch
-- [ ] For each PMID/DOI in claim or KG edge, call `pubmed.fetch` and `crossref.retractions`.
+- [ ] For each PMID/DOI in claim or KG edge, call `europepmc.fetch` and `crossref.retractions`.
 - [ ] Cache all responses to `data/cache` (JSON).
 
 ### Core Rule Set (in `rules.yaml`)

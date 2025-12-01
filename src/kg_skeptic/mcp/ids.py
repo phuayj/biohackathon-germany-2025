@@ -13,7 +13,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from collections.abc import Mapping
+from typing import Optional, cast
 from urllib.parse import quote, urlencode
 from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
@@ -40,12 +41,12 @@ class NormalizedID:
     input_type: Optional[IDType] = None
     normalized_id: Optional[str] = None
     label: Optional[str] = None
-    synonyms: List[str] = field(default_factory=list)
+    synonyms: list[str] = field(default_factory=list)
     source: str = "unknown"
     found: bool = False
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, object] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "input_value": self.input_value,
             "input_type": self.input_type.value if self.input_type else None,
@@ -67,7 +68,7 @@ class CrossReference:
     target_id: str
     target_type: IDType
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "source_id": self.source_id,
             "source_type": self.source_type.value,
@@ -88,18 +89,26 @@ class IDNormalizerTool:
         """Initialize ID normalizer."""
         pass
 
-    def _fetch_json(self, url: str, headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    def _fetch_json(self, url: str, headers: Optional[dict[str, str]] = None) -> dict[str, object]:
         """Fetch URL and return JSON."""
-        default_headers = {"Accept": "application/json", "User-Agent": "kg-skeptic/0.1"}
+        default_headers: dict[str, str] = {
+            "Accept": "application/json",
+            "User-Agent": "kg-skeptic/0.1",
+        }
         if headers:
             default_headers.update(headers)
 
         request = Request(url, headers=default_headers)
         try:
             with urlopen(request, timeout=30) as response:
-                return json.loads(response.read().decode("utf-8"))
+                payload = json.loads(response.read().decode("utf-8"))
         except (URLError, HTTPError) as e:
             raise RuntimeError(f"Failed to fetch {url}: {e}") from e
+
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"Unexpected JSON payload for {url}: expected object")
+
+        return cast(dict[str, object], payload)
 
     # =========================================================================
     # HGNC / Gene Symbol Normalization
@@ -142,8 +151,14 @@ class IDNormalizerTool:
                 source="hgnc",
             )
 
-        docs = data.get("response", {}).get("docs", [])
-        if not docs:
+        response_value = data.get("response", {})
+        docs_list: list[Mapping[str, object]] = []
+        if isinstance(response_value, Mapping):
+            docs_value = response_value.get("docs", [])
+            if isinstance(docs_value, list):
+                docs_list = [doc for doc in docs_value if isinstance(doc, Mapping)]
+
+        if not docs_list:
             return NormalizedID(
                 input_value=hgnc_id,
                 input_type=IDType.HGNC,
@@ -151,7 +166,7 @@ class IDNormalizerTool:
                 source="hgnc",
             )
 
-        return self._parse_hgnc_doc(docs[0], hgnc_id)
+        return self._parse_hgnc_doc(docs_list[0], hgnc_id)
 
     def _lookup_hgnc_by_symbol(self, symbol: str) -> NormalizedID:
         """Look up gene by symbol."""
@@ -166,12 +181,18 @@ class IDNormalizerTool:
                 source="hgnc",
             )
 
-        docs = data.get("response", {}).get("docs", [])
-        if not docs:
+        response_value = data.get("response", {})
+        docs_list: list[Mapping[str, object]] = []
+        if isinstance(response_value, Mapping):
+            docs_value = response_value.get("docs", [])
+            if isinstance(docs_value, list):
+                docs_list = [doc for doc in docs_value if isinstance(doc, Mapping)]
+
+        if not docs_list:
             # Try previous symbols
             return self._lookup_hgnc_by_prev_symbol(symbol)
 
-        return self._parse_hgnc_doc(docs[0], symbol)
+        return self._parse_hgnc_doc(docs_list[0], symbol)
 
     def _lookup_hgnc_by_prev_symbol(self, symbol: str) -> NormalizedID:
         """Look up gene by previous symbol."""
@@ -186,8 +207,14 @@ class IDNormalizerTool:
                 source="hgnc",
             )
 
-        docs = data.get("response", {}).get("docs", [])
-        if not docs:
+        response_value = data.get("response", {})
+        docs_list: list[Mapping[str, object]] = []
+        if isinstance(response_value, Mapping):
+            docs_value = response_value.get("docs", [])
+            if isinstance(docs_value, list):
+                docs_list = [doc for doc in docs_value if isinstance(doc, Mapping)]
+
+        if not docs_list:
             return NormalizedID(
                 input_value=symbol,
                 input_type=IDType.HGNC_SYMBOL,
@@ -195,18 +222,22 @@ class IDNormalizerTool:
                 source="hgnc",
             )
 
-        return self._parse_hgnc_doc(docs[0], symbol)
+        return self._parse_hgnc_doc(docs_list[0], symbol)
 
-    def _parse_hgnc_doc(self, doc: Dict[str, Any], input_value: str) -> NormalizedID:
+    def _parse_hgnc_doc(self, doc: Mapping[str, object], input_value: str) -> NormalizedID:
         """Parse HGNC document into NormalizedID."""
-        hgnc_id = doc.get("hgnc_id", "")
-        symbol = doc.get("symbol", "")
+        hgnc_id_value = doc.get("hgnc_id", "")
+        hgnc_id = str(hgnc_id_value) if hgnc_id_value is not None else ""
+        symbol_value = doc.get("symbol", "")
+        symbol = str(symbol_value) if symbol_value is not None else ""
 
-        synonyms = []
-        if doc.get("alias_symbol"):
-            synonyms.extend(doc["alias_symbol"])
-        if doc.get("prev_symbol"):
-            synonyms.extend(doc["prev_symbol"])
+        synonyms: list[str] = []
+        alias_value = doc.get("alias_symbol")
+        if isinstance(alias_value, list):
+            synonyms.extend(str(v) for v in alias_value)
+        prev_value = doc.get("prev_symbol")
+        if isinstance(prev_value, list):
+            synonyms.extend(str(v) for v in prev_value)
 
         return NormalizedID(
             input_value=input_value,
@@ -226,11 +257,15 @@ class IDNormalizerTool:
             },
         )
 
-    def hgnc_to_uniprot(self, hgnc_id: str) -> List[str]:
+    def hgnc_to_uniprot(self, hgnc_id: str) -> list[str]:
         """Get UniProt IDs for an HGNC ID."""
         result = self.normalize_hgnc(hgnc_id)
-        if result.found:
-            return result.metadata.get("uniprot_ids", [])
+        if not result.found:
+            return []
+
+        value = result.metadata.get("uniprot_ids", [])
+        if isinstance(value, list):
+            return [str(v) for v in value]
         return []
 
     def symbol_to_hgnc(self, symbol: str) -> Optional[str]:
@@ -265,18 +300,40 @@ class IDNormalizerTool:
                 source="uniprot",
             )
 
-        accession = data.get("primaryAccession", identifier)
+        accession_value = data.get("primaryAccession", identifier)
+        accession = str(accession_value)
+
         protein_name = ""
-        recommended_name = data.get("proteinDescription", {}).get("recommendedName", {})
-        if recommended_name:
-            protein_name = recommended_name.get("fullName", {}).get("value", "")
+        protein_desc = data.get("proteinDescription", {})
+        if isinstance(protein_desc, Mapping):
+            recommended_name = protein_desc.get("recommendedName", {})
+            if isinstance(recommended_name, Mapping):
+                full_name = recommended_name.get("fullName", {})
+                if isinstance(full_name, Mapping):
+                    value = full_name.get("value")
+                    if isinstance(value, str):
+                        protein_name = value
 
         # Get gene names
-        genes = data.get("genes", [])
-        gene_names = []
-        for gene in genes:
-            if gene.get("geneName"):
-                gene_names.append(gene["geneName"].get("value", ""))
+        genes_value = data.get("genes", [])
+        genes_list = genes_value if isinstance(genes_value, list) else []
+        gene_names: list[str] = []
+        for gene_any in genes_list:
+            if not isinstance(gene_any, Mapping):
+                continue
+            gene = gene_any
+            gene_name_value = gene.get("geneName")
+            if isinstance(gene_name_value, Mapping):
+                value = gene_name_value.get("value")
+                if isinstance(value, str):
+                    gene_names.append(value)
+
+        organism_name: Optional[str] = None
+        organism_value = data.get("organism", {})
+        if isinstance(organism_value, Mapping):
+            sci_name = organism_value.get("scientificName")
+            if isinstance(sci_name, str):
+                organism_name = sci_name
 
         return NormalizedID(
             input_value=identifier,
@@ -287,7 +344,7 @@ class IDNormalizerTool:
             source="uniprot",
             found=True,
             metadata={
-                "organism": data.get("organism", {}).get("scientificName"),
+                "organism": organism_name,
                 "gene_names": gene_names,
                 "reviewed": data.get("entryType") == "UniProtKB reviewed (Swiss-Prot)",
             },
@@ -300,7 +357,15 @@ class IDNormalizerTool:
             return None
 
         # Look up gene symbol in HGNC
-        gene_names = result.metadata.get("gene_names", [])
+        gene_names_value = result.metadata.get("gene_names", [])
+        gene_names = (
+            [str(name) for name in gene_names_value]
+            if isinstance(
+                gene_names_value,
+                list,
+            )
+            else []
+        )
         for gene_name in gene_names:
             hgnc_result = self.normalize_hgnc(gene_name)
             if hgnc_result.found:
@@ -351,8 +416,14 @@ class IDNormalizerTool:
             )
 
         # OLS4 returns results in _embedded.terms array
-        terms = data.get("_embedded", {}).get("terms", [])
-        if not terms:
+        embedded_value = data.get("_embedded", {})
+        terms_list: list[Mapping[str, object]] = []
+        if isinstance(embedded_value, Mapping):
+            terms_value = embedded_value.get("terms", [])
+            if isinstance(terms_value, list):
+                terms_list = [term for term in terms_value if isinstance(term, Mapping)]
+
+        if not terms_list:
             return NormalizedID(
                 input_value=mondo_id,
                 input_type=IDType.MONDO,
@@ -360,17 +431,19 @@ class IDNormalizerTool:
                 source="mondo",
             )
 
-        term = terms[0]
-        obo_id = term.get("obo_id", mondo_id)
-        label = term.get("label", "")
-        synonyms = term.get("synonyms", [])
+        term = terms_list[0]
+        obo_id = cast(Optional[str], term.get("obo_id", mondo_id))
+        label = cast(Optional[str], term.get("label", ""))
+        synonyms_value = term.get("synonyms", [])
+        synonyms_list = synonyms_value if isinstance(synonyms_value, list) else []
+        synonyms = [str(s) for s in synonyms_list]
 
         return NormalizedID(
             input_value=mondo_id,
             input_type=IDType.MONDO,
             normalized_id=obo_id,
             label=label,
-            synonyms=synonyms if isinstance(synonyms, list) else [],
+            synonyms=synonyms,
             source="mondo",
             found=True,
             metadata={
@@ -399,8 +472,14 @@ class IDNormalizerTool:
                 source="mondo",
             )
 
-        docs = data.get("response", {}).get("docs", [])
-        if not docs:
+        response_value = data.get("response", {})
+        docs_list: list[Mapping[str, object]] = []
+        if isinstance(response_value, Mapping):
+            docs_value = response_value.get("docs", [])
+            if isinstance(docs_value, list):
+                docs_list = [doc for doc in docs_value if isinstance(doc, Mapping)]
+
+        if not docs_list:
             return NormalizedID(
                 input_value=term,
                 input_type=IDType.MONDO,
@@ -408,13 +487,18 @@ class IDNormalizerTool:
                 source="mondo",
             )
 
-        doc = docs[0]
+        doc = docs_list[0]
+        obo_id = cast(Optional[str], doc.get("obo_id"))
+        label = cast(Optional[str], doc.get("label"))
+        synonym_value = doc.get("synonym", [])
+        synonym_list = synonym_value if isinstance(synonym_value, list) else []
+        synonyms = [str(s) for s in synonym_list]
         return NormalizedID(
             input_value=term,
             input_type=IDType.MONDO,
-            normalized_id=doc.get("obo_id"),
-            label=doc.get("label"),
-            synonyms=doc.get("synonym", []),
+            normalized_id=obo_id,
+            label=label,
+            synonyms=synonyms,
             source="mondo",
             found=True,
             metadata={
@@ -465,8 +549,14 @@ class IDNormalizerTool:
             )
 
         # OLS4 returns results in _embedded.terms array
-        terms = data.get("_embedded", {}).get("terms", [])
-        if not terms:
+        embedded_value = data.get("_embedded", {})
+        terms_list: list[Mapping[str, object]] = []
+        if isinstance(embedded_value, Mapping):
+            terms_value = embedded_value.get("terms", [])
+            if isinstance(terms_value, list):
+                terms_list = [term for term in terms_value if isinstance(term, Mapping)]
+
+        if not terms_list:
             return NormalizedID(
                 input_value=hpo_id,
                 input_type=IDType.HPO,
@@ -474,17 +564,19 @@ class IDNormalizerTool:
                 source="hpo",
             )
 
-        term = terms[0]
-        obo_id = term.get("obo_id", hpo_id)
-        label = term.get("label", "")
-        synonyms = term.get("synonyms", [])
+        term = terms_list[0]
+        obo_id = cast(Optional[str], term.get("obo_id", hpo_id))
+        label = cast(Optional[str], term.get("label", ""))
+        synonyms_value = term.get("synonyms", [])
+        synonyms_list = synonyms_value if isinstance(synonyms_value, list) else []
+        synonyms = [str(s) for s in synonyms_list]
 
         return NormalizedID(
             input_value=hpo_id,
             input_type=IDType.HPO,
             normalized_id=obo_id,
             label=label,
-            synonyms=synonyms if isinstance(synonyms, list) else [],
+            synonyms=synonyms,
             source="hpo",
             found=True,
             metadata={
@@ -513,8 +605,14 @@ class IDNormalizerTool:
                 source="hpo",
             )
 
-        docs = data.get("response", {}).get("docs", [])
-        if not docs:
+        response_value = data.get("response", {})
+        docs_list: list[Mapping[str, object]] = []
+        if isinstance(response_value, Mapping):
+            docs_value = response_value.get("docs", [])
+            if isinstance(docs_value, list):
+                docs_list = [doc for doc in docs_value if isinstance(doc, Mapping)]
+
+        if not docs_list:
             return NormalizedID(
                 input_value=term,
                 input_type=IDType.HPO,
@@ -522,13 +620,18 @@ class IDNormalizerTool:
                 source="hpo",
             )
 
-        doc = docs[0]
+        doc = docs_list[0]
+        obo_id = cast(Optional[str], doc.get("obo_id"))
+        label = cast(Optional[str], doc.get("label"))
+        synonym_value = doc.get("synonym", [])
+        synonym_list = synonym_value if isinstance(synonym_value, list) else []
+        synonyms = [str(s) for s in synonym_list]
         return NormalizedID(
             input_value=term,
             input_type=IDType.HPO,
-            normalized_id=doc.get("obo_id"),
-            label=doc.get("label"),
-            synonyms=doc.get("synonym", []),
+            normalized_id=obo_id,
+            label=label,
+            synonyms=synonyms,
             source="hpo",
             found=True,
             metadata={
@@ -545,7 +648,7 @@ class IDNormalizerTool:
         identifier: str,
         from_type: IDType,
         to_type: IDType,
-    ) -> List[CrossReference]:
+    ) -> list[CrossReference]:
         """
         Get cross-references between identifier systems.
 
@@ -562,31 +665,37 @@ class IDNormalizerTool:
         if from_type == IDType.HGNC and to_type == IDType.UNIPROT:
             uniprot_ids = self.hgnc_to_uniprot(identifier)
             for uid in uniprot_ids:
-                refs.append(CrossReference(
-                    source_id=identifier,
-                    source_type=from_type,
-                    target_id=uid,
-                    target_type=to_type,
-                ))
+                refs.append(
+                    CrossReference(
+                        source_id=identifier,
+                        source_type=from_type,
+                        target_id=uid,
+                        target_type=to_type,
+                    )
+                )
 
         elif from_type == IDType.UNIPROT and to_type == IDType.HGNC:
             hgnc_id = self.uniprot_to_hgnc(identifier)
             if hgnc_id:
-                refs.append(CrossReference(
-                    source_id=identifier,
-                    source_type=from_type,
-                    target_id=hgnc_id,
-                    target_type=to_type,
-                ))
+                refs.append(
+                    CrossReference(
+                        source_id=identifier,
+                        source_type=from_type,
+                        target_id=hgnc_id,
+                        target_type=to_type,
+                    )
+                )
 
         elif from_type == IDType.HGNC_SYMBOL and to_type == IDType.HGNC:
             hgnc_id = self.symbol_to_hgnc(identifier)
             if hgnc_id:
-                refs.append(CrossReference(
-                    source_id=identifier,
-                    source_type=from_type,
-                    target_id=hgnc_id,
-                    target_type=to_type,
-                ))
+                refs.append(
+                    CrossReference(
+                        source_id=identifier,
+                        source_type=from_type,
+                        target_id=hgnc_id,
+                        target_type=to_type,
+                    )
+                )
 
         return refs
