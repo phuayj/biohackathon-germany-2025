@@ -1,0 +1,44 @@
+# Minimal starter rule set for the skeptic. These rules are intentionally simple
+# and operate on a facts dictionary produced by earlier pipeline stages.
+rules:
+  - id: has_species_context
+    description: Claim provides a species qualifier
+    weight: 0.4
+    when:
+      all:
+        - fact: context.species
+          op: exists
+    because: "because species context was provided as {context.species}"
+
+  - id: missing_species_context
+    description: Claim is missing species context
+    weight: -0.6
+    when:
+      all:
+        - fact: context.species
+          op: exists
+          negate: true
+    because: "because no species/context qualifier was supplied"
+
+  - id: weak_evidence
+    description: Claim lacks supporting evidence
+    weight: -1.0
+    when:
+      any:
+        - fact: claim.evidence_count
+          op: lte
+          value: 0
+        - fact: claim.evidence
+          op: exists
+          negate: true
+    because: "because the claim did not cite any evidence or PMIDs"
+
+  - id: has_concrete_entities
+    description: Claim references multiple normalized entities
+    weight: 0.8
+    when:
+      all:
+        - fact: claim.entity_count
+          op: gte
+          value: 2
+    because: "because the claim mentions {claim.entity_count} grounded entities"

@@ -5,7 +5,7 @@
 - [x] Ship an in-memory mini KG slice (gene–disease/phenotype/PPI/pathway) with citation metadata for offline checks.
 - [ ] Extend MCP adapters: GO/Reactome pathways, DisGeNET, BioCypher/Neo4j local KG adapter.
 - [ ] Implement claim ingest/normalization pipeline that turns agent transcripts into atomic claims with entity IDs and provenance.
-- [ ] Implement rule DSL (50–100 lines) covering type constraints, ontology closure (is-a/part-of), inheritance/tissue plausibility, and a clear “because” message per rule.
+- [x] Implement rule DSL (50–100 lines) covering type constraints, ontology closure (is-a/part-of), inheritance/tissue plausibility, and a clear “because” message per rule.
 - [ ] Add ontology/KG validation with support/contradiction counts and citation capture (PMIDs/DB links).
 - [ ] Prototype suspicion GNN (2-layer R-GCN/GAT) over 2–3 hop subgraphs; output per-edge suspicion scores.
 - [ ] Add class-incremental error prototype store and lightweight rehearsal for new error types.

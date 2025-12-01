@@ -123,6 +123,22 @@ class TestReport:
         assert len(restored.findings) == 1
         assert restored.findings[0].severity == Severity.WARNING
 
+    def test_save_and_load(self, tmp_path: Path) -> None:
+        report = Report(
+            task_id="test-save-load",
+            agent_name="test-agent",
+            summary="Testing save and load",
+        )
+        report_path = tmp_path / "report.json"
+        report.save(report_path)
+        
+        assert report_path.exists()
+        
+        loaded = Report.load(report_path)
+        assert loaded.task_id == report.task_id
+        assert loaded.agent_name == report.agent_name
+
+
 
 class TestFixtures:
     """Test that all fixture files can be loaded and converted to Report objects."""

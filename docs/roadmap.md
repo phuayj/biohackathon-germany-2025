@@ -3,7 +3,7 @@
 ## Phase 0 — Setup
 - [x] Lock Python version (>=3.11) and dependencies; add lint/format/test tooling (ruff, mypy, pytest).
 - [x] Define Skeptic report schema (claims, findings, suggested fixes) and example fixtures.
-- [ ] Establish deterministic test harness for rule-based checks.
+- [x] Establish deterministic test harness for rule-based checks.
 
 ## Phase 1 — Ingest + Claim extraction
 - [ ] MCP client that ingests an agent transcript + tool outputs into an audit payload.
