@@ -20,4 +20,3 @@ class SkepticPipeline:
     def run(self, audit_payload: Dict[str, Any]) -> Report:
         """Run the skeptic on a normalized audit payload."""
         raise NotImplementedError("Pipeline logic to be implemented during development.")
-

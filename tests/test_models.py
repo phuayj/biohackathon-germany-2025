@@ -50,9 +50,7 @@ class TestClaim:
         claim = Claim(
             id="claim-001",
             text="TP53 is a tumor suppressor.",
-            entities=[
-                EntityMention(mention="TP53", norm_id="HGNC:11998", source="dictionary")
-            ],
+            entities=[EntityMention(mention="TP53", norm_id="HGNC:11998", source="dictionary")],
             evidence=["PMID:12345678"],
         )
         d = claim.to_dict()
@@ -106,9 +104,7 @@ class TestReport:
             task_id="test-002",
             agent_name="test-agent",
             summary="Found 1 issue",
-            claims=[
-                Claim(id="c1", text="Test claim", entities=[], evidence=["PMID:1"])
-            ],
+            claims=[Claim(id="c1", text="Test claim", entities=[], evidence=["PMID:1"])],
             findings=[
                 Finding(
                     id="f1",

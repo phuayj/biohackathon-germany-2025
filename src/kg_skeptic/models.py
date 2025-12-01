@@ -175,4 +175,3 @@ class Report:
     def load(cls, path: Path | str) -> Report:
         path = Path(path)
         return cls.from_json(path.read_text())
-
