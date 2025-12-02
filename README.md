@@ -75,9 +75,7 @@ To use a local Neo4j graph instead:
      -e NEO4J_AUTH=neo4j/password neo4j:5
    ```
 
-2. **Install the driver**: `uv add neo4j` or `pip install neo4j`
-
-3. **Set environment and run**:
+2. **Set environment and run**:
    ```bash
    export NEO4J_URI=bolt://localhost:7687
    export NEO4J_USER=neo4j
