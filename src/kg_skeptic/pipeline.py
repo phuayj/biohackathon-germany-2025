@@ -193,20 +193,24 @@ class ClaimNormalizer:
         mention: str | None = None
         label_lower: str | None = None
         if isinstance(raw, Mapping):
-            mention_val = raw.get("mention")
+            mention_val = raw.get("mention") or raw.get("text")
             if isinstance(mention_val, str):
                 mention = mention_val
                 label_lower = mention.lower()
-            id_val = raw.get("id") or raw.get("norm_id")
-            label_val = raw.get("label") or raw.get("norm_label")
-            if isinstance(id_val, str) and isinstance(label_val, str):
+            id_val = raw.get("curie") or raw.get("id") or raw.get("norm_id")
+            label_val = raw.get("label") or raw.get("norm_label") or raw.get("name")
+            if isinstance(label_val, str) and label_lower is None:
+                label_lower = label_val.lower()
+            if isinstance(id_val, str):
                 category = _category_from_id(id_val)
+                label = label_val if isinstance(label_val, str) else mention or id_val
+                mention_value = mention or (label if isinstance(label, str) else None)
                 return NormalizedEntity(
                     id=id_val,
-                    label=label_val,
+                    label=str(label),
                     category=category,
                     ancestors=[category] if category != "unknown" else [],
-                    mention=mention,
+                    mention=mention_value,
                     source="payload",
                 )
         elif isinstance(raw, str):
@@ -386,15 +390,26 @@ class ClaimNormalizer:
 
         gene: NormalizedEntity | None = None
         target: NormalizedEntity | None = None
+        normalized_entities: list[NormalizedEntity] = []
 
         for entity in entities:
             normalized = self._gliner_to_normalized(entity)
-            if normalized.category in ("gene",) and gene is None:
+            normalized_entities.append(normalized)
+            if normalized.category == "gene" and gene is None:
                 gene = normalized
             elif target is None:
                 target = normalized
             if gene and target:
                 break
+
+        # If no gene was found but we have multiple entities, treat the first
+        # as subject and second as object to support non-gene relations (e.g., HPO siblings).
+        if not gene and len(normalized_entities) >= 2:
+            gene = normalized_entities[0]
+            target = normalized_entities[1]
+        elif gene and not target and len(normalized_entities) >= 2:
+            # If we found a gene but not a target, pick the next available entity.
+            target = normalized_entities[1]
 
         return gene, target
 
@@ -426,27 +441,105 @@ class ClaimNormalizer:
 
     def _pick_entities_from_text(
         self, text: str
-    ) -> tuple[NormalizedEntity | None, NormalizedEntity | None]:
+    ) -> tuple[NormalizedEntity | None, NormalizedEntity | None, dict[str, object]]:
         """Pick subject/object entities from text.
 
         Uses GLiNER2 if enabled, otherwise falls back to dictionary matching.
         If GLiNER2 fails or returns incomplete results, dictionary matching is used
-        as a fallback.
+        as a fallback. A diagnostics dictionary is returned to surface which
+        strategies were attempted.
         """
+        diagnostics: dict[str, object] = {
+            "used_gliner": self.use_gliner,
+            "gliner_pair_found": False,
+            "gliner_error": None,
+            "dictionary_used": False,
+            "dictionary_pair_found": False,
+        }
+
         if self.use_gliner:
             try:
                 gene, target = self._pick_entities_from_text_gliner(text)
-                # Fall back to dictionary if GLiNER2 didn't find both entities
+                diagnostics["gliner_pair_found"] = bool(gene and target)
                 if gene is None or target is None:
                     dict_gene, dict_target = self._pick_entities_from_text_dict(text)
+                    diagnostics["dictionary_used"] = True
+                    diagnostics["dictionary_pair_found"] = bool(dict_gene and dict_target)
                     gene = gene or dict_gene
                     target = target or dict_target
-                return gene, target
-            except (ImportError, RuntimeError):
+                return gene, target, diagnostics
+            except (ImportError, RuntimeError) as exc:
+                diagnostics["gliner_error"] = str(exc) or exc.__class__.__name__
                 # Fall back to dictionary matching if GLiNER2 fails
-                pass
 
-        return self._pick_entities_from_text_dict(text)
+        dict_gene, dict_target = self._pick_entities_from_text_dict(text)
+        diagnostics["dictionary_used"] = True
+        diagnostics["dictionary_pair_found"] = bool(dict_gene and dict_target)
+        return dict_gene, dict_target, diagnostics
+
+    @staticmethod
+    def _pick_entities_from_evidence(
+        citations: Sequence[str],
+    ) -> tuple[NormalizedEntity | None, NormalizedEntity | None]:
+        """Best-effort subject/object resolution from structured evidence identifiers."""
+        phenotype_ids: list[str] = []
+        gene_ids: list[str] = []
+        disease_ids: list[str] = []
+
+        for evid in citations:
+            if not isinstance(evid, str):
+                continue
+            upper = evid.upper()
+            if upper.startswith("HP:"):
+                phenotype_ids.append(evid)
+            elif upper.startswith("HGNC:") or upper.startswith("NCBIGENE:"):
+                gene_ids.append(evid)
+            elif upper.startswith("MONDO:"):
+                disease_ids.append(evid)
+
+        # Prefer gene + disease/phenotype pairing when possible
+        if gene_ids and (phenotype_ids or disease_ids):
+            subject = NormalizedEntity(
+                id=gene_ids[0],
+                label=gene_ids[0],
+                category="gene",
+                ancestors=["gene"],
+                source="evidence",
+            )
+            target_id = phenotype_ids[0] if phenotype_ids else disease_ids[0]
+            target_category = _category_from_id(target_id)
+            target = NormalizedEntity(
+                id=target_id,
+                label=target_id,
+                category=target_category,
+                ancestors=[target_category] if target_category != "unknown" else [],
+                source="evidence",
+            )
+            return subject, target
+
+        # Otherwise fall back to the first two phenotype/disease IDs to support sibling tests.
+        combo = phenotype_ids + disease_ids
+        if len(combo) >= 2:
+            first_id, second_id = combo[0], combo[1]
+            first_cat = _category_from_id(first_id)
+            second_cat = _category_from_id(second_id)
+            first = NormalizedEntity(
+                id=first_id,
+                label=first_id,
+                category=first_cat,
+                ancestors=[first_cat] if first_cat != "unknown" else [],
+                source="evidence",
+            )
+            second = NormalizedEntity(
+                id=second_id,
+                label=second_id,
+                category=second_cat,
+                ancestors=[second_cat] if second_cat != "unknown" else [],
+                source="evidence",
+            )
+            return first, second
+
+        return None, None
 
     @staticmethod
     def _infer_predicate_and_qualifiers(
@@ -563,6 +656,7 @@ class ClaimNormalizer:
     def normalize(self, payload: AuditPayload) -> NormalizationResult:
         """Normalize a raw payload into a Claim + NormalizedTriple."""
         claim = self._claim_from_payload(payload)
+        predicate_provided = False
         # Gather candidate entities
         subject_raw: str | Mapping[str, object] | None = None
         object_raw: str | Mapping[str, object] | None = None
@@ -578,7 +672,10 @@ class ClaimNormalizer:
             object_candidate = payload.get("object") or payload.get("obj")
             if isinstance(object_candidate, (str, Mapping)):
                 object_raw = object_candidate
-            predicate = str(payload.get("predicate") or predicate)
+            predicate_raw = payload.get("predicate")
+            if isinstance(predicate_raw, str) and predicate_raw.strip():
+                predicate = predicate_raw
+                predicate_provided = True
             payload_citations = payload.get("citations") or payload.get("evidence")
             if isinstance(payload_citations, list):
                 citations.extend(str(c) for c in payload_citations)
@@ -597,10 +694,19 @@ class ClaimNormalizer:
         obj = self._resolve_entity(object_raw) if object_raw else None
 
         # Fallback to text-based extraction if needed
+        entity_diagnostics: dict[str, object] = {}
         if not subject or not obj:
-            inferred_subject, inferred_object = self._pick_entities_from_text(claim.text)
+            inferred_subject, inferred_object, entity_diagnostics = self._pick_entities_from_text(
+                claim.text
+            )
             subject = subject or inferred_subject
             obj = obj or inferred_object
+
+        # Final fallback: derive entities from structured evidence identifiers.
+        if not subject or not obj:
+            evid_subject, evid_object = self._pick_entities_from_evidence(citations)
+            subject = subject or evid_subject
+            obj = obj or evid_object
 
         # Promote any GO / Reactome IDs in the evidence list to a pathway object
         # when we are missing a target or the current target is not already a
@@ -628,7 +734,18 @@ class ClaimNormalizer:
                     break
 
         if not subject or not obj:
-            raise ValueError("Unable to normalize claim entities from payload or text.")
+            reasons: list[str] = []
+            if entity_diagnostics.get("used_gliner"):
+                gliner_error = entity_diagnostics.get("gliner_error")
+                if gliner_error:
+                    reasons.append(f"GLiNER2 error: {gliner_error}")
+                elif not entity_diagnostics.get("gliner_pair_found"):
+                    reasons.append("GLiNER2 did not find both a subject and a target")
+            if entity_diagnostics.get("dictionary_used"):
+                if not entity_diagnostics.get("dictionary_pair_found"):
+                    reasons.append("dictionary/KG lookup did not match entities in the text")
+            detail = (" " + "; ".join(reasons)) if reasons else ""
+            raise ValueError(f"Unable to normalize claim entities from payload or text.{detail}")
 
         # Enrich entities via ids.* MCP tools to obtain canonical IDs, labels,
         # and ontology ancestors where possible.
@@ -700,6 +817,7 @@ class ClaimNormalizer:
             ),
         ]
         claim.metadata["normalized_triple"] = triple.to_dict()
+        claim.metadata["predicate_provided"] = predicate_provided
 
         return NormalizationResult(claim=claim, triple=triple, citations=citations)
 
@@ -783,6 +901,28 @@ def _collect_structured_evidence(claim: Claim | None) -> list[Mapping[str, objec
     return entries
 
 
+def _detect_hedging_language(text: str) -> tuple[bool, list[str]]:
+    """Lightweight detection of hedging/uncertainty cues in text."""
+    lowered = text.lower()
+    patterns: dict[str, str] = {
+        "might": r"\bmight\b",
+        "possible": r"\bpossible\b",
+        "possibly": r"\bpossibly\b",
+        "may": r"\bmay\b",
+        "could": r"\bcould\b",
+        "seems": r"\bseems?\b",
+        "appears": r"\bappears?\b",
+        "suggests": r"\bsuggests?\b",
+        "somehow": r"\bsomehow\b",
+        "uncertain": r"\buncertain\b",
+    }
+    matches: list[str] = []
+    for label, pattern in patterns.items():
+        if re.search(pattern, lowered):
+            matches.append(label)
+    return bool(matches), matches
+
+
 def _evidence_identifier(ev: Mapping[str, object]) -> str:
     """Best-effort identifier for an evidence record."""
     for key in ("pmid", "pmcid", "doi", "id", "curie", "url"):
@@ -804,6 +944,7 @@ def build_rule_facts(
     claim: Claim | None = None,
 ) -> dict[str, object]:
     """Construct the facts dictionary consumed by the rule engine."""
+    citation_count = len(provenance)
     retracted = [p for p in provenance if p.status == "retracted"]
     concerns = [p for p in provenance if p.status == "concern"]
     clean = [p for p in provenance if p.status == "clean"]
@@ -850,11 +991,17 @@ def build_rule_facts(
     if has_refuting_evidence:
         negation_sources.append("refuting evidence")
 
+    claim_text = claim.text if isinstance(claim, Claim) else ""
+    has_hedging, hedging_terms = _detect_hedging_language(claim_text)
+    predicate_provided = False
+    if isinstance(claim, Claim):
+        predicate_provided = bool(claim.metadata.get("predicate_provided"))
+
     return {
         "claim": {
             "predicate": triple.predicate,
             "citations": [p.identifier for p in provenance],
-            "citation_count": len(provenance),
+            "citation_count": citation_count,
         },
         "type": {
             "domain_category": subject_category,
@@ -895,6 +1042,18 @@ def build_rule_facts(
             "supporting_evidence": supporting_evidence,
             "neutral_evidence": neutral_evidence,
             "negation_sources": negation_sources,
+        },
+        "extraction": {
+            "predicate_provided": predicate_provided,
+            "predicate_is_fallback": predicate == "biolink:related_to",
+            "has_hedging_language": has_hedging,
+            "hedging_terms": hedging_terms,
+            "citation_count": citation_count,
+            "is_low_confidence": (
+                (not predicate_provided or predicate == "biolink:related_to")
+                and has_hedging
+                and citation_count == 0
+            ),
         },
     }
 
@@ -1090,6 +1249,11 @@ class SkepticPipeline:
         conflicts_raw = facts.get("conflicts")
         conflicts = conflicts_raw if isinstance(conflicts_raw, Mapping) else {}
         if conflicts.get("self_negation_conflict"):
+            verdict = "FAIL"
+
+        extraction_raw = facts.get("extraction")
+        extraction = extraction_raw if isinstance(extraction_raw, Mapping) else {}
+        if extraction.get("is_low_confidence"):
             verdict = "FAIL"
 
         # Downgrade ontology sibling conflicts to WARN so sibling-like pairs

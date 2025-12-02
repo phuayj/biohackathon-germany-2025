@@ -439,10 +439,16 @@ def main() -> None:
                             }
                         )
                     except ValueError as exc:
-                        st.error(
-                            "Could not normalize entities from the claim text. "
-                            "Try adding clearer gene/disease names or enable GLiNER."
-                        )
+                        if use_gliner:
+                            st.error(
+                                "Could not normalize entities from the claim text even with GLiNER2. "
+                                "Try stating both the gene and disease explicitly so the model can pick them up."
+                            )
+                        else:
+                            st.error(
+                                "Could not normalize entities from the claim text. "
+                                "Try adding clearer gene/disease names or enable GLiNER2 in Settings."
+                            )
                         st.caption(f"Details: {exc}")
                         st.session_state.audit_run = False
                     except Exception as exc:  # pragma: no cover - UI surface

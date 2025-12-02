@@ -243,6 +243,20 @@ class TestClaimNormalizerGLiNER:
         assert object_meta.get("category") == "disease"
         assert object_meta.get("ancestors") == ["MONDO:PARENT1", "MONDO:PARENT2"]
 
+    def test_normalizer_uses_hpo_ids_from_evidence(self) -> None:
+        """Phenotype conflict claims should normalize via HPO IDs in evidence when NER misses."""
+        normalizer = ClaimNormalizer(use_gliner=False)
+        result = normalizer.normalize(
+            {
+                "text": "Hypertension conflicts with Hypotension (ontology sibling test).",
+                "evidence": ["HP:0000822", "HP:0002615"],
+            }
+        )
+
+        triple = result.triple
+        assert triple.subject.id.startswith("HP:")
+        assert triple.object.id.startswith("HP:")
+
 
 class TestClaimNormalizerPathways:
     """Tests for ClaimNormalizer integration with GO/Reactome pathway MCP tool."""

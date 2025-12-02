@@ -163,15 +163,10 @@ class TestSkepticPipelineE2E:
         # top-level verdict expectations with the implemented behavior until
         # dedicated rules are added:
         #
-        # - REAL_F04: self-negation / refuting evidence → currently a WARN
-        #   driven by weak/ambiguous evidence signals rather than a hard gate.
-        # - REAL_F05: low-confidence extraction with no explicit predicate or
-        #   citations → currently downgraded to WARN via minimal evidence and
-        #   positive-evidence gating, not full FAIL.
         # - REAL_025: opposite predicate in the same context → currently a
         #   WARN because the rule set does not yet model predicate-level
         #   contradiction explicitly.
-        future_fail_warn_ids = {"REAL_F05", "REAL_025"}
+        future_fail_warn_ids = {"REAL_025"}
         if example_id in future_fail_warn_ids:
             expected_verdict = "WARN"
 

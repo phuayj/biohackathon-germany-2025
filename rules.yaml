@@ -82,6 +82,16 @@ rules:
           value: true
     because: "because the claim carries a negation qualifier or refuting evidence (sources: {conflicts.negation_sources}; refuting={conflicts.refuting_evidence})"
 
+  - id: extraction_low_confidence
+    description: Low-confidence extraction with hedging language and fallback predicate
+    weight: -1.1
+    when:
+      all:
+        - fact: extraction.is_low_confidence
+          op: equals
+          value: true
+    because: "because the predicate was inferred with hedging language ({extraction.hedging_terms}) and no supporting citations"
+
   - id: multi_source_bonus
     description: Reward multiple independent sources
     weight: 0.3

@@ -50,7 +50,7 @@
 - [x] **ontology_sibling_conflict:** WARN when subject/object are ontology siblings (e.g., HPO siblings) instead of parent/child; expose `WARN_ontology_sibling_conflict` label. Once implemented, update `REAL_O01` expectations in `tests/test_pipeline_e2e.py`.
 - [ ] **time_freshness (optional):** Decay for old unsupported claims.
 - [x] **self_negation_conflict:** Model explicit self-negation / refuting-evidence conflicts (e.g., `REAL_F04`); once implemented, re-run `uv run pytest -m e2e tests/test_pipeline_e2e.py::TestSkepticPipelineE2E::test_seed_claim_fixture_jsonl` and update expectations for `REAL_F04` in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`.
-- [ ] **extraction_low_confidence:** Add a rule capturing low-confidence extraction / vague predicates (e.g., `REAL_F05`); after implementation, re-run the same E2E seed fixture test and update `REAL_F05` expectations in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`.
+- [x] **extraction_low_confidence:** Add a rule capturing low-confidence extraction / vague predicates (e.g., `REAL_F05`); after implementation, re-run the same E2E seed fixture test and update `REAL_F05` expectations in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`.
 - [ ] **opposite_predicate_same_context:** Add a rule for opposite predicates in the same context (e.g., `REAL_025`); after implementation, re-run the same E2E seed fixture test and update `REAL_025` expectations in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`, removing the temporary WARN override.
 
 ### Scoring & Decision
@@ -61,6 +61,8 @@
 - [x] Generate "Audit Card" UI in Streamlit: normalized triple, PASS/FAIL badges, fired rules.
 - [x] Display citations with status (clean/retracted/concern).
 - [x] Templated rationale with "because" messages from rule traces.
+- [x] Clarify GLiNER2 normalization error messaging when entity extraction fails.
+- [x] Recover sibling/conflict claims by pairing HPO/MONDO IDs from text/evidence when NER misses them.
 
 ### Evidence & Predicate Hardening
 - [x] **Make predicate explicit:** Record edges as `biolink:gene_associated_with_condition` (canonical gene→disease predicate) with optional free-text qualifiers (e.g., "increases risk") so type-domain-range rules fire positively. See [Biolink docs](https://biolink.github.io/biolink-model/gene_associated_with_condition/).

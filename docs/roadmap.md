@@ -53,7 +53,7 @@
 - [x] **Ontology sibling conflict:** Warn on sibling-like subject/object pairs and expose a dedicated label.
 - [ ] **Time freshness (optional):** Old unsupported claims decay slightly.
 - [x] Add explicit rule for self-negation (`REAL_F04`); re-run `uv run pytest -m e2e tests/test_pipeline_e2e.py::TestSkepticPipelineE2E::test_seed_claim_fixture_jsonl` and clean up the temporary WARN override.
-- [ ] Add explicit rule for low-confidence extraction (`REAL_F05`); once implemented, re-run `uv run pytest -m e2e tests/test_pipeline_e2e.py::TestSkepticPipelineE2E::test_seed_claim_fixture_jsonl` and clean up the temporary WARN override.
+- [x] Add explicit rule for low-confidence extraction (`REAL_F05`); once implemented, re-run `uv run pytest -m e2e tests/test_pipeline_e2e.py::TestSkepticPipelineE2E::test_seed_claim_fixture_jsonl` and clean up the temporary WARN override.
 - [ ] Add explicit rule for opposite-predicate conflicts (`REAL_025`); once implemented, re-run `uv run pytest -m e2e tests/test_pipeline_e2e.py::TestSkepticPipelineE2E::test_seed_claim_fixture_jsonl` and clean up the temporary WARN override in `tests/test_pipeline_e2e.py` / `tests/fixtures/e2e_claim_fixtures.jsonl`.
 
 ### Scoring & Decision
@@ -63,6 +63,8 @@
 ### UI v1
 - [x] "Audit Card": title, normalized triple, badges (Type✓, Closure✓, Retraction✖).
 - [x] Score bar, list of PMIDs/DOIs with status, templated rationale.
+- [x] Clarify GLiNER2 normalization error messaging when entity extraction fails.
+- [x] Recover sibling/conflict claims by pairing HPO/MONDO IDs from text/evidence when NER misses them.
 
 **Definition of Done:** Paste natural-language claim → normalized triple, real evidence, retraction checks, PASS/WARN/FAIL with rule trace and live citations.
 
