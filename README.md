@@ -6,9 +6,9 @@ BioHackathon Germany 2025 event page: [4th BioHackathon Germany — Detection an
 
 ## What this does
 - Treats agent outputs as structured claims, not just text, and validates them against domain ontologies/knowledge graphs.
-- Detects missing entity normalization, impossible relationships, underspecified evidence, and internal contradictions.
-- Produces concise critiques plus minimal patch suggestions that are easy for upstream agents (or humans) to apply.
-- Keeps the verification layer explainable via rules and provenance, not only another opaque LLM.
+- Detects missing entity normalization, impossible relationships, underspecified evidence, and retracted citations.
+- Produces concise critiques with rule-based explanations and confidence scores (PASS/WARN/FAIL verdicts).
+- Keeps the verification layer explainable via symbolic rules and provenance, not only another opaque LLM.
 
 ## Pipeline overview
 1. **Ingest**: Pull agent outputs via MCP (tool calls, chain-of-thought, artifacts). Normalize into an audit payload.
@@ -64,23 +64,59 @@ Or with conda:
 streamlit run src/kg_skeptic/app.py
 ```
 
-This opens a browser with the "Hello Audit Card" demo:
-- Click **Run Audit** to evaluate a canned biomedical claim
-- View the **PASS/FAIL** verdict based on rule evaluation
-- See **normalized entity IDs** (HGNC, MONDO, etc.)
-- Inspect **fired rules** with scores and explanations
+This opens a browser with the KG-Skeptic audit interface:
+- **Demo mode**: Audit a pre-loaded BRCA1/breast cancer claim with evidence
+- **Custom mode**: Enter any biomedical claim text with optional PMIDs/DOIs
+- Toggle **GLiNER2 NER** for neural entity extraction (or use dictionary matching)
+- View **PASS/WARN/FAIL** verdict with score bar
+- See **normalized entity IDs** (HGNC, MONDO, HPO) with source badges
+- Inspect **evidence status** (clean/retracted/concern) from Europe PMC
+- Review **fired rules** with scores and explanations
 
 ## Repository layout
-- `src/kg_skeptic/`: Python package with pipeline components, MCP tools, rules engine, and models.
-- `docs/`: Design notes, architecture, and roadmap.
-- `tests/`: Test suite for models, rules, and pipeline.
-- `pyproject.toml`: Project metadata and dependencies.
+```
+src/kg_skeptic/
+├── app.py            # Streamlit UI
+├── pipeline.py       # End-to-end audit orchestration
+├── models.py         # Claim, Report, Finding dataclasses
+├── rules.py          # YAML-based rule engine
+├── ner.py            # GLiNER2 entity extraction
+├── provenance.py     # Citation fetching and caching
+├── mcp/              # MCP tool adapters
+│   ├── europepmc.py  # Europe PMC search/fetch
+│   ├── crossref.py   # Retraction lookups
+│   ├── ids.py        # ID normalization (HGNC, MONDO, HPO)
+│   ├── kg.py         # KG query interface
+│   └── mini_kg.py    # In-memory KG backend
+└── schemas/          # JSON schemas for reports
+rules.yaml            # Declarative audit rules
+docs/                 # Design notes, architecture, roadmap
+tests/                # Test suite (models, rules, MCP tools, pipeline)
+```
 
-## Features
-- **Skeptic report schema**: Structured format for claims, findings, and suggested fixes with full provenance.
-- **MCP tools**: Europe PMC search/fetch (literature), CrossRef retractions, HGNC/UniProt/MONDO/HPO entity normalization, KG query via Monarch.
-- **Offline KG slice**: In-memory mini KG (gene–disease, phenotype, PPI, pathway) with citation metadata for deterministic offline checks.
-- **Rule DSL**: Declarative rules covering type constraints, ontology closure (is-a/part-of), inheritance/tissue plausibility, with clear explanations per rule.
+## Current features
+- **Skeptic report schema**: Structured format for claims, findings, and suggested fixes with full provenance (`src/kg_skeptic/models.py`).
+- **GLiNER2 NER**: Neural entity extraction for genes, diseases, phenotypes, pathways, and more—with fallback to dictionary matching.
+- **MCP tools** (`src/kg_skeptic/mcp/`):
+  - `europepmc`: Search and fetch publication metadata (title, abstract, DOI, citations, open access status)
+  - `crossref`: Retraction status lookups (available; heuristic integration in pipeline)
+  - `ids`: Normalize identifiers to HGNC, UniProt, MONDO, HPO with ontology ancestors
+  - `kg`: Query edges and ego networks from the in-memory mini KG
+- **Mini KG slice**: In-memory knowledge graph with gene–disease, gene–phenotype, gene–gene (PPI), and gene–pathway edges plus citation metadata.
+- **Rule engine**: YAML-based declarative rules (`rules.yaml`) covering:
+  - Type constraints (Biolink-valid domain/range)
+  - Ontology closure (HPO/MONDO ancestry)
+  - Retraction gate (hard FAIL on retracted citations)
+  - Expression of concern penalty
+  - Multi-source bonus / minimal evidence penalty
+- **Provenance layer**: Cached lookups to Europe PMC; graceful fallback when APIs are unavailable.
+- **Streamlit UI**: Interactive audit cards with entity badges, evidence status, rule traces, and verdict visualization.
+
+## Planned features
+- **Subgraph builder**: Fetch 2–3 hop ego-nets for visual suspicion analysis.
+- **Suspicion GNN**: R-GCN model to score edge suspicion and highlight problematic hops.
+- **Patch suggestions**: Propose minimal fixes (alternate citations, corrected ontology terms).
+- **Docker packaging**: One-command deployment via `docker compose up`.
 
 ## Contributing
 - See `docs/roadmap.md` for current progress and open tasks.
