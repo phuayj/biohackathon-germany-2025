@@ -86,13 +86,13 @@ To use a local Neo4j graph instead:
 
 The sidebar will show "Using Neo4j/BioCypher KG backend" when connected. If configuration is missing, the app falls back to the in-memory mini KG.
 
-You can also enable **DisGeNET-backed gene–disease associations** in the audit card. Set:
+You can also enable **DisGeNET-backed gene–disease associations** in the core skeptic pipeline. Set:
 
 ```bash
 export DISGENET_API_KEY=your_disgenet_token
 ```
 
-before launching Streamlit. When configured, the audit card will include a “DisGeNET: Gene–Disease Associations” expander summarizing top-scoring disease associations for the normalized primary gene (via the `DisGeNETTool` MCP adapter).
+before launching Streamlit. When configured, the skeptic will use DisGeNET as an additional curated KG signal when scoring gene–disease claims (via the `DisGeNETTool` MCP adapter and dedicated rules).
 
 ## Project structure
 

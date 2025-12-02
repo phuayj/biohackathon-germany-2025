@@ -475,6 +475,22 @@ class IDNormalizerTool:
         synonyms = [str(s) for s in synonyms_list]
         ancestors = self._get_obo_ancestors("mondo", obo_id)
 
+        # Best-effort extraction of UMLS CUIs from OLS xrefs, when available.
+        umls_ids: list[str] = []
+        xref_value = term.get("obo_xref") or term.get("database_cross_reference")
+        if isinstance(xref_value, list):
+            for raw in xref_value:
+                if not isinstance(raw, str):
+                    continue
+                value = raw.strip()
+                if not value:
+                    continue
+                # Common patterns: "UMLS:C0006142", "UMLS_C0006142"
+                if value.upper().startswith("UMLS:"):
+                    umls_ids.append(value.split(":", 1)[1])
+                elif value.upper().startswith("UMLS_"):
+                    umls_ids.append(value)
+
         return NormalizedID(
             input_value=mondo_id,
             input_type=IDType.MONDO,
@@ -487,6 +503,7 @@ class IDNormalizerTool:
                 "description": term.get("description", []),
                 "iri": term.get("iri"),
                 "ancestors": ancestors,
+                "umls_ids": umls_ids,
             },
         )
 
@@ -532,6 +549,21 @@ class IDNormalizerTool:
         synonym_list = synonym_value if isinstance(synonym_value, list) else []
         synonyms = [str(s) for s in synonym_list]
         ancestors = self._get_obo_ancestors("mondo", obo_id)
+
+        # Best-effort extraction of UMLS CUIs from OLS search docs.
+        umls_ids: list[str] = []
+        xref_value = doc.get("obo_xref") or doc.get("database_cross_reference")
+        if isinstance(xref_value, list):
+            for raw in xref_value:
+                if not isinstance(raw, str):
+                    continue
+                value = raw.strip()
+                if not value:
+                    continue
+                if value.upper().startswith("UMLS:"):
+                    umls_ids.append(value.split(":", 1)[1])
+                elif value.upper().startswith("UMLS_"):
+                    umls_ids.append(value)
         return NormalizedID(
             input_value=term,
             input_type=IDType.MONDO,
@@ -543,6 +575,7 @@ class IDNormalizerTool:
             metadata={
                 "iri": doc.get("iri"),
                 "ancestors": ancestors,
+                "umls_ids": umls_ids,
             },
         )
 

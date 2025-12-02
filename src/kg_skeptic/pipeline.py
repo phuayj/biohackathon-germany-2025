@@ -11,12 +11,14 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 from typing import Sequence
 from collections.abc import Mapping
 
 from kg_skeptic.mcp.ids import IDNormalizerTool
 from kg_skeptic.mcp.pathways import PathwayTool
+from kg_skeptic.mcp.disgenet import DisGeNETTool
 from .models import Claim, EntityMention, Report
 from .mcp.mini_kg import load_mini_kg_backend
 from .mcp.kg import InMemoryBackend, KGBackend, KGEdge
@@ -300,6 +302,9 @@ class ClaimNormalizer:
                     ancestors_value = norm.metadata.get("ancestors")
                     if isinstance(ancestors_value, list):
                         entity.ancestors = [str(a) for a in ancestors_value]
+                    umls_value = norm.metadata.get("umls_ids")
+                    if isinstance(umls_value, list):
+                        entity.metadata["umls_ids"] = [str(u) for u in umls_value]
             elif entity.category == "phenotype":
                 identifier = entity.id if entity.id.startswith("HP:") else entity.label or entity.id
                 norm = tool.normalize_hpo(identifier)
@@ -695,6 +700,9 @@ class SkepticPipeline:
         self.engine = (
             RuleEngine.from_yaml(path=rules_path) if rules_path else RuleEngine.from_yaml()
         )
+        self._disgenet_tool: DisGeNETTool | None = None
+        use_disgenet_raw = self.config.get("use_disgenet", False)
+        self._use_disgenet = bool(use_disgenet_raw)
 
     def _verdict_for_score(self, score: float) -> str:
         if score >= self.PASS_THRESHOLD:
@@ -703,11 +711,93 @@ class SkepticPipeline:
             return "WARN"
         return "FAIL"
 
+    def _get_disgenet_tool(self) -> DisGeNETTool | None:
+        """Lazily initialize DisGeNET tool if enabled in config.
+
+        DisGeNET integration is optional and controlled via the ``use_disgenet``
+        config flag. Network/authentication errors are treated as absence of
+        DisGeNET evidence.
+        """
+        if not self._use_disgenet:
+            return None
+
+        if self._disgenet_tool is not None:
+            return self._disgenet_tool
+
+        api_key = os.environ.get("DISGENET_API_KEY")
+        try:
+            self._disgenet_tool = DisGeNETTool(api_key=api_key)
+        except Exception:
+            self._disgenet_tool = None
+        return self._disgenet_tool
+
+    def _build_curated_kg_facts(self, triple: NormalizedTriple) -> dict[str, object]:
+        """Best-effort curated KG facts (currently DisGeNET gene–disease support).
+
+        This compares the normalized gene/disease pair against DisGeNET when:
+        - The subject is a gene and the object is a disease.
+        - The gene has an ``ncbi_gene_id`` in its metadata.
+        - The disease has one or more UMLS CUIs in ``umls_ids`` metadata.
+        """
+        facts: dict[str, object] = {
+            "disgenet_checked": False,
+            "disgenet_support": False,
+        }
+
+        if triple.subject.category != "gene" or triple.object.category != "disease":
+            return facts
+
+        subject_meta = triple.subject.metadata
+        object_meta = triple.object.metadata
+
+        gene_ncbi_raw = subject_meta.get("ncbi_gene_id")
+        ncbi_gene_id = None
+        if isinstance(gene_ncbi_raw, (str, int)):
+            ncbi_gene_id = str(gene_ncbi_raw)
+
+        umls_ids_raw = object_meta.get("umls_ids")
+        umls_ids: list[str] = []
+        if isinstance(umls_ids_raw, list):
+            umls_ids = [str(v) for v in umls_ids_raw]
+
+        if not ncbi_gene_id or not umls_ids:
+            return facts
+
+        tool = self._get_disgenet_tool()
+        if tool is None:
+            return facts
+
+        facts["disgenet_checked"] = True
+
+        for raw_cui in umls_ids:
+            cui = raw_cui.strip()
+            if not cui:
+                continue
+            # Normalize common MONDO/OLS variants to plain CUI for comparison.
+            if ":" in cui:
+                prefix, rest = cui.split(":", 1)
+                if prefix.upper() == "UMLS":
+                    cui = rest
+            if cui.upper().startswith("UMLS_"):
+                cui = cui.split("_", 1)[1]
+
+            try:
+                if tool.has_high_score_support(ncbi_gene_id, cui, min_score=0.3):
+                    facts["disgenet_support"] = True
+                    facts["disgenet_cui"] = cui
+                    break
+            except Exception:
+                continue
+
+        return facts
+
     def run(self, audit_payload: AuditPayload) -> AuditResult:
         """Run the skeptic on a normalized audit payload."""
         normalization = self.normalizer.normalize(audit_payload)
         provenance = self.provenance_fetcher.fetch_many(normalization.citations)
         facts = build_rule_facts(normalization.triple, provenance)
+        # Attach curated KG signals (e.g., DisGeNET support) for rule engine.
+        facts["curated_kg"] = self._build_curated_kg_facts(normalization.triple)
         evaluation = self.engine.evaluate(facts)
         score = sum(evaluation.features.values())
         verdict = self._verdict_for_score(score)

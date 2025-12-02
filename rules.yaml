@@ -78,3 +78,29 @@ rules:
           op: lte
           value: 0
     because: "because no PMIDs/DOIs were supplied"
+
+  - id: disgenet_support_bonus
+    description: DisGeNET supports the gene–disease association
+    weight: 0.5
+    when:
+      all:
+        - fact: curated_kg.disgenet_checked
+          op: equals
+          value: true
+        - fact: curated_kg.disgenet_support
+          op: equals
+          value: true
+    because: "because DisGeNET reports a high-scoring association for this gene–disease pair (UMLS {curated_kg.disgenet_cui})"
+
+  - id: disgenet_missing_support_penalty
+    description: Penalize lack of DisGeNET support when checked
+    weight: -0.3
+    when:
+      all:
+        - fact: curated_kg.disgenet_checked
+          op: equals
+          value: true
+        - fact: curated_kg.disgenet_support
+          op: equals
+          value: false
+    because: "because DisGeNET does not report a high-scoring association for this gene–disease pair"
