@@ -40,7 +40,8 @@
 - [ ] `ids.*` tools resolve to canonical IDs; attach labels and ontology ancestors.
 
 ### Provenance Fetch
-- [x] For each PMID/DOI in claim or KG edge, call `europepmc.fetch` and `crossref.retractions`.
+- [x] For each PMID/DOI in claim or KG edge, call `europepmc.fetch`.
+- [ ] Integrate `crossref.retractions` for robust retraction checking (currently using heuristics).
 - [x] Cache all responses to `data/cache` (JSON).
 - [x] Graceful fallback when APIs are down (show WARN, don't auto-PASS).
 

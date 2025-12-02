@@ -36,7 +36,8 @@
 - [ ] Resolve canonical IDs via `ids.*` tools; attach labels and ontology ancestors.
 
 ### Provenance & Caching
-- [x] For each PMID/DOI, fetch via `europepmc.fetch` and `crossref.retractions`.
+- [x] For each PMID/DOI, fetch via `europepmc.fetch`.
+- [ ] Integrate `crossref.retractions` for robust retraction checking (currently using heuristics).
 - [x] Disk cache all responses to `data/cache/*.json`.
 - [x] Graceful fallback when APIs are down (show WARN, don't auto-PASS).
 
