@@ -491,7 +491,14 @@ def render_audit_card(result: AuditResult) -> None:
                 # Summarize nodes by degree
                 st.markdown("**Nodes by degree (top 15)**")
                 node_rows: list[dict[str, object]] = []
-                label_by_id = {n.id: (n.norm_label or n.label or n.id) if hasattr(n, "norm_label") else (n.label or n.id) for n in subgraph.nodes}
+                label_by_id = {
+                    n.id: (
+                        (n.norm_label or n.label or n.id)
+                        if hasattr(n, "norm_label")
+                        else (n.label or n.id)
+                    )
+                    for n in subgraph.nodes
+                }
                 category_by_id = {n.id: (n.category or "?") for n in subgraph.nodes}
 
                 sorted_nodes = sorted(

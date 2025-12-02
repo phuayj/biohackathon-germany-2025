@@ -17,7 +17,7 @@ top of this core builder.
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Dict, List
 
@@ -70,17 +70,71 @@ def _is_allowed_edge(subj_id: str, obj_id: str) -> bool:
     return False
 
 
-def _compute_node_degree_features(
+def _bfs_shortest_paths(
+    start: str,
+    adj: Dict[str, set[str]],
+) -> tuple[dict[str, int], dict[str, float]]:
+    dist: dict[str, int] = {}
+    counts: dict[str, float] = {}
+    if start not in adj:
+        return dist, counts
+
+    queue: deque[str] = deque([start])
+    dist[start] = 0
+    counts[start] = 1.0
+
+    while queue:
+        current = queue.popleft()
+        current_dist = dist[current]
+        current_count = counts[current]
+        for neighbor in adj.get(current, ()):
+            if neighbor not in dist:
+                dist[neighbor] = current_dist + 1
+                counts[neighbor] = current_count
+                queue.append(neighbor)
+            elif dist[neighbor] == current_dist + 1:
+                counts[neighbor] += current_count
+
+    return dist, counts
+
+
+def _compute_node_features(
     nodes: Dict[str, KGNode],
     edges: List[KGEdge],
+    subject: str,
+    object: str,
 ) -> dict[str, dict[str, float]]:
-    """Compute simple (in/out/total) degree features for each node."""
     in_deg: dict[str, int] = defaultdict(int)
     out_deg: dict[str, int] = defaultdict(int)
+    undirected_adj: dict[str, set[str]] = {node_id: set() for node_id in nodes}
+    ppi_weight_sum: dict[str, float] = defaultdict(float)
+    ppi_edge_count: dict[str, float] = defaultdict(float)
 
     for edge in edges:
         out_deg[edge.subject] += 1
         in_deg[edge.object] += 1
+
+        if edge.subject in undirected_adj and edge.object in undirected_adj:
+            undirected_adj[edge.subject].add(edge.object)
+            undirected_adj[edge.object].add(edge.subject)
+
+        subj_cat = _category_from_id(edge.subject)
+        obj_cat = _category_from_id(edge.object)
+        if subj_cat == "gene" and obj_cat == "gene":
+            raw_conf = edge.properties.get("confidence")
+            if isinstance(raw_conf, (int, float)):
+                weight = float(raw_conf)
+            else:
+                weight = 1.0
+            ppi_weight_sum[edge.subject] += weight
+            ppi_weight_sum[edge.object] += weight
+            ppi_edge_count[edge.subject] += 1.0
+            ppi_edge_count[edge.object] += 1.0
+
+    dist_from_subject, paths_from_subject = _bfs_shortest_paths(subject, undirected_adj)
+    dist_from_object, paths_from_object = _bfs_shortest_paths(object, undirected_adj)
+
+    pair_dist = dist_from_subject.get(object)
 
     features: dict[str, dict[str, float]] = {}
     for node_id in nodes:
@@ -91,6 +145,49 @@ def _compute_node_degree_features(
             "in_degree": float(indeg),
             "out_degree": float(outdeg),
         }
+
+        neighbors = undirected_adj.get(node_id, set())
+        neighbor_count = len(neighbors)
+        if neighbor_count < 2:
+            clustering = 0.0
+        else:
+            triangles = 0
+            for u in neighbors:
+                for v in neighbors:
+                    if u >= v:
+                        continue
+                    if v in undirected_adj.get(u, set()):
+                        triangles += 1
+            if triangles > 0:
+                clustering = 2.0 * float(triangles) / float(neighbor_count * (neighbor_count - 1))
+            else:
+                clustering = 0.0
+
+        node_dist_subj = dist_from_subject.get(node_id)
+        node_dist_obj = dist_from_object.get(node_id)
+        dist_subj_value = float(node_dist_subj) if node_dist_subj is not None else float("inf")
+        dist_obj_value = float(node_dist_obj) if node_dist_obj is not None else float("inf")
+
+        paths_subj_value = paths_from_subject.get(node_id, 0.0)
+        paths_obj_value = paths_from_object.get(node_id, 0.0)
+
+        paths_on_shortest = 0.0
+        if (
+            pair_dist is not None
+            and node_dist_subj is not None
+            and node_dist_obj is not None
+            and node_dist_subj + node_dist_obj == pair_dist
+        ):
+            paths_on_shortest = paths_subj_value * paths_obj_value
+
+        features[node_id]["clustering_coefficient"] = clustering
+        features[node_id]["dist_from_subject"] = dist_subj_value
+        features[node_id]["dist_from_object"] = dist_obj_value
+        features[node_id]["paths_from_subject"] = float(paths_subj_value)
+        features[node_id]["paths_from_object"] = float(paths_obj_value)
+        features[node_id]["paths_on_shortest_subject_object"] = float(paths_on_shortest)
+        features[node_id]["ppi_edge_count"] = float(ppi_edge_count.get(node_id, 0.0))
+        features[node_id]["ppi_weight_sum"] = float(ppi_weight_sum.get(node_id, 0.0))
 
     return features
 
@@ -123,14 +220,14 @@ def build_pair_subgraph(
     Returns:
         Subgraph capturing the merged ego networks and simple node features.
     """
+    node_map: dict[str, KGNode] = {}
     if k <= 0:
         # Degenerate case: just the pair nodes, if they are of allowed types.
-        node_map: dict[str, KGNode] = {}
         for node_id in (subject, object):
             category = _category_from_id(node_id)
             if category in ALLOWED_NODE_CATEGORIES:
                 node_map[node_id] = KGNode(id=node_id, category=category)
-        features = _compute_node_degree_features(node_map, [])
+        features = _compute_node_features(node_map, [], subject, object)
         return Subgraph(
             subject=subject,
             object=object,
@@ -144,7 +241,6 @@ def build_pair_subgraph(
     object_ego = backend.ego(object, k=k, direction=direction)
 
     # Merge and filter nodes by coarse category.
-    node_map: dict[str, KGNode] = {}
     for ego in (subject_ego, object_ego):
         for node in ego.nodes:
             category = node.category or _category_from_id(node.id)
@@ -182,7 +278,7 @@ def build_pair_subgraph(
             seen.add(key)
             edges.append(edge)
 
-    node_features = _compute_node_degree_features(node_map, edges)
+    node_features = _compute_node_features(node_map, edges, subject, object)
 
     return Subgraph(
         subject=subject,
@@ -192,4 +288,3 @@ def build_pair_subgraph(
         edges=edges,
         node_features=node_features,
     )
-

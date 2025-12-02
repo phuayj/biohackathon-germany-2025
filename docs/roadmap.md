@@ -77,7 +77,7 @@
 ### Subgraph Builder
 - [x] Given (subject, object), fetch 2–3 hop ego-net with nodes {gene, disease, phenotype, pathway}.
 - [x] Edges: G–G, G–Phe, G–Dis, G–Path.
-- [ ] Compute features: degree, clustering, path counts, PPI weights; add rule feature aggregates to edge attributes.
+- [x] Compute features: degree, clustering, path counts, PPI weights.
 
 ### Suspicion GNN (PyG)
 - [ ] Model: 2-layer R-GCN with 16–32 hidden dims.
