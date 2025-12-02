@@ -7,10 +7,24 @@ custom entity types and runs efficiently on CPU.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib import import_module
 from typing import Sequence
 
+from typing import Protocol, cast, Mapping
+
+
+class GLiNER2Model(Protocol):
+    """Protocol for the subset of GLiNER2 we rely on."""
+
+    def extract_entities(
+        self,
+        text: str,
+        entity_spec: dict[str, str] | list[str],
+    ) -> Mapping[str, object]: ...
+
+
 # Lazy import to avoid heavy model loading at module import time
-_gliner2_model: object | None = None
+_gliner2_model: GLiNER2Model | None = None
 
 
 @dataclass
@@ -48,14 +62,15 @@ BIOMEDICAL_ENTITY_DESCRIPTIONS: dict[str, str] = {
 }
 
 
-def _get_model() -> object:
+def _get_model() -> GLiNER2Model:
     """Lazily load the GLiNER2 model."""
     global _gliner2_model
     if _gliner2_model is None:
         try:
-            from gliner2 import GLiNER2  # type: ignore[import-untyped]
-
-            _gliner2_model = GLiNER2.from_pretrained("fastino/gliner2-base-v1")
+            module = import_module("gliner2")
+            gliner_cls = getattr(module, "GLiNER2")
+            model_obj = gliner_cls.from_pretrained("fastino/gliner2-base-v1")
+            _gliner2_model = cast(GLiNER2Model, model_obj)
         except ImportError as e:
             raise ImportError("GLiNER2 is not installed. Install with: pip install gliner2") from e
     return _gliner2_model
@@ -89,14 +104,22 @@ def extract_entities(
         entity_spec = list(entity_types)
 
     # GLiNER2 returns: {'entities': {'type1': ['entity1', ...], 'type2': [...]}}
-    result = model.extract_entities(text, entity_spec)  # type: ignore[attr-defined]
+    result = model.extract_entities(text, entity_spec)
 
     entities: list[ExtractedEntity] = []
-    entities_dict = result.get("entities", {}) if isinstance(result, dict) else {}
+    entities_value = result.get("entities", {}) if isinstance(result, Mapping) else {}
+    entities_dict: dict[str, object] = (
+        dict(entities_value) if isinstance(entities_value, Mapping) else {}
+    )
 
     for label, entity_texts in entities_dict.items():
+        if not isinstance(label, str):
+            continue
+        if not isinstance(entity_texts, list):
+            continue
         for entity_text in entity_texts:
-            entities.append(ExtractedEntity(text=entity_text, label=label))
+            if isinstance(entity_text, str):
+                entities.append(ExtractedEntity(text=entity_text, label=label))
 
     return entities
 

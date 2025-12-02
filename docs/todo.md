@@ -28,7 +28,7 @@
 ## Day 2 — Evidence & Rules
 
 ### MCP Adapter Extensions
-- [ ] Extend MCP adapters: GO/Reactome pathways, DisGeNET, BioCypher/Neo4j local KG adapter.
+- [x] Extend MCP adapters: GO/Reactome pathways, DisGeNET, BioCypher/Neo4j local KG adapter.
 
 ### Claim Pipeline
 - [x] Implement claim ingest/normalization pipeline that turns agent transcripts into atomic claims with entity IDs and provenance.

@@ -20,7 +20,7 @@ BioHackathon Germany 2025 event page: [4th BioHackathon Germany — Detection an
 ## Quick start
 
 ### Using uv (recommended)
-- Requirements: Python 3.13.9 and `uv`.
+- Requirements: Python 3.13 and `uv`.
 - Create an isolated environment and install deps:
   ```bash
   uv sync --group dev
@@ -50,28 +50,43 @@ BioHackathon Germany 2025 event page: [4th BioHackathon Germany — Detection an
   pytest
   ```
 
-## Run the UI
+## Running the application
 
-Launch the Streamlit audit card demo:
+Launch the Streamlit UI:
 
 ```bash
+# uv
 uv run streamlit run src/kg_skeptic/app.py
-```
 
-Or with conda:
-
-```bash
+# conda
 streamlit run src/kg_skeptic/app.py
 ```
 
-This opens a browser with the KG-Skeptic audit interface:
-- **Demo mode**: Audit a pre-loaded BRCA1/breast cancer claim with evidence
-- **Custom mode**: Enter any biomedical claim text with optional PMIDs/DOIs
-- Toggle **GLiNER2 NER** for neural entity extraction (or use dictionary matching)
-- View **PASS/WARN/FAIL** verdict with score bar
-- See **normalized entity IDs** (HGNC, MONDO, HPO) with source badges
-- Inspect **evidence status** (clean/retracted/concern) from Europe PMC
-- Review **fired rules** with scores and explanations
+By default the app uses a pre-seeded in-memory mini KG for fast, offline checks.
+
+### With a Neo4j / BioCypher backend
+
+To use a local Neo4j graph instead:
+
+1. **Start Neo4j**:
+   ```bash
+   docker run -d --name kg-skeptic-neo4j \
+     -p 7474:7474 -p 7687:7687 \
+     -e NEO4J_AUTH=neo4j/password neo4j:5
+   ```
+
+2. **Install the driver**: `uv add neo4j` or `pip install neo4j`
+
+3. **Set environment and run**:
+   ```bash
+   export NEO4J_URI=bolt://localhost:7687
+   export NEO4J_USER=neo4j
+   export NEO4J_PASSWORD=password
+
+   uv run streamlit run src/kg_skeptic/app.py   # or just: streamlit run ...
+   ```
+
+The sidebar will show "Using Neo4j/BioCypher KG backend" when connected. If configuration is missing, the app falls back to the in-memory mini KG.
 
 ## Repository layout
 ```

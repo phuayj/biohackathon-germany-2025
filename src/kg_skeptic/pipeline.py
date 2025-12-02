@@ -16,9 +16,10 @@ from typing import Sequence
 from collections.abc import Mapping
 
 from kg_skeptic.mcp.ids import IDNormalizerTool
+from kg_skeptic.mcp.pathways import PathwayTool
 from .models import Claim, EntityMention, Report
 from .mcp.mini_kg import load_mini_kg_backend
-from .mcp.kg import InMemoryBackend, KGEdge
+from .mcp.kg import InMemoryBackend, KGBackend, KGEdge
 from .provenance import CitationProvenance, ProvenanceFetcher
 from .rules import RuleEngine, RuleEvaluation
 from .ner import GLiNER2Extractor, ExtractedEntity
@@ -33,13 +34,17 @@ JSONValue = object
 # ---------------------------------------------------------------------------
 def _category_from_id(identifier: str) -> str:
     """Infer a coarse Biolink-style category from an identifier prefix."""
-    if identifier.startswith("HGNC:") or identifier.startswith("NCBIGene:"):
+    upper = identifier.upper()
+    if upper.startswith("HGNC:") or upper.startswith("NCBIGENE:"):
         return "gene"
-    if identifier.startswith("MONDO:"):
+    if upper.startswith("MONDO:"):
         return "disease"
-    if identifier.startswith("HP:"):
+    if upper.startswith("HP:"):
         return "phenotype"
-    if identifier.startswith("GO:"):
+    if upper.startswith("GO:"):
+        return "pathway"
+    # Reactome stable IDs and prefixed Reactome identifiers
+    if upper.startswith("R-HSA-") or upper.startswith("REACT:"):
         return "pathway"
     return "unknown"
 
@@ -108,15 +113,28 @@ class ClaimNormalizer:
 
     def __init__(
         self,
-        kg_backend: InMemoryBackend | None = None,
+        kg_backend: KGBackend | None = None,
         *,
         use_gliner: bool = False,
     ) -> None:
-        self.backend = kg_backend or load_mini_kg_backend()
-        self.label_index = self._build_label_index(self.backend.edges)
+        # Underlying KG backend: by default we use the pre-seeded in-memory
+        # mini KG slice, but callers can inject a Neo4jBackend or any other
+        # KGBackend implementation.
+        backend = kg_backend or load_mini_kg_backend()
+        self.backend: KGBackend = backend
+
+        # Label index: for InMemoryBackend we can build a dictionary-based
+        # lookup directly from the materialized edge list. For remote
+        # backends (e.g., Neo4j/Monarch) we fall back to an empty index and
+        # rely on GLiNER + ids.* tools instead.
+        edges_for_index: Sequence[KGEdge] = []
+        if isinstance(backend, InMemoryBackend):
+            edges_for_index = backend.edges
+        self.label_index = self._build_label_index(edges_for_index)
         self.use_gliner = use_gliner
         self._gliner_extractor: GLiNER2Extractor | None = None
         self._id_tool: IDNormalizerTool | None = None
+        self._pathway_tool: PathwayTool | None = None
 
     def _get_gliner_extractor(self) -> GLiNER2Extractor:
         """Lazily initialize GLiNER2 extractor."""
@@ -131,6 +149,12 @@ class ClaimNormalizer:
         if self._id_tool is None:
             self._id_tool = IDNormalizerTool()
         return self._id_tool
+
+    def _get_pathway_tool(self) -> PathwayTool:
+        """Lazily initialize GO/Reactome pathway tool."""
+        if self._pathway_tool is None:
+            self._pathway_tool = PathwayTool()
+        return self._pathway_tool
 
     @staticmethod
     def _build_label_index(edges: Sequence[KGEdge]) -> dict[str, tuple[str, str]]:
@@ -290,6 +314,51 @@ class ClaimNormalizer:
             entity.ancestors = [entity.category]
         return entity
 
+    def _enrich_with_pathway_tool(self, entity: NormalizedEntity) -> NormalizedEntity:
+        """Use pathway MCP tools to resolve GO / Reactome pathway metadata.
+
+        This is best-effort and only applies to entities whose category is
+        "pathway". Network or parsing errors leave the entity unchanged.
+        """
+        if entity.category != "pathway":
+            return entity
+
+        try:
+            tool = self._get_pathway_tool()
+        except Exception:
+            return entity
+
+        identifier = (entity.id or entity.label or "").strip()
+        if not identifier:
+            return entity
+
+        try:
+            record = None
+            upper = identifier.upper()
+            if upper.startswith("GO:"):
+                record = tool.fetch_go(identifier)
+            else:
+                reactome_id = identifier
+                if upper.startswith("REACT:"):
+                    reactome_id = identifier.split(":", 1)[-1]
+                if reactome_id.upper().startswith("R-HSA-"):
+                    record = tool.fetch_reactome(reactome_id)
+
+            if record is None:
+                return entity
+
+            entity.id = record.id
+            if record.label:
+                entity.label = record.label
+            # Tag source to indicate enrichment origin
+            entity.source = f"pathways.{record.source}"
+        except Exception:
+            return entity
+
+        if not entity.ancestors:
+            entity.ancestors = ["pathway"]
+        return entity
+
     def _pick_entities_from_text_gliner(
         self, text: str
     ) -> tuple[NormalizedEntity | None, NormalizedEntity | None]:
@@ -403,13 +472,40 @@ class ClaimNormalizer:
             citations.extend(self._extract_citations(claim.support_span))
         citations = list(dict.fromkeys(citations))
 
+        # Resolve explicit subject/object if provided
         subject = self._resolve_entity(subject_raw) if subject_raw else None
         obj = self._resolve_entity(object_raw) if object_raw else None
 
+        # Fallback to text-based extraction if needed
         if not subject or not obj:
             inferred_subject, inferred_object = self._pick_entities_from_text(claim.text)
             subject = subject or inferred_subject
             obj = obj or inferred_object
+
+        # Promote any GO / Reactome IDs in the evidence list to a pathway object
+        # when we are missing a target or the current target is not already a
+        # canonical GO/Reactome identifier. This allows users to supply GO IDs
+        # via the evidence field and still have them drive pathway normalization.
+        obj_is_canonical_pathway = False
+        if obj is not None:
+            try:
+                obj_is_canonical_pathway = _category_from_id(obj.id) == "pathway"
+            except Exception:
+                obj_is_canonical_pathway = False
+
+        if not obj_is_canonical_pathway:
+            for evid in citations:
+                evid_str = str(evid).strip()
+                if _category_from_id(evid_str) != "pathway":
+                    continue
+                candidate = self._resolve_entity(evid_str)
+                if candidate and candidate.category == "pathway":
+                    # Preserve any previously inferred mention for UI purposes.
+                    if obj is not None:
+                        candidate.mention = obj.mention or obj.label or candidate.mention
+                    obj = candidate
+                    obj_is_canonical_pathway = True
+                    break
 
         if not subject or not obj:
             raise ValueError("Unable to normalize claim entities from payload or text.")
@@ -419,13 +515,17 @@ class ClaimNormalizer:
         subject = self._enrich_with_ids_tool(subject)
         obj = self._enrich_with_ids_tool(obj)
 
+        # Best-effort enrichment for pathway entities (GO / Reactome).
+        subject = self._enrich_with_pathway_tool(subject)
+        obj = self._enrich_with_pathway_tool(obj)
+
         triple = NormalizedTriple(
             subject=subject,
             predicate=predicate,
             object=obj,
             qualifiers={},
             citations=citations,
-            provenance={"source": "normalizer-mini-kg"},
+            provenance={"source": "normalizer-kg"},
         )
 
         # Mirror normalized entities back onto the claim for UI/reporting.

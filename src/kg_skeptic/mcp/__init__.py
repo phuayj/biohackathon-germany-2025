@@ -11,15 +11,22 @@ This module provides adapters for querying external biomedical data sources:
 from .europepmc import EuropePMCTool
 from .crossref import CrossRefTool
 from .ids import IDNormalizerTool
-from .kg import KGTool
+from .kg import KGTool, Neo4jBackend
 from .mini_kg import load_mini_kg_backend, mini_kg_edge_count, iter_mini_kg_edges
+from .pathways import PathwayTool, PathwayRecord
+from .disgenet import DisGeNETTool, GeneDiseaseAssociation
 
 __all__ = [
     "EuropePMCTool",
     "CrossRefTool",
     "IDNormalizerTool",
     "KGTool",
+    "Neo4jBackend",
     "load_mini_kg_backend",
     "mini_kg_edge_count",
     "iter_mini_kg_edges",
+    "PathwayTool",
+    "PathwayRecord",
+    "DisGeNETTool",
+    "GeneDiseaseAssociation",
 ]

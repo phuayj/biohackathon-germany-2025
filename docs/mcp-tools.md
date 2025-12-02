@@ -225,6 +225,69 @@ CLI demo:
 uv run python scripts/mcp_demo.py --mini-kg
 ```
 
+### 5. Pathway Tool (GO / Reactome)
+
+Lookup pathway‑level entities from Gene Ontology (GO) and Reactome.
+
+```python
+from kg_skeptic.mcp import PathwayTool
+
+paths = PathwayTool()
+
+# GO term lookup
+go_term = paths.fetch_go("GO:0007165")
+print(go_term.id)            # GO:0007165
+print(go_term.label)         # signal transduction
+print(go_term.synonyms)      # ["signaling", ...]
+
+# Reactome pathway lookup
+reactome = paths.fetch_reactome("R-HSA-199420")
+print(reactome.id)           # R-HSA-199420
+print(reactome.label)        # Apoptosis
+print(reactome.species)      # Homo sapiens
+```
+
+### 6. DisGeNET Tool
+
+Query DisGeNET for gene–disease associations.
+
+```python
+from kg_skeptic.mcp import DisGeNETTool
+
+dg = DisGeNETTool(api_key="YOUR_TOKEN")  # api_key required for live calls
+
+# Gene → diseases (NCBI Gene ID)
+gdas = dg.gene_to_diseases("7157")  # TP53
+for gda in gdas[:5]:
+    print(gda.gene_id, gda.disease_id, gda.score)
+
+# Disease → genes (UMLS CUI; helper normalizes to UMLS_*)
+gdas = dg.disease_to_genes("C0678222")  # breast carcinoma
+for gda in gdas[:5]:
+    print(gda.disease_id, gda.gene_id, gda.score)
+
+# Simple high-score support check
+supported = dg.has_high_score_support("7157", "C0678222", min_score=0.3)
+print("High-score support from DisGeNET:", supported)
+```
+
+### 7. Neo4j / BioCypher KG Backend
+
+Use a local Neo4j or BioCypher graph as a drop‑in backend for `KGTool`.
+
+```python
+from kg_skeptic.mcp import KGTool, Neo4jBackend
+from neo4j import GraphDatabase
+
+driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "password"))
+with driver.session() as session:
+    backend = Neo4jBackend(session)
+    kg = KGTool(backend=backend)
+
+    edge = kg.query_edge("HGNC:1100", "MONDO:0007254")
+    print(edge.exists)
+```
+
 ## Integration Example
 
 Verify a biomedical claim using all tools:
@@ -348,8 +411,10 @@ kg_skeptic/mcp/
 ├── europepmc.py     # Europe PMC search/fetch (literature)
 ├── crossref.py      # Retraction checking
 ├── ids.py           # ID normalization (HGNC, UniProt, MONDO, HPO)
-├── kg.py            # Knowledge graph queries (Monarch, in-memory)
-└── mini_kg.py       # Pre-seeded mini KG slice
+├── kg.py            # Knowledge graph queries (Monarch, in-memory, Neo4j)
+├── mini_kg.py       # Pre-seeded mini KG slice
+├── pathways.py      # GO / Reactome pathway lookup
+└── disgenet.py      # DisGeNET gene–disease associations
 ```
 
 All tools use only Python standard library (`urllib`, `json`, `xml.etree`) - no additional dependencies required.

@@ -29,8 +29,32 @@ def test_provenance_infers_retractions(tmp_path: Path) -> None:
     assert "RETRACT" in record.identifier
 
 
+def test_non_literature_identifiers_are_marked_clean(tmp_path: Path) -> None:
+    """GO/Reactome-style IDs should be treated as non-literature evidence."""
+    fetcher = ProvenanceFetcher(cache_dir=tmp_path, use_live=False)
+    record = fetcher.fetch("GO:0007165")
+
+    assert record.kind == "other"
+    assert record.status == "clean"
+    assert record.source == "non-literature"
+    assert record.url is None
+
+
+def test_pmcid_treated_as_literature(tmp_path: Path) -> None:
+    """PMCID identifiers should be treated as literature-like evidence."""
+    fetcher = ProvenanceFetcher(cache_dir=tmp_path, use_live=False)
+    record = fetcher.fetch("PMCID:4205188")
+
+    assert record.kind == "pmcid"
+    assert record.status == "clean"
+    assert record.source == "fallback"
+    assert record.url is not None
+    assert "pmc/articles/PMC4205188" in record.url
+
+
 def test_provenance_uses_crossref_for_doi(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """CrossRef retraction status should be folded into provenance for DOIs."""
+
     # Stub Europe PMC to avoid real network calls
     class DummyArticle:
         def __init__(self) -> None:

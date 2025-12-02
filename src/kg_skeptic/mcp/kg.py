@@ -15,7 +15,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from builtins import object as _object
-from typing import Optional, cast
+from typing import Optional, Protocol, cast
 from urllib.parse import quote
 from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
@@ -124,7 +124,7 @@ class KGBackend(ABC):
         predicate: Optional[str] = None,
     ) -> EdgeQueryResult:
         """Query for edges between subject and object."""
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def ego(
@@ -134,7 +134,18 @@ class KGBackend(ABC):
         direction: EdgeDirection = EdgeDirection.BOTH,
     ) -> EgoNetworkResult:
         """Get the k-hop ego network around a node."""
-        pass
+        raise NotImplementedError
+
+
+class Neo4jSession(Protocol):
+    """Minimal protocol for a Neo4j/BioCypher session.
+
+    This is intentionally tiny so we do not need to depend on the actual
+    ``neo4j`` or BioCypher client libraries at runtime. Any object with a
+    compatible ``run`` method can be used.
+    """
+
+    def run(self, query: str, parameters: Optional[dict[str, object]] = None) -> object: ...
 
 
 class MonarchBackend(KGBackend):
@@ -448,6 +459,208 @@ class InMemoryBackend(KGBackend):
             nodes=result_nodes,
             edges=result_edges,
             source="in-memory",
+        )
+
+
+class Neo4jBackend(KGBackend):
+    """
+    Neo4j / BioCypher KG backend.
+
+    This backend delegates read‑only graph queries to a Neo4j session
+    (or any BioCypher wrapper exposing a compatible ``run`` API).
+
+    It assumes a simple property graph schema:
+    - nodes carry an ``id`` property (CURIE like ``HGNC:1100``)
+    - optional ``label`` and ``category`` properties on nodes
+    - relationships carry an optional ``predicate`` property; if absent,
+      the relationship type is used.
+    - relationship properties and identifiers are returned verbatim in
+      the edge ``properties`` mapping for downstream rules.
+    """
+
+    def __init__(self, session: Neo4jSession) -> None:
+        self.session = session
+
+    def _iter_records(
+        self, query: str, parameters: Optional[dict[str, object]] = None
+    ) -> list[dict[str, _object]]:
+        records_raw = self.session.run(query, parameters or {})
+        if not isinstance(records_raw, list):
+            return []
+        # Neo4j driver returns an iterable of Record objects; for tests we
+        # accept any iterable of mapping‑like items.
+        results: list[dict[str, _object]] = []
+        for rec in records_raw:
+            if isinstance(rec, dict):
+                results.append(rec)
+            else:
+                # Fallback to attribute access used by the official driver.
+                mapping: dict[str, _object] = {}
+                for key in dir(rec):
+                    if key.startswith("_"):
+                        continue
+                    try:
+                        value = getattr(rec, key)
+                    except AttributeError:
+                        continue
+                    mapping[key] = value
+                results.append(mapping)
+        return results
+
+    def query_edge(
+        self,
+        subject: str,
+        object: str,
+        predicate: Optional[str] = None,
+    ) -> EdgeQueryResult:
+        """Query for edges between subject and object in Neo4j."""
+        where_predicate = " AND (r.predicate = $predicate)" if predicate else ""
+        query = (
+            "MATCH (s {id: $subject})-[r]->(o {id: $object}) "
+            f"WHERE 1=1{where_predicate} "
+            "RETURN s.id AS subject, "
+            "o.id AS object, "
+            "coalesce(r.predicate, type(r)) AS predicate, "
+            "s.label AS subject_label, "
+            "o.label AS object_label, "
+            "r AS rel"
+        )
+
+        records = self._iter_records(
+            query,
+            (
+                {"subject": subject, "object": object, "predicate": predicate}
+                if predicate
+                else {"subject": subject, "object": object}
+            ),
+        )
+
+        edges: list[KGEdge] = []
+        for rec in records:
+            rel = rec.get("rel", {})
+            props: dict[str, _object] = {}
+            if isinstance(rel, dict):
+                props = {k: v for k, v in rel.items() if k not in {"predicate"}}
+
+            edge = KGEdge(
+                subject=str(rec.get("subject", subject)),
+                predicate=str(rec.get("predicate", "")),
+                object=str(rec.get("object", object)),
+                subject_label=(
+                    str(rec["subject_label"]) if isinstance(rec.get("subject_label"), str) else None
+                ),
+                object_label=(
+                    str(rec["object_label"]) if isinstance(rec.get("object_label"), str) else None
+                ),
+                properties=props,
+                sources=[],
+            )
+            edges.append(edge)
+
+        return EdgeQueryResult(
+            subject=subject,
+            object=object,
+            predicate=predicate,
+            exists=len(edges) > 0,
+            edges=edges,
+            source="neo4j",
+        )
+
+    def ego(
+        self,
+        node_id: str,
+        k: int = 2,
+        direction: EdgeDirection = EdgeDirection.BOTH,
+    ) -> EgoNetworkResult:
+        """
+        Get the k‑hop ego network around a node from Neo4j.
+
+        This uses a simple variable‑length path query and then flattens
+        the resulting nodes/relations into KGNode/KGEdge objects.
+        """
+        if k <= 0:
+            return EgoNetworkResult(
+                center_node=node_id, k_hops=0, nodes=[KGNode(id=node_id)], edges=[], source="neo4j"
+            )
+
+        if direction is EdgeDirection.OUTGOING:
+            pattern = " (n {id: $center})-[r*1..$k]->(m) "
+        elif direction is EdgeDirection.INCOMING:
+            pattern = " (n {id: $center})<-[r*1..$k]-(m) "
+        else:
+            pattern = " (n {id: $center})-[r*1..$k]-(m) "
+
+        query = (
+            "MATCH" + pattern + "WITH n, m, r UNWIND r AS rel "
+            "RETURN DISTINCT "
+            "n.id AS center_id, "
+            "m.id AS node_id, "
+            "m.label AS node_label, "
+            "m.category AS node_category, "
+            "startNode(rel).id AS subject_id, "
+            "endNode(rel).id AS object_id, "
+            "coalesce(rel.predicate, type(rel)) AS predicate, "
+            "startNode(rel).label AS subject_label, "
+            "endNode(rel).label AS object_label, "
+            "rel AS rel_props"
+        )
+
+        records = self._iter_records(query, {"center": node_id, "k": k})
+
+        nodes: dict[str, KGNode] = {}
+        edges: list[KGEdge] = []
+
+        for rec in records:
+            node_id_val = rec.get("node_id")
+            if isinstance(node_id_val, str):
+                if node_id_val not in nodes:
+                    nodes[node_id_val] = KGNode(
+                        id=node_id_val,
+                        label=(
+                            str(rec.get("node_label"))
+                            if isinstance(rec.get("node_label"), str)
+                            else None
+                        ),
+                        category=(
+                            str(rec.get("node_category"))
+                            if isinstance(rec.get("node_category"), str)
+                            else None
+                        ),
+                    )
+
+            rel_props = rec.get("rel_props", {})
+            props: dict[str, _object] = {}
+            if isinstance(rel_props, dict):
+                props = {k: v for k, v in rel_props.items() if k not in {"predicate"}}
+
+            subj_id = str(rec.get("subject_id"))
+            obj_id = str(rec.get("object_id"))
+
+            edge = KGEdge(
+                subject=subj_id,
+                predicate=str(rec.get("predicate", "")),
+                object=obj_id,
+                subject_label=(
+                    str(rec["subject_label"]) if isinstance(rec.get("subject_label"), str) else None
+                ),
+                object_label=(
+                    str(rec["object_label"]) if isinstance(rec.get("object_label"), str) else None
+                ),
+                properties=props,
+                sources=[],
+            )
+            edges.append(edge)
+
+        # Ensure center node is present
+        if node_id not in nodes:
+            nodes[node_id] = KGNode(id=node_id)
+
+        return EgoNetworkResult(
+            center_node=node_id,
+            k_hops=k,
+            nodes=list(nodes.values()),
+            edges=edges,
+            source="neo4j",
         )
 
 

@@ -8,6 +8,7 @@ import pytest
 from kg_skeptic.pipeline import ClaimNormalizer, SkepticPipeline
 from kg_skeptic.provenance import ProvenanceFetcher
 from kg_skeptic.mcp.ids import NormalizedID, IDType
+from kg_skeptic.mcp.pathways import PathwayRecord
 
 
 class TestSkepticPipeline:
@@ -161,6 +162,111 @@ class TestClaimNormalizerGLiNER:
         assert subject_meta.get("category") == "gene"
         assert object_meta.get("category") == "disease"
         assert object_meta.get("ancestors") == ["MONDO:PARENT1", "MONDO:PARENT2"]
+
+
+class TestClaimNormalizerPathways:
+    """Tests for ClaimNormalizer integration with GO/Reactome pathway MCP tool."""
+
+    def test_normalizer_uses_pathway_tool_for_go(self) -> None:
+        """Pathway entities should be enriched via PathwayTool for GO IDs."""
+        normalizer = ClaimNormalizer(use_gliner=False)
+
+        # Stub ID normalizer to avoid network calls
+        mock_id_tool = MagicMock()
+        gene_norm = NormalizedID(
+            input_value="HGNC:1100",
+            input_type=IDType.HGNC,
+            normalized_id="HGNC:1100",
+            label="BRCA1",
+            synonyms=[],
+            source="hgnc",
+            found=True,
+            metadata={},
+        )
+        mock_id_tool.normalize_hgnc.return_value = gene_norm
+        normalizer._id_tool = mock_id_tool
+
+        # Stub PathwayTool to return a deterministic GO term
+        mock_path_tool = MagicMock()
+        go_record = PathwayRecord(
+            id="GO:0007165",
+            label="signal transduction",
+            source="go",
+            synonyms=[],
+            species=None,
+            definition=None,
+            metadata={},
+        )
+        mock_path_tool.fetch_go.return_value = go_record
+        normalizer._pathway_tool = mock_path_tool
+
+        result = normalizer.normalize(
+            {
+                "subject": {"id": "HGNC:1100", "label": "BRCA1"},
+                "object": {"id": "GO:0007165", "label": "signal transduction"},
+                "predicate": "biolink:gene_associated_with_condition",
+                "evidence": [],
+            }
+        )
+
+        # Subject should be the gene, object the pathway
+        assert len(result.claim.entities) == 2
+        pathway_entity = result.claim.entities[1]
+        assert pathway_entity.metadata.get("category") == "pathway"
+        assert pathway_entity.norm_id == "GO:0007165"
+        assert pathway_entity.norm_label == "signal transduction"
+        # Source should reflect enrichment via pathway MCP tool
+        assert pathway_entity.source == "pathways.go"
+
+    def test_evidence_go_id_promotes_pathway_object(self) -> None:
+        """GO IDs in evidence should be usable as pathway objects."""
+        normalizer = ClaimNormalizer(use_gliner=False)
+
+        # Stub ID normalizer to avoid network calls
+        mock_id_tool = MagicMock()
+        gene_norm = NormalizedID(
+            input_value="HGNC:1100",
+            input_type=IDType.HGNC,
+            normalized_id="HGNC:1100",
+            label="BRCA1",
+            synonyms=[],
+            source="hgnc",
+            found=True,
+            metadata={},
+        )
+        mock_id_tool.normalize_hgnc.return_value = gene_norm
+        normalizer._id_tool = mock_id_tool
+
+        # Stub PathwayTool to return a deterministic GO term
+        mock_path_tool = MagicMock()
+        go_record = PathwayRecord(
+            id="GO:0007165",
+            label="signal transduction",
+            source="go",
+            synonyms=[],
+            species=None,
+            definition=None,
+            metadata={},
+        )
+        mock_path_tool.fetch_go.return_value = go_record
+        normalizer._pathway_tool = mock_path_tool
+
+        result = normalizer.normalize(
+            {
+                "subject": {"id": "HGNC:1100", "label": "BRCA1"},
+                "predicate": "biolink:gene_associated_with_condition",
+                "evidence": ["GO:0007165"],
+            }
+        )
+
+        assert len(result.claim.entities) == 2
+        gene_entity = result.claim.entities[0]
+        pathway_entity = result.claim.entities[1]
+        assert gene_entity.metadata.get("category") == "gene"
+        assert pathway_entity.metadata.get("category") == "pathway"
+        assert pathway_entity.norm_id == "GO:0007165"
+        assert pathway_entity.norm_label == "signal transduction"
+        assert pathway_entity.source == "pathways.go"
 
 
 @pytest.mark.e2e

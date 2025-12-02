@@ -9,13 +9,65 @@ This is the MVP "hello audit card" demonstrating:
 
 from __future__ import annotations
 
+import os
+
 import streamlit as st
-from typing import cast
+from collections.abc import Iterable
+from typing import Protocol, cast
 
 from kg_skeptic.models import Claim, EntityMention
 from kg_skeptic.pipeline import AuditResult, ClaimNormalizer, SkepticPipeline
+from kg_skeptic.mcp.kg import KGBackend, Neo4jBackend
 from kg_skeptic.provenance import CitationProvenance
 from kg_skeptic.rules import RuleEvaluation
+
+
+def _extract_pathway_entities(claim: Claim) -> list[EntityMention]:
+    """Return all entities that are classified as pathways."""
+    pathways: list[EntityMention] = []
+    for entity in claim.entities:
+        metadata = entity.metadata if isinstance(entity.metadata, dict) else {}
+        category = metadata.get("category")
+        if category == "pathway":
+            pathways.append(entity)
+    return pathways
+
+
+def _render_pathway_section(claim: Claim) -> None:
+    """Render a compact section for pathway entities, if any."""
+    pathways = _extract_pathway_entities(claim)
+    if not pathways:
+        return
+
+    st.subheader("Pathway Context (GO / Reactome)")
+    for entity in pathways:
+        source = entity.source or ""
+        norm_id = entity.norm_id or entity.mention or ""
+        norm_label = entity.norm_label or entity.mention or ""
+        metadata = entity.metadata if isinstance(entity.metadata, dict) else {}
+        species = metadata.get("species")
+        definition = metadata.get("definition")
+        aspect = metadata.get("aspect")
+
+        badge_bg = "#004d40"
+        st.markdown(
+            f'<div style="background-color: {badge_bg}; color: #e0f2f1; padding: 6px 10px; '
+            f'border-radius: 6px; margin-bottom: 4px; font-size: 0.9em;">'
+            f"<strong>{norm_label}</strong> "
+            f'<code style="background: rgba(0,0,0,0.2); padding: 1px 4px; border-radius: 4px; margin-left: 4px;">{norm_id}</code> '
+            f'<span style="margin-left: 6px; font-size: 0.8em; opacity: 0.9;">source={source}</span>'
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        if aspect:
+            st.caption(f"GO aspect: `{aspect}`")
+        if species:
+            st.caption(f"Species: `{species}`")
+        if definition:
+            with st.expander("Definition", expanded=False):
+                st.write(definition)
+        st.write("")
 
 
 # Canned claim for demonstration
@@ -44,11 +96,74 @@ CANNED_CLAIM = Claim(
 )
 
 
+def _build_neo4j_backend_from_env() -> KGBackend | None:
+    """Best-effort construction of a Neo4j/BioCypher backend from environment."""
+    uri = os.environ.get("NEO4J_URI")
+    user = os.environ.get("NEO4J_USER")
+    password = os.environ.get("NEO4J_PASSWORD")
+
+    if not uri:
+        return None
+    if not user or not password:
+        st.warning(
+            "NEO4J_URI is set but NEO4J_USER/NEO4J_PASSWORD are missing; "
+            "falling back to in-memory mini KG backend."
+        )
+        return None
+
+    try:
+        from neo4j import GraphDatabase
+    except Exception:
+        st.warning(
+            "Neo4j Python driver is not installed. "
+            "Run `pip install neo4j` to enable the Neo4j/BioCypher backend."
+        )
+        return None
+
+    class _Neo4jSessionLike(Protocol):
+        def run(self, query: str, parameters: dict[str, object] | None = None) -> object: ...
+
+        def close(self) -> object: ...
+
+    class _Neo4jDriverLike(Protocol):
+        def session(self) -> _Neo4jSessionLike: ...
+
+    class _DriverSessionWrapper:
+        """Session wrapper matching the Neo4jSession protocol."""
+
+        def __init__(self, driver: _Neo4jDriverLike) -> None:
+            self._driver = driver
+
+        def run(self, query: str, parameters: dict[str, object] | None = None) -> object:
+            params = parameters or {}
+            session = self._driver.session()
+            try:
+                result = session.run(query, params)
+            finally:
+                session.close()
+            iterable_result = cast(Iterable[object], result)
+            return list(iterable_result)
+
+    driver = GraphDatabase.driver(uri, auth=(user, password))
+    st.session_state["neo4j_driver"] = driver
+    return Neo4jBackend(_DriverSessionWrapper(driver))
+
+
+def _get_kg_backend() -> KGBackend | None:
+    """Return the configured KG backend (Neo4j if available, else None)."""
+    if "kg_backend" in st.session_state:
+        return cast(KGBackend | None, st.session_state["kg_backend"])
+    backend = _build_neo4j_backend_from_env()
+    st.session_state["kg_backend"] = backend
+    return backend
+
+
 def _get_pipeline(use_gliner: bool = False) -> SkepticPipeline:
     """Get or create a pipeline with the specified GLiNER2 setting."""
     cache_key = f"pipeline_gliner_{use_gliner}"
     if cache_key not in st.session_state:
-        normalizer = ClaimNormalizer(use_gliner=use_gliner)
+        kg_backend = _get_kg_backend()
+        normalizer = ClaimNormalizer(kg_backend=kg_backend, use_gliner=use_gliner)
         st.session_state[cache_key] = SkepticPipeline(normalizer=normalizer)
     return cast(SkepticPipeline, st.session_state[cache_key])
 
@@ -108,8 +223,17 @@ def render_provenance(provenance: list[CitationProvenance]) -> None:
         return
 
     for record in provenance:
+        # Special handling for non-literature evidence (e.g., GO/Reactome IDs)
+        is_non_literature = record.kind == "other" or record.source == "non-literature"
+
         status = record.status
-        if status == "retracted":
+        label_text = status.upper()
+        if is_non_literature:
+            # Emphasize that this is ontology/knowledge-graph evidence, not a paper.
+            icon = "ℹ️"
+            color = "#37474f"
+            label_text = "ONTOLOGY"
+        elif status == "retracted":
             color = "#b71c1c"
             icon = "❌"
         elif status == "concern":
@@ -124,11 +248,13 @@ def render_provenance(provenance: list[CitationProvenance]) -> None:
 
         st.markdown(
             f'<span style="background-color: {color}; color: white; padding: 4px 8px; '
-            f'border-radius: 6px; font-size: 0.9em;">{icon} {status.upper()}</span> '
+            f'border-radius: 6px; font-size: 0.9em;">{icon} {label_text}</span> '
             f"`{record.identifier}`",
             unsafe_allow_html=True,
         )
-        if record.url:
+        # For non-literature evidence we skip the "source" label and links to avoid
+        # implying there is an underlying paper.
+        if not is_non_literature and record.url:
             st.caption(f"[Link]({record.url}) • source={record.source}")
 
 
@@ -181,6 +307,9 @@ def render_audit_card(result: AuditResult) -> None:
         render_entity_badge(entity)
         st.write("")
 
+    # Pathway context (GO / Reactome) if present
+    _render_pathway_section(claim)
+
     # Evidence
     st.subheader("Evidence")
     render_provenance(result.provenance)
@@ -223,6 +352,14 @@ def main() -> None:
             st.caption("🧠 Using GLiNER2 model for entity extraction")
         else:
             st.caption("📖 Using dictionary-based entity matching")
+
+        kg_backend = _get_kg_backend()
+        if isinstance(kg_backend, Neo4jBackend):
+            st.caption("🕸 Using Neo4j/BioCypher KG backend")
+        elif kg_backend is not None:
+            st.caption("🕸 Using custom KG backend")
+        else:
+            st.caption("🧪 Using in-memory mini KG backend")
 
         st.divider()
         st.caption("**Entity Source Legend:**")
