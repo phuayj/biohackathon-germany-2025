@@ -61,7 +61,7 @@
 ### Evidence & Predicate Hardening
 - [x] **Make predicate explicit:** Record edges as `biolink:gene_associated_with_condition` (canonical gene→disease predicate) with optional free-text qualifiers (e.g., "increases risk") so type-domain-range rules fire positively. See [Biolink docs](https://biolink.github.io/biolink-model/gene_associated_with_condition/).
 - [x] **Gate PASS on evidence signals:** Require at least one positive evidence signal (multi-source support or curated KG match such as DisGeNET) so weaker claims can't PASS on structure alone.
-- [ ] **Retraction/concern check enforcement:** Wire retraction rule so retracted PMID forces **FAIL** and "expression of concern" triggers **WARN**. Ensure integration with CrossRef retraction API.
+- [x] **Retraction/concern check enforcement:** Wire retraction rule so retracted PMID forces **FAIL** and "expression of concern" triggers **WARN**. Ensure integration with CrossRef retraction API.
 - [ ] **Variant-level qualifier (stretch):** When text mentions "mutations," store variant/allelic qualifier or boolean `has_variant_context=true` under `GeneToDiseaseAssociation` subclass. See [Biolink GeneToDiseaseAssociation](https://biolink.github.io/biolink-model/GeneToDiseaseAssociation/).
 
 ---

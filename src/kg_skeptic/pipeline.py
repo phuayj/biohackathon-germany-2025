@@ -824,6 +824,33 @@ class SkepticPipeline:
         score = sum(evaluation.features.values())
         verdict = self._verdict_for_score(score)
 
+        # ------------------------------------------------------------------
+        # Hard gates for retractions / expressions of concern
+        # ------------------------------------------------------------------
+        evidence_raw = facts.get("evidence")
+        evidence = evidence_raw if isinstance(evidence_raw, Mapping) else {}
+
+        retracted_count_raw = evidence.get("retracted_count", 0)
+        concern_count_raw = evidence.get("concern_count", 0)
+
+        try:
+            retracted_count = int(retracted_count_raw)
+        except (TypeError, ValueError):
+            retracted_count = 0
+
+        try:
+            concern_count = int(concern_count_raw)
+        except (TypeError, ValueError):
+            concern_count = 0
+
+        # Any retracted citation forces a FAIL verdict, regardless of score.
+        if retracted_count > 0:
+            verdict = "FAIL"
+        # Expressions of concern downgrade PASS to WARN (but do not upgrade
+        # existing WARN/FAIL verdicts).
+        elif concern_count > 0 and verdict == "PASS":
+            verdict = "WARN"
+
         # Gate PASS on positive evidence signals so structurally well-formed
         # but weakly supported claims are downgraded to WARN.
         if verdict == "PASS" and not self._has_positive_evidence(facts):

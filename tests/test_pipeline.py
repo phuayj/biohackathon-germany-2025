@@ -63,6 +63,47 @@ class TestSkepticPipeline:
         assert result.score < pipeline.WARN_THRESHOLD
         assert result.evaluation.features["retraction_gate"] < 0
 
+    def test_retracted_citation_forces_fail_even_with_high_score(self, tmp_path: Path) -> None:
+        """Hard retraction gate should override an otherwise passing score."""
+        pipeline = SkepticPipeline(provenance_fetcher=ProvenanceFetcher(cache_dir=tmp_path))
+        # Loosen PASS threshold so that even a negatively weighted retraction
+        # scenario would nominally PASS based on score alone.
+        pipeline.PASS_THRESHOLD = -1.0
+        pipeline.WARN_THRESHOLD = -2.0
+
+        result = pipeline.run(
+            {
+                "text": "BRCA1 mutations increase breast cancer risk.",
+                "evidence": ["PMID:RETRACT999"],
+            }
+        )
+
+        # Score is above the artificially low PASS threshold, but the presence
+        # of a retracted citation should still force a FAIL verdict.
+        assert result.score >= pipeline.PASS_THRESHOLD
+        assert result.verdict == "FAIL"
+
+    def test_expression_of_concern_downgrades_pass_to_warn(self, tmp_path: Path) -> None:
+        """Expressions of concern should prevent a clean PASS verdict."""
+        pipeline = SkepticPipeline(
+            provenance_fetcher=ProvenanceFetcher(cache_dir=tmp_path, use_live=False)
+        )
+        # Loosen PASS threshold so that this otherwise well-formed claim with
+        # a concern-marked citation would be a PASS without the hard gate.
+        pipeline.PASS_THRESHOLD = 0.6
+
+        result = pipeline.run(
+            {
+                "text": "BRCA1 mutations increase breast cancer risk.",
+                "evidence": ["PMID:EXPRESSION_OF_CONCERN123"],
+            }
+        )
+
+        # Score should clear the relaxed PASS threshold, but the concern
+        # status must downgrade the verdict to WARN.
+        assert result.score >= pipeline.PASS_THRESHOLD
+        assert result.verdict == "WARN"
+
     def test_pass_requires_positive_evidence(self, tmp_path: Path) -> None:
         """Structurally valid claims without positive evidence should WARN, not PASS."""
         pipeline = SkepticPipeline(
