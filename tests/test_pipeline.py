@@ -63,6 +63,43 @@ class TestSkepticPipeline:
         assert result.score < pipeline.WARN_THRESHOLD
         assert result.evaluation.features["retraction_gate"] < 0
 
+    def test_pass_requires_positive_evidence(self, tmp_path: Path) -> None:
+        """Structurally valid claims without positive evidence should WARN, not PASS."""
+        pipeline = SkepticPipeline(
+            provenance_fetcher=ProvenanceFetcher(cache_dir=tmp_path, use_live=False)
+        )
+        result = pipeline.run(
+            {
+                "text": "BRCA1 mutations increase breast cancer risk.",
+                "evidence": ["PMID:12345678"],
+            }
+        )
+
+        # Score is high due to type/ontology, but PASS is gated on evidence.
+        assert result.score >= pipeline.PASS_THRESHOLD
+        assert result.verdict == "WARN"
+
+    def test_has_positive_evidence_helper(self) -> None:
+        """Positive evidence helper should reflect multi-source or curated KG support."""
+        from kg_skeptic.pipeline import SkepticPipeline as _Pipeline
+
+        facts_multi = {
+            "evidence": {"has_multiple_sources": True},
+            "curated_kg": {"disgenet_support": False},
+        }
+        facts_curated = {
+            "evidence": {"has_multiple_sources": False},
+            "curated_kg": {"disgenet_support": True},
+        }
+        facts_none = {
+            "evidence": {"has_multiple_sources": False},
+            "curated_kg": {"disgenet_support": False},
+        }
+
+        assert _Pipeline._has_positive_evidence(facts_multi) is True
+        assert _Pipeline._has_positive_evidence(facts_curated) is True
+        assert _Pipeline._has_positive_evidence(facts_none) is False
+
 
 class TestClaimNormalizerGLiNER:
     """Tests for ClaimNormalizer with GLiNER2 integration."""

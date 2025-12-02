@@ -711,6 +711,28 @@ class SkepticPipeline:
             return "WARN"
         return "FAIL"
 
+    @staticmethod
+    def _has_positive_evidence(facts: Mapping[str, object]) -> bool:
+        """Return True if there is at least one positive evidence signal.
+
+        This gates PASS so that structurally well-formed claims cannot PASS
+        solely on type/ontology features. We currently treat the following as
+        positive evidence:
+
+        - Multiple independent sources in the evidence list.
+        - Curated KG support (e.g., DisGeNET gene–disease association).
+        """
+        evidence_raw = facts.get("evidence")
+        curated_raw = facts.get("curated_kg")
+
+        evidence = evidence_raw if isinstance(evidence_raw, Mapping) else {}
+        curated = curated_raw if isinstance(curated_raw, Mapping) else {}
+
+        has_multi_source = bool(evidence.get("has_multiple_sources"))
+        has_curated_support = bool(curated.get("disgenet_support"))
+
+        return has_multi_source or has_curated_support
+
     def _get_disgenet_tool(self) -> DisGeNETTool | None:
         """Lazily initialize DisGeNET tool if enabled in config.
 
@@ -801,6 +823,11 @@ class SkepticPipeline:
         evaluation = self.engine.evaluate(facts)
         score = sum(evaluation.features.values())
         verdict = self._verdict_for_score(score)
+
+        # Gate PASS on positive evidence signals so structurally well-formed
+        # but weakly supported claims are downgraded to WARN.
+        if verdict == "PASS" and not self._has_positive_evidence(facts):
+            verdict = "WARN"
 
         # Build a report with key stats embedded
         task_id = (
