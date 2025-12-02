@@ -75,8 +75,8 @@
 **Goals:** Expose *why* a claim might be wrong by inspecting neighborhood; learn new error types without full retrain.
 
 ### Subgraph Builder
-- [ ] Given (subject, object), fetch 2–3 hop ego-net with nodes {gene, disease, phenotype, pathway}.
-- [ ] Edges: G–G, G–Phe, G–Dis, G–Path.
+- [x] Given (subject, object), fetch 2–3 hop ego-net with nodes {gene, disease, phenotype, pathway}.
+- [x] Edges: G–G, G–Phe, G–Dis, G–Path.
 - [ ] Compute features: degree, clustering, path counts, PPI weights; add rule feature aggregates to edge attributes.
 
 ### Suspicion GNN (PyG)

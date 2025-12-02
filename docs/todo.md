@@ -75,8 +75,8 @@
 ## Day 3 — Graph Suspicion & Incremental Learning
 
 ### Subgraph Builder
-- [ ] Fetch 2–3 hop ego-net given (subject, object).
-- [ ] Compute node features: degree, clustering, path counts, PPI weights.
+- [x] Fetch 2–3 hop ego-net given (subject, object).
+- [ ] Compute node features: clustering, path counts, PPI weights (extend existing degree features).
 - [ ] Add rule feature aggregates to edge attributes.
 - [ ] **Swap curated KG check to Monarch:** Once a Monarch KG-backed check is implemented, replace/augment the current curated KG evidence (e.g., DisGeNET) with a Monarch-based `curated_kg_match` for gene→disease edges. See [linkml-store Monarch KG](https://linkml.io/linkml-store/how-to/Query-the-Monarch-KG.html).
 - [ ] Expand predicate polarity map (positive/negative verbs and biolink aliases) used by opposite-predicate checks.
@@ -96,6 +96,8 @@
 
 ### UI v2
 - [ ] Subgraph visualization with heat coloring by suspicion score.
+- [ ] Richer interactive subgraph visualization (node-link layout, hover details, zoom/pan).
+- [ ] UI controls to filter subgraph edges by type (G–G, G–Dis, G–Phe, G–Path).
 - [ ] "Why flagged?" drawer: top rules + top suspicious edges.
 - [ ] One-click patch suggestions.
 

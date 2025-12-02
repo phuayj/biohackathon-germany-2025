@@ -14,14 +14,16 @@ import os
 from pathlib import Path
 
 import streamlit as st
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Protocol, cast
 
 from kg_skeptic.models import Claim, EntityMention
 from kg_skeptic.pipeline import AuditResult, ClaimNormalizer, SkepticPipeline
 from kg_skeptic.mcp.kg import KGBackend, Neo4jBackend
+from kg_skeptic.mcp.mini_kg import load_mini_kg_backend
 from kg_skeptic.provenance import CitationProvenance
 from kg_skeptic.rules import RuleEvaluation
+from kg_skeptic.subgraph import build_pair_subgraph
 
 
 def _load_demo_claims_from_fixtures() -> list[tuple[str, Claim]]:
@@ -267,6 +269,22 @@ def _get_kg_backend() -> KGBackend | None:
     return backend
 
 
+def _get_subgraph_backend() -> KGBackend:
+    """Return a KG backend suitable for subgraph construction.
+
+    Prefers the configured Neo4j/BioCypher backend when available, otherwise
+    falls back to the in-memory mini KG slice used throughout the pipeline.
+    """
+    backend = _get_kg_backend()
+    if backend is not None:
+        return backend
+
+    key = "subgraph_mini_backend"
+    if key not in st.session_state:
+        st.session_state[key] = load_mini_kg_backend()
+    return cast(KGBackend, st.session_state[key])
+
+
 def _get_pipeline(use_gliner: bool = False) -> SkepticPipeline:
     """Get or create a pipeline with the specified GLiNER2 setting."""
     cache_key = f"pipeline_gliner_{use_gliner}"
@@ -432,6 +450,84 @@ def render_audit_card(result: AuditResult) -> None:
     # Rules fired
     st.subheader("Rules Fired")
     render_rule_trace(evaluation)
+
+    # Local KG subgraph (Day 3 preview)
+    metadata = claim.metadata if isinstance(claim.metadata, Mapping) else {}
+    triple_meta = metadata.get("normalized_triple")
+    subject_id: str | None = None
+    object_id: str | None = None
+    if isinstance(triple_meta, Mapping):
+        subj_meta = triple_meta.get("subject")
+        obj_meta = triple_meta.get("object")
+        if isinstance(subj_meta, Mapping):
+            subj_id_raw = subj_meta.get("id")
+            if isinstance(subj_id_raw, str):
+                subject_id = subj_id_raw
+        if isinstance(obj_meta, Mapping):
+            obj_id_raw = obj_meta.get("id")
+            if isinstance(obj_id_raw, str):
+                object_id = obj_id_raw
+
+    if subject_id and object_id:
+        st.subheader("Local Subgraph (Day 3 Preview)")
+        with st.expander("Show 2-hop KG subgraph around this claim", expanded=False):
+            try:
+                backend = _get_subgraph_backend()
+                subgraph = build_pair_subgraph(backend, subject_id, object_id, k=2)
+            except Exception as exc:  # pragma: no cover - UI surface
+                st.error("Could not build a subgraph for this claim.")
+                st.caption(f"Details: {exc}")
+            else:
+                st.caption(
+                    f"Nodes: {len(subgraph.nodes)} | "
+                    f"Edges: {len(subgraph.edges)} | "
+                    f"k={subgraph.k_hops}"
+                )
+
+                if not subgraph.nodes:
+                    st.info("No nodes found in the constrained subgraph.")
+                    return
+
+                # Summarize nodes by degree
+                st.markdown("**Nodes by degree (top 15)**")
+                node_rows: list[dict[str, object]] = []
+                label_by_id = {n.id: (n.norm_label or n.label or n.id) if hasattr(n, "norm_label") else (n.label or n.id) for n in subgraph.nodes}
+                category_by_id = {n.id: (n.category or "?") for n in subgraph.nodes}
+
+                sorted_nodes = sorted(
+                    subgraph.node_features.items(),
+                    key=lambda item: item[1].get("degree", 0.0),
+                    reverse=True,
+                )[:15]
+
+                for node_id, feats in sorted_nodes:
+                    node_rows.append(
+                        {
+                            "id": node_id,
+                            "label": label_by_id.get(node_id, node_id),
+                            "category": category_by_id.get(node_id, "?"),
+                            "degree": feats.get("degree", 0.0),
+                        }
+                    )
+
+                if node_rows:
+                    st.dataframe(node_rows, use_container_width=True)
+
+                # Show a small edge sample
+                if subgraph.edges:
+                    st.markdown("**Sample edges (up to 20)**")
+                    edge_rows: list[dict[str, object]] = []
+                    for edge in subgraph.edges[:20]:
+                        edge_rows.append(
+                            {
+                                "subject": edge.subject,
+                                "predicate": edge.predicate,
+                                "object": edge.object,
+                            }
+                        )
+                    st.dataframe(edge_rows, use_container_width=True)
+                else:
+                    st.info("No edges found in the constrained subgraph.")
 
 
 def main() -> None:
