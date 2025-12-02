@@ -36,27 +36,28 @@
 **Goals:** End-to-end audit on real claims with clear rule traces.
 
 ### Claim → ID Normalization Flow
-- [ ] LLM extracts triples from sentence OR accepts structured JSON input.
+- [x] LLM extracts triples from sentence OR accepts structured JSON input.
 - [ ] `ids.*` tools resolve to canonical IDs; attach labels and ontology ancestors.
 
 ### Provenance Fetch
-- [ ] For each PMID/DOI in claim or KG edge, call `europepmc.fetch` and `crossref.retractions`.
-- [ ] Cache all responses to `data/cache` (JSON).
+- [x] For each PMID/DOI in claim or KG edge, call `europepmc.fetch` and `crossref.retractions`.
+- [x] Cache all responses to `data/cache` (JSON).
+- [x] Graceful fallback when APIs are down (show WARN, don't auto-PASS).
 
 ### Core Rule Set (in `rules.yaml`)
-- [ ] **Type constraints:** Biolink-valid domain/range (gene→phenotype ok; gene→gene for PPI).
-- [ ] **Ontology closure:** HPO consistency with known disease phenotypes; MONDO subclass relations.
-- [ ] **Retract-gate:** If any supporting citation retracted → `trust=0`, FAIL; expression of concern → −0.5, WARN.
-- [ ] **Source redundancy:** Multiple independent sources → bonus; single source → penalty.
+- [x] **Type constraints:** Biolink-valid domain/range (gene→phenotype ok; gene→gene for PPI).
+- [x] **Ontology closure:** HPO consistency with known disease phenotypes; MONDO subclass relations.
+- [x] **Retract-gate:** If any supporting citation retracted → `trust=0`, FAIL; expression of concern → −0.5, WARN.
+- [x] **Source redundancy:** Multiple independent sources → bonus; single source → penalty.
 - [ ] **Time freshness (optional):** Old unsupported claims decay slightly.
 
 ### Scoring & Decision
-- [ ] Concatenate rule features into scalar audit score (weighted sum).
-- [ ] Decision thresholds: PASS / WARN / FAIL.
+- [x] Concatenate rule features into scalar audit score (weighted sum).
+- [x] Decision thresholds: PASS / WARN / FAIL.
 
 ### UI v1
-- [ ] "Audit Card": title, normalized triple, badges (Type✓, Closure✓, Retraction✖).
-- [ ] Score bar, list of PMIDs/DOIs with status, templated rationale.
+- [x] "Audit Card": title, normalized triple, badges (Type✓, Closure✓, Retraction✖).
+- [x] Score bar, list of PMIDs/DOIs with status, templated rationale.
 
 **Definition of Done:** Paste natural-language claim → normalized triple, real evidence, retraction checks, PASS/WARN/FAIL with rule trace and live citations.
 

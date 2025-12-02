@@ -1,26 +1,413 @@
-"""
-Skeleton pipeline for the KG Skeptic.
+"""End-to-end pipeline for KG-Skeptic.
 
-This stub documents the intended orchestration: ingest -> extract -> validate -> reason -> report.
+Day 2 adds:
+- Claim normalization to typed entities using the mini KG slice
+- Provenance harvesting (PMIDs/DOIs) with caching
+- Rule-based scoring that yields PASS/WARN/FAIL
 """
 
 from __future__ import annotations
 
+import hashlib
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Sequence
 from collections.abc import Mapping
 
-from .models import Report
-
+from .models import Claim, EntityMention, Report
+from .mcp.mini_kg import load_mini_kg_backend
+from .mcp.kg import InMemoryBackend, KGEdge
+from .provenance import CitationProvenance, ProvenanceFetcher
+from .rules import RuleEngine, RuleEvaluation
 
 Config = Mapping[str, object]
-AuditPayload = Mapping[str, object]
+AuditPayload = Mapping[str, object] | str | Claim
+JSONValue = object
+
+
+# ---------------------------------------------------------------------------
+# Normalization helpers
+# ---------------------------------------------------------------------------
+def _category_from_id(identifier: str) -> str:
+    """Infer a coarse Biolink-style category from an identifier prefix."""
+    if identifier.startswith("HGNC:") or identifier.startswith("NCBIGene:"):
+        return "gene"
+    if identifier.startswith("MONDO:"):
+        return "disease"
+    if identifier.startswith("HP:"):
+        return "phenotype"
+    if identifier.startswith("GO:"):
+        return "pathway"
+    return "unknown"
+
+
+def _sha1_slug(text: str) -> str:
+    """Deterministic slug for claim IDs."""
+    digest = hashlib.sha1(text.encode("utf-8")).hexdigest()
+    return digest[:10]
+
+
+@dataclass
+class NormalizedEntity:
+    """Normalized entity with ontology metadata."""
+
+    id: str
+    label: str
+    category: str
+    ancestors: list[str] = field(default_factory=list)
+    mention: str | None = None
+    source: str = "mini_kg"
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "label": self.label,
+            "category": self.category,
+            "ancestors": self.ancestors,
+            "mention": self.mention,
+            "source": self.source,
+        }
+
+
+@dataclass
+class NormalizedTriple:
+    """A normalized (subject, predicate, object) triple."""
+
+    subject: NormalizedEntity
+    predicate: str
+    object: NormalizedEntity
+    qualifiers: dict[str, JSONValue] = field(default_factory=dict)
+    citations: list[str] = field(default_factory=list)
+    provenance: dict[str, JSONValue] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, JSONValue]:
+        return {
+            "subject": self.subject.to_dict(),
+            "predicate": self.predicate,
+            "object": self.object.to_dict(),
+            "qualifiers": self.qualifiers,
+            "citations": self.citations,
+            "provenance": self.provenance,
+        }
+
+
+@dataclass
+class NormalizationResult:
+    """Result of claim normalization."""
+
+    claim: Claim
+    triple: NormalizedTriple
+    citations: list[str]
+
+
+class ClaimNormalizer:
+    """Normalize claims into typed triples and extract citations."""
+
+    def __init__(self, kg_backend: InMemoryBackend | None = None) -> None:
+        self.backend = kg_backend or load_mini_kg_backend()
+        self.label_index = self._build_label_index(self.backend.edges)
+
+    @staticmethod
+    def _build_label_index(edges: Sequence[KGEdge]) -> dict[str, tuple[str, str]]:
+        """Build a lookup from lowercased labels to (id, category)."""
+        index: dict[str, tuple[str, str]] = {}
+        for edge in edges:
+            if edge.subject_label:
+                index[edge.subject_label.lower()] = (edge.subject, _category_from_id(edge.subject))
+            if edge.object_label:
+                index[edge.object_label.lower()] = (edge.object, _category_from_id(edge.object))
+        return index
+
+    @staticmethod
+    def _extract_citations(text: str) -> list[str]:
+        """Pull PMIDs/DOIs from free text."""
+        pmid_pattern = re.compile(r"PMID:\s*\d{4,9}", re.IGNORECASE)
+        doi_pattern = re.compile(r"10\.\d{4,9}/[^\s;]+", re.IGNORECASE)
+        pmids = [pmid.strip() for pmid in pmid_pattern.findall(text)]
+        dois = [doi.strip().rstrip(".") for doi in doi_pattern.findall(text)]
+        return list(dict.fromkeys(pmid.replace("pmid:", "PMID:") for pmid in pmids)) + dois
+
+    def _resolve_entity(self, raw: str | Mapping[str, object]) -> NormalizedEntity | None:
+        """Resolve a raw entity mention or mapping to a normalized entity."""
+        mention: str | None = None
+        label_lower: str | None = None
+        if isinstance(raw, Mapping):
+            mention_val = raw.get("mention")
+            if isinstance(mention_val, str):
+                mention = mention_val
+                label_lower = mention.lower()
+            id_val = raw.get("id") or raw.get("norm_id")
+            label_val = raw.get("label") or raw.get("norm_label")
+            if isinstance(id_val, str) and isinstance(label_val, str):
+                category = _category_from_id(id_val)
+                return NormalizedEntity(
+                    id=id_val,
+                    label=label_val,
+                    category=category,
+                    ancestors=[category] if category != "unknown" else [],
+                    mention=mention,
+                    source="payload",
+                )
+        elif isinstance(raw, str):
+            mention = raw
+            label_lower = raw.lower()
+
+        if label_lower and label_lower in self.label_index:
+            entity_id, category = self.label_index[label_lower]
+            return NormalizedEntity(
+                id=entity_id,
+                label=mention or label_lower,
+                category=category,
+                ancestors=[category] if category != "unknown" else [],
+                mention=mention,
+                source="mini_kg",
+            )
+
+        # Try if the raw string is itself an ID
+        if isinstance(raw, str) and ":" in raw:
+            category = _category_from_id(raw)
+            return NormalizedEntity(
+                id=raw,
+                label=mention or raw,
+                category=category,
+                ancestors=[category] if category != "unknown" else [],
+                mention=mention,
+                source="payload",
+            )
+        return None
+
+    def _pick_entities_from_text(
+        self, text: str
+    ) -> tuple[NormalizedEntity | None, NormalizedEntity | None]:
+        """Heuristic entity detection: pick first gene and first non-gene target."""
+        text_lower = text.lower()
+        gene: NormalizedEntity | None = None
+        target: NormalizedEntity | None = None
+
+        for label, (ent_id, category) in self.label_index.items():
+            if label in text_lower:
+                entity = NormalizedEntity(
+                    id=ent_id,
+                    label=label,
+                    category=category,
+                    ancestors=[category] if category != "unknown" else [],
+                    mention=label,
+                    source="mini_kg",
+                )
+                if category == "gene" and gene is None:
+                    gene = entity
+                elif target is None:
+                    target = entity
+            if gene and target:
+                break
+        return gene, target
+
+    def _claim_from_payload(self, payload: Mapping[str, object] | str | Claim) -> Claim:
+        if isinstance(payload, Claim):
+            return payload
+        if isinstance(payload, str):
+            text = payload
+            claim_id = f"claim-{_sha1_slug(text)}"
+            return Claim(id=claim_id, text=text, evidence=self._extract_citations(text))
+
+        claim_id = str(payload.get("id") or f"claim-{_sha1_slug(str(payload))}")
+        text = str(payload.get("text") or "")
+        evidence_raw = payload.get("evidence", [])
+        evidence = [str(e) for e in evidence_raw] if isinstance(evidence_raw, list) else []
+        return Claim(id=claim_id, text=text, evidence=evidence)
+
+    def normalize(self, payload: AuditPayload) -> NormalizationResult:
+        """Normalize a raw payload into a Claim + NormalizedTriple."""
+        claim = self._claim_from_payload(payload)
+        # Gather candidate entities
+        subject_raw: str | Mapping[str, object] | None = None
+        object_raw: str | Mapping[str, object] | None = None
+        predicate = "biolink:related_to"
+        citations: list[str] = list(claim.evidence)
+
+        if isinstance(payload, Mapping):
+            subject_candidate = payload.get("subject") or payload.get("subj")
+            if isinstance(subject_candidate, (str, Mapping)):
+                subject_raw = subject_candidate
+
+            object_candidate = payload.get("object") or payload.get("obj")
+            if isinstance(object_candidate, (str, Mapping)):
+                object_raw = object_candidate
+            predicate = str(payload.get("predicate") or predicate)
+            payload_citations = payload.get("citations") or payload.get("evidence")
+            if isinstance(payload_citations, list):
+                citations.extend(str(c) for c in payload_citations)
+
+        # Pull citations from text/support spans
+        citations.extend(self._extract_citations(claim.text))
+        if claim.support_span:
+            citations.extend(self._extract_citations(claim.support_span))
+        citations = list(dict.fromkeys(citations))
+
+        subject = self._resolve_entity(subject_raw) if subject_raw else None
+        obj = self._resolve_entity(object_raw) if object_raw else None
+
+        if not subject or not obj:
+            inferred_subject, inferred_object = self._pick_entities_from_text(claim.text)
+            subject = subject or inferred_subject
+            obj = obj or inferred_object
+
+        if not subject or not obj:
+            raise ValueError("Unable to normalize claim entities from payload or text.")
+
+        triple = NormalizedTriple(
+            subject=subject,
+            predicate=predicate,
+            object=obj,
+            qualifiers={},
+            citations=citations,
+            provenance={"source": "normalizer-mini-kg"},
+        )
+
+        # Mirror normalized entities back onto the claim for UI/reporting.
+        claim.entities = [
+            EntityMention(
+                mention=subject.mention or subject.label,
+                norm_id=subject.id,
+                norm_label=subject.label,
+                source=subject.source,
+                metadata={"category": subject.category, "ancestors": subject.ancestors},
+            ),
+            EntityMention(
+                mention=obj.mention or obj.label,
+                norm_id=obj.id,
+                norm_label=obj.label,
+                source=obj.source,
+                metadata={"category": obj.category, "ancestors": obj.ancestors},
+            ),
+        ]
+        claim.metadata["normalized_triple"] = triple.to_dict()
+
+        return NormalizationResult(claim=claim, triple=triple, citations=citations)
+
+
+# ---------------------------------------------------------------------------
+# Facts builder and pipeline orchestration
+# ---------------------------------------------------------------------------
+def build_rule_facts(
+    triple: NormalizedTriple,
+    provenance: Sequence[CitationProvenance],
+) -> dict[str, object]:
+    """Construct the facts dictionary consumed by the rule engine."""
+    retracted = [p for p in provenance if p.status == "retracted"]
+    concerns = [p for p in provenance if p.status == "concern"]
+    clean = [p for p in provenance if p.status == "clean"]
+
+    return {
+        "claim": {
+            "predicate": triple.predicate,
+            "citations": [p.identifier for p in provenance],
+            "citation_count": len(provenance),
+        },
+        "type": {
+            "domain_category": triple.subject.category,
+            "range_category": triple.object.category,
+            "domain_valid": triple.subject.category in {"gene"},
+            "range_valid": triple.object.category in {"disease", "phenotype", "pathway", "gene"},
+        },
+        "ontology": {
+            "subject_has_ancestors": bool(triple.subject.ancestors),
+            "object_has_ancestors": bool(triple.object.ancestors),
+        },
+        "evidence": {
+            "retracted": [p.identifier for p in retracted],
+            "concerns": [p.identifier for p in concerns],
+            "clean": [p.identifier for p in clean],
+            "retracted_count": len(retracted),
+            "concern_count": len(concerns),
+            "clean_count": len(clean),
+            "has_multiple_sources": len(provenance) >= 2,
+        },
+    }
+
+
+@dataclass
+class AuditResult:
+    """Full output of an audit run."""
+
+    report: Report
+    evaluation: RuleEvaluation
+    score: float
+    verdict: str
+    facts: dict[str, object]
+    provenance: list[CitationProvenance]
 
 
 class SkepticPipeline:
-    """Placeholder orchestrator for the skeptic."""
+    """Orchestrator for normalization, provenance fetching, and rule evaluation."""
 
-    def __init__(self, config: Config | None = None) -> None:
+    PASS_THRESHOLD = 0.8
+    WARN_THRESHOLD = 0.2
+
+    def __init__(
+        self,
+        config: Config | None = None,
+        *,
+        normalizer: ClaimNormalizer | None = None,
+        provenance_fetcher: ProvenanceFetcher | None = None,
+        rules_path: str | Path | None = None,
+    ) -> None:
         self.config: dict[str, object] = dict(config) if config is not None else {}
+        self.normalizer = normalizer or ClaimNormalizer()
+        self.provenance_fetcher = provenance_fetcher or ProvenanceFetcher()
+        self.engine = (
+            RuleEngine.from_yaml(path=rules_path) if rules_path else RuleEngine.from_yaml()
+        )
 
-    def run(self, audit_payload: AuditPayload) -> Report:
+    def _verdict_for_score(self, score: float) -> str:
+        if score >= self.PASS_THRESHOLD:
+            return "PASS"
+        if score >= self.WARN_THRESHOLD:
+            return "WARN"
+        return "FAIL"
+
+    def run(self, audit_payload: AuditPayload) -> AuditResult:
         """Run the skeptic on a normalized audit payload."""
-        raise NotImplementedError("Pipeline logic to be implemented during development.")
+        normalization = self.normalizer.normalize(audit_payload)
+        provenance = self.provenance_fetcher.fetch_many(normalization.citations)
+        facts = build_rule_facts(normalization.triple, provenance)
+        evaluation = self.engine.evaluate(facts)
+        score = sum(evaluation.features.values())
+        verdict = self._verdict_for_score(score)
+
+        # Build a report with key stats embedded
+        task_id = (
+            audit_payload.get("task_id")
+            if isinstance(audit_payload, Mapping) and "task_id" in audit_payload
+            else normalization.claim.id
+        )
+        agent_name = (
+            audit_payload.get("agent_name")
+            if isinstance(audit_payload, Mapping) and "agent_name" in audit_payload
+            else "unknown"
+        )
+
+        report = Report(
+            task_id=str(task_id),
+            agent_name=str(agent_name),
+            summary=f"Verdict: {verdict} (score={score:.2f})",
+            claims=[normalization.claim],
+            findings=[],
+            suggested_fixes=[],
+            stats={
+                "verdict": verdict,
+                "score": score,
+                "rule_features": evaluation.features,
+                "citations": [p.to_dict() for p in provenance],
+            },
+        )
+
+        return AuditResult(
+            report=report,
+            evaluation=evaluation,
+            score=score,
+            verdict=verdict,
+            facts=facts,
+            provenance=list(provenance),
+        )

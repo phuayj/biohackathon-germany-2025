@@ -10,23 +10,12 @@ This is the MVP "hello audit card" demonstrating:
 from __future__ import annotations
 
 import streamlit as st
+from typing import cast
 
 from kg_skeptic.models import Claim, EntityMention
-from kg_skeptic.rules import RuleEngine, RuleEvaluation
-
-
-def _infer_species_from_text(text: str | None) -> str | None:
-    """Very lightweight species normalizer for demo claims.
-
-    If the surface text mentions humans/Homo sapiens, we normalize to NCBITaxon:9606.
-    """
-    if not text:
-        return None
-
-    lowered = text.lower()
-    if "human" in lowered or "humans" in lowered or "homo sapiens" in lowered:
-        return "NCBITaxon:9606"
-    return None
+from kg_skeptic.pipeline import AuditResult, SkepticPipeline
+from kg_skeptic.provenance import CitationProvenance
+from kg_skeptic.rules import RuleEvaluation
 
 
 # Canned claim for demonstration
@@ -54,54 +43,11 @@ CANNED_CLAIM = Claim(
     metadata={"confidence": 0.95, "extraction_method": "rule"},
 )
 
-# Threshold for PASS/FAIL (simple weighted sum over rule features)
-PASS_THRESHOLD = 0.5
 
-
-def build_facts_from_claim(claim: Claim) -> dict[str, object]:
-    """Build a facts dictionary from a claim for rule evaluation."""
-    normalized_entities = [e for e in claim.entities if e.norm_id]
-    # Species context: prefer explicit metadata, otherwise infer from text.
-    species_id = claim.metadata.get("species")
-    if not species_id:
-        species_id = _infer_species_from_text(claim.text) or _infer_species_from_text(
-            claim.support_span
-        )
-
-    # Persist inferred species back onto claim metadata for UI display.
-    if species_id and not claim.metadata.get("species"):
-        claim.metadata["species"] = species_id
-
-    qualifiers: dict[str, object] = {}
-    if species_id:
-        qualifiers["species"] = species_id
-
-    return {
-        "claim": {
-            "id": claim.id,
-            "text": claim.text,
-            "entity_count": len(normalized_entities),
-            "evidence_count": len(claim.evidence),
-            "evidence": claim.evidence,
-        },
-        "context": {
-            "species": species_id,
-            "qualifiers": qualifiers,
-        },
-    }
-
-
-def evaluate_claim(claim: Claim) -> tuple[RuleEvaluation, float, str]:
-    """Evaluate a claim using the rule engine.
-
-    Returns (evaluation, total_score, verdict).
-    """
-    engine = RuleEngine.from_yaml()
-    facts = build_facts_from_claim(claim)
-    evaluation = engine.evaluate(facts)
-    total_score = sum(evaluation.features.values())
-    verdict = "PASS" if total_score >= PASS_THRESHOLD else "FAIL"
-    return evaluation, total_score, verdict
+def _get_pipeline() -> SkepticPipeline:
+    if "pipeline" not in st.session_state:
+        st.session_state["pipeline"] = SkepticPipeline()
+    return cast(SkepticPipeline, st.session_state["pipeline"])
 
 
 def render_entity_badge(entity: EntityMention) -> None:
@@ -141,8 +87,44 @@ def render_rule_trace(evaluation: RuleEvaluation) -> None:
         st.caption(f"  ↳ {entry.because}")
 
 
-def render_audit_card(claim: Claim, evaluation: RuleEvaluation, score: float, verdict: str) -> None:
+def render_provenance(provenance: list[CitationProvenance]) -> None:
+    """Render provenance with status badges."""
+    if not provenance:
+        st.info("No supporting citations supplied.")
+        return
+
+    for record in provenance:
+        status = record.status
+        if status == "retracted":
+            color = "#b71c1c"
+            icon = "❌"
+        elif status == "concern":
+            color = "#e65100"
+            icon = "⚠️"
+        elif status == "clean":
+            color = "#1b5e20"
+            icon = "✅"
+        else:
+            color = "#37474f"
+            icon = "ℹ️"
+
+        st.markdown(
+            f'<span style="background-color: {color}; color: white; padding: 4px 8px; '
+            f'border-radius: 6px; font-size: 0.9em;">{icon} {status.upper()}</span> '
+            f"`{record.identifier}`",
+            unsafe_allow_html=True,
+        )
+        if record.url:
+            st.caption(f"[Link]({record.url}) • source={record.source}")
+
+
+def render_audit_card(result: AuditResult) -> None:
     """Render the main audit card."""
+    claim = result.report.claims[0]
+    evaluation = result.evaluation
+    score = result.score
+    verdict = result.verdict
+
     # Header with verdict
     verdict_color = "#2e7d32" if verdict == "PASS" else "#c62828"
     verdict_bg = "#c8e6c9" if verdict == "PASS" else "#ffcdd2"
@@ -151,36 +133,24 @@ def render_audit_card(claim: Claim, evaluation: RuleEvaluation, score: float, ve
     species = claim.metadata.get("species")
     species_str = f"&nbsp;•&nbsp;<span>Species: <code>{species}</code></span>" if species else ""
 
-    st.markdown(
-        f"""
-        <div style="
-            border: 2px solid {verdict_color};
-            border-radius: 8px;
-            padding: 16px;
-            margin-bottom: 16px;
-            background-color: {verdict_bg}20;
-        ">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <h3 style="margin: 0;">Audit Card</h3>
-                <span style="
-                    background-color: {verdict_color};
-                    color: white;
-                    padding: 4px 16px;
-                    border-radius: 20px;
-                    font-weight: bold;
-                    font-size: 1.1em;
-                ">{verdict}</span>
-            </div>
-            <div style="margin-top: 8px; font-size: 0.9em; color: #555;">
-                <span>Entities: <strong>{entity_count}</strong></span>
-                &nbsp;•&nbsp;
-                <span>Evidence: <strong>{evidence_count}</strong></span>
-                {species_str}
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    card_style = f"border: 2px solid {verdict_color}; border-radius: 8px; padding: 16px; margin-bottom: 16px; background-color: {verdict_bg}20;"
+    verdict_style = f"background-color: {verdict_color}; color: white; padding: 4px 16px; border-radius: 20px; font-weight: bold; font-size: 1.1em;"
+
+    card_html = f"""<div style="{card_style}">
+<div style="display: flex; justify-content: space-between; align-items: center;">
+<div>
+<h3 style="margin: 0;">Audit Card</h3>
+<div style="margin-top: 8px; font-size: 0.9em; color: #555;">
+<span>Entities: <strong>{entity_count}</strong></span>
+&nbsp;•&nbsp;
+<span>Evidence: <strong>{evidence_count}</strong></span>
+{species_str}
+</div>
+</div>
+<span style="{verdict_style}">{verdict}</span>
+</div>
+</div>"""
+    st.markdown(card_html, unsafe_allow_html=True)
 
     # Claim text
     st.subheader("Claim")
@@ -198,10 +168,8 @@ def render_audit_card(claim: Claim, evaluation: RuleEvaluation, score: float, ve
         st.write("")
 
     # Evidence
-    if claim.evidence:
-        st.subheader("Evidence")
-        for ev in claim.evidence:
-            st.markdown(f"- `{ev}`")
+    st.subheader("Evidence")
+    render_provenance(result.provenance)
 
     # Rules fired
     st.subheader("Rules Fired")
@@ -244,21 +212,15 @@ def main() -> None:
     # Audit button
     if st.button("🔍 Run Audit", type="primary", use_container_width=True):
         with st.spinner("Running audit..."):
-            evaluation, score, verdict = evaluate_claim(CANNED_CLAIM)
+            pipeline = _get_pipeline()
+            result = pipeline.run(CANNED_CLAIM)
             st.session_state.audit_run = True
-            st.session_state.evaluation = evaluation
-            st.session_state.score = score
-            st.session_state.verdict = verdict
+            st.session_state.result = result
 
     # Show results if audit has been run
     if st.session_state.audit_run:
         st.divider()
-        render_audit_card(
-            CANNED_CLAIM,
-            st.session_state.evaluation,
-            st.session_state.score,
-            st.session_state.verdict,
-        )
+        render_audit_card(st.session_state.result)
 
         # Reset button
         if st.button("Reset", use_container_width=True):

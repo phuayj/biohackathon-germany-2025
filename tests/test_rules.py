@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import cast
-
 import pytest
 
 from kg_skeptic.rules import DEFAULT_RULES_PATH, RuleEngine
@@ -19,52 +17,64 @@ def test_engine_loads_rules() -> None:
 
 
 @pytest.fixture
-def sample_facts() -> dict[str, object]:
+def sample_facts() -> dict[str, dict[str, object]]:
     return {
         "claim": {
-            "id": "claim-001",
-            "text": "TP53 is implicated in breast cancer.",
-            "entity_count": 2,
-            "evidence_count": 0,
-            "evidence": [],
+            "citation_count": 2,
         },
-        "context": {"species": "9606"},
+        "type": {
+            "domain_category": "gene",
+            "range_category": "disease",
+            "domain_valid": True,
+            "range_valid": True,
+        },
+        "ontology": {
+            "subject_has_ancestors": True,
+            "object_has_ancestors": False,
+        },
+        "evidence": {
+            "retracted": [],
+            "concerns": [],
+            "retracted_count": 0,
+            "concern_count": 0,
+            "has_multiple_sources": True,
+        },
     }
 
 
-def test_evaluate_returns_features_and_trace(sample_facts: dict[str, object]) -> None:
+def test_evaluate_returns_features_and_trace(sample_facts: dict[str, dict[str, object]]) -> None:
     engine = RuleEngine.from_yaml()
     result = engine.evaluate(sample_facts)
 
-    assert set(result.features.keys()) == {rule.id for rule in engine.rules}
-    assert pytest.approx(result.features["has_species_context"]) == 0.4
-    assert result.features["missing_species_context"] == 0.0
-    assert pytest.approx(result.features["weak_evidence"]) == -1.0
-    assert pytest.approx(result.features["has_concrete_entities"]) == 0.8
-
-    trace_messages = result.trace.messages()
-    assert trace_messages, "Trace should contain fired rule explanations"
-    assert any("species context was provided" in msg for msg in trace_messages)
-    assert any("did not cite any evidence" in msg for msg in trace_messages)
-
-
-def test_negated_condition_triggers_when_missing_species(sample_facts: dict[str, object]) -> None:
-    sample_facts["context"] = {}
-    claim = cast(dict[str, object], sample_facts["claim"])
-    claim["evidence_count"] = 2
-    claim["evidence"] = ["PMID:123"]
-
-    engine = RuleEngine.from_yaml()
-    result = engine.evaluate(sample_facts)
-
-    assert result.features["has_species_context"] == 0.0
-    assert pytest.approx(result.features["missing_species_context"]) == -0.6
-    # with evidence present weak_evidence should not fire
-    assert result.features["weak_evidence"] == 0.0
+    rule_ids = {rule.id for rule in engine.rules}
+    assert set(result.features.keys()) == rule_ids
+    assert pytest.approx(result.features["type_domain_range_valid"]) == 0.8
+    assert result.features["type_domain_range_violation"] == 0.0
+    assert pytest.approx(result.features["ontology_closure_hpo"]) == 0.4
+    assert pytest.approx(result.features["multi_source_bonus"]) == 0.3
+    assert result.features["minimal_evidence"] == 0.0
 
     trace_ids = {entry.rule_id for entry in result.trace.entries}
-    assert "missing_species_context" in trace_ids
-    assert "has_species_context" not in trace_ids
+    assert "type_domain_range_valid" in trace_ids
+    assert "ontology_closure_hpo" in trace_ids
+    assert "multi_source_bonus" in trace_ids
+
+
+def test_retraction_and_minimal_evidence_rules(sample_facts: dict[str, dict[str, object]]) -> None:
+    evidence = sample_facts["evidence"]
+    assert isinstance(evidence, dict)
+    evidence["retracted_count"] = 1
+    evidence["retracted"] = ["PMID:RETRACT123"]
+    evidence["has_multiple_sources"] = False
+    sample_facts["claim"]["citation_count"] = 0
+
+    engine = RuleEngine.from_yaml()
+    result = engine.evaluate(sample_facts)
+
+    assert pytest.approx(result.features["retraction_gate"]) == -1.5
+    assert pytest.approx(result.features["minimal_evidence"]) == -0.6
+    assert result.features["multi_source_bonus"] == 0.0
+    assert "retraction_gate" in {entry.rule_id for entry in result.trace.entries}
 
 
 class TestRuleConditionEvaluation:

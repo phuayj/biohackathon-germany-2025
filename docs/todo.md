@@ -31,31 +31,31 @@
 - [ ] Extend MCP adapters: GO/Reactome pathways, DisGeNET, BioCypher/Neo4j local KG adapter.
 
 ### Claim Pipeline
-- [ ] Implement claim ingest/normalization pipeline that turns agent transcripts into atomic claims with entity IDs and provenance.
-- [ ] LLM-based triple extraction from natural language (optional, rule-first fallback).
+- [x] Implement claim ingest/normalization pipeline that turns agent transcripts into atomic claims with entity IDs and provenance.
+- [x] LLM-based triple extraction from natural language (optional, rule-first fallback).
 - [ ] Resolve canonical IDs via `ids.*` tools; attach labels and ontology ancestors.
 
 ### Provenance & Caching
-- [ ] For each PMID/DOI, fetch via `europepmc.fetch` and `crossref.retractions`.
-- [ ] Disk cache all responses to `data/cache/*.json`.
-- [ ] Graceful fallback when APIs are down (show WARN, don't auto-PASS).
+- [x] For each PMID/DOI, fetch via `europepmc.fetch` and `crossref.retractions`.
+- [x] Disk cache all responses to `data/cache/*.json`.
+- [x] Graceful fallback when APIs are down (show WARN, don't auto-PASS).
 
 ### Core Rule Set Implementation
-- [ ] **type_domain_range:** Biolink-valid domain/range validation.
-- [ ] **retraction_gate:** `trust=0` + FAIL if any citation retracted.
-- [ ] **expression_of_concern:** −0.5 score + WARN.
-- [ ] **ontology_closure_hpo:** HPO consistency with known disease phenotypes.
-- [ ] **multi_source_bonus:** +0.3 if ≥2 independent sources.
+- [x] **type_domain_range:** Biolink-valid domain/range validation.
+- [x] **retraction_gate:** `trust=0` + FAIL if any citation retracted.
+- [x] **expression_of_concern:** −0.5 score + WARN.
+- [x] **ontology_closure_hpo:** HPO consistency with known disease phenotypes.
+- [x] **multi_source_bonus:** +0.3 if ≥2 independent sources.
 - [ ] **time_freshness (optional):** Decay for old unsupported claims.
 
 ### Scoring & Decision
-- [ ] Concatenate rule features → weighted sum → scalar audit score.
-- [ ] Define PASS/WARN/FAIL thresholds.
+- [x] Concatenate rule features → weighted sum → scalar audit score.
+- [x] Define PASS/WARN/FAIL thresholds.
 
 ### UI v1 (Audit Card)
-- [ ] Generate "Audit Card" UI in Streamlit: normalized triple, PASS/FAIL badges, fired rules.
-- [ ] Display citations with status (clean/retracted/concern).
-- [ ] Templated rationale with "because" messages from rule traces.
+- [x] Generate "Audit Card" UI in Streamlit: normalized triple, PASS/FAIL badges, fired rules.
+- [x] Display citations with status (clean/retracted/concern).
+- [x] Templated rationale with "because" messages from rule traces.
 
 ---
 
