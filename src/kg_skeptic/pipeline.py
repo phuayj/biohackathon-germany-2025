@@ -480,6 +480,23 @@ class ClaimNormalizer:
                     if between:
                         relation_text = between
 
+            # Variant-level / allelic context: mark when the narrative explicitly
+            # mentions mutations or closely related terminology so downstream
+            # consumers can treat this as a GeneToDiseaseAssociation with
+            # variant-level qualifiers.
+            variant_patterns = [
+                r"\bmutations?\b",
+                r"\bvariants?\b",
+                r"\ballelic\b",
+                r"\balleles?\b",
+                r"\bmissense\b",
+                r"\bnonsense\b",
+                r"\bframeshift\b",
+                r"\btruncating\b",
+            ]
+            if any(re.search(pattern, text_lower) for pattern in variant_patterns):
+                qualifiers["has_variant_context"] = True
+
             qualifiers["association_narrative"] = relation_text
             return "biolink:gene_associated_with_condition", qualifiers
 

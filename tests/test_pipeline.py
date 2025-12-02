@@ -390,6 +390,45 @@ class TestPredicateInference:
         assert triple.predicate == "biolink:gene_associated_with_condition"
         # Qualifier should capture the relation phrase between subject and object
         assert triple.qualifiers.get("association_narrative") == "mutations increase"
+        # Variant-level context should be flagged for mutation-style narratives
+        assert triple.qualifiers.get("has_variant_context") is True
+
+    def test_gene_disease_claim_without_mutation_has_no_variant_flag(self) -> None:
+        """Gene→disease text without mutation terms should not set variant flag."""
+        normalizer = ClaimNormalizer(use_gliner=False)
+
+        mock_tool = MagicMock()
+        gene_norm = NormalizedID(
+            input_value="BRCA1",
+            input_type=IDType.HGNC_SYMBOL,
+            normalized_id=None,
+            label="BRCA1",
+            synonyms=[],
+            source="hgnc",
+            found=False,
+            metadata={},
+        )
+        disease_norm = NormalizedID(
+            input_value="breast cancer",
+            input_type=IDType.MONDO,
+            normalized_id=None,
+            label="breast cancer",
+            synonyms=[],
+            source="mondo",
+            found=False,
+            metadata={},
+        )
+        mock_tool.normalize_hgnc.return_value = gene_norm
+        mock_tool.normalize_mondo.return_value = disease_norm
+        normalizer._id_tool = mock_tool
+
+        text = "BRCA1 is associated with breast cancer risk."
+        result = normalizer.normalize({"text": text, "evidence": []})
+        triple = result.triple
+
+        assert triple.predicate == "biolink:gene_associated_with_condition"
+        assert triple.qualifiers.get("association_narrative") == "is associated with"
+        assert "has_variant_context" not in triple.qualifiers
 
 
 @pytest.mark.e2e
