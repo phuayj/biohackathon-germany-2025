@@ -8,10 +8,15 @@ offline-friendly by falling back to stubbed records when live fetches fail.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable, Mapping, Optional
+
+from kg_skeptic.mcp.europepmc import EuropePMCArticle, EuropePMCTool
+
+logger = logging.getLogger(__name__)
 
 
 def _default_cache_dir() -> Path:
@@ -64,9 +69,22 @@ class CitationProvenance:
 class ProvenanceFetcher:
     """Fetch and cache provenance for PMIDs/DOIs."""
 
-    def __init__(self, cache_dir: Path | str | None = None) -> None:
+    def __init__(
+        self,
+        cache_dir: Path | str | None = None,
+        use_live: bool = True,
+    ) -> None:
         self.cache_dir = Path(cache_dir) if cache_dir else _default_cache_dir()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.use_live = use_live
+        self._pmc_tool: EuropePMCTool | None = None
+
+    @property
+    def pmc_tool(self) -> EuropePMCTool:
+        """Lazy-initialize Europe PMC tool."""
+        if self._pmc_tool is None:
+            self._pmc_tool = EuropePMCTool()
+        return self._pmc_tool
 
     # ------------------------------------------------------------------ utils
     def _cache_path(self, kind: str, identifier: str) -> Path:
@@ -107,6 +125,67 @@ class ProvenanceFetcher:
             return f"https://doi.org/{identifier}"
         return None
 
+    def _article_to_provenance(
+        self, article: EuropePMCArticle, kind: str, identifier: str
+    ) -> CitationProvenance:
+        """Convert Europe PMC article to CitationProvenance."""
+        # Determine URL
+        url: str | None
+        if article.doi:
+            url = f"https://doi.org/{article.doi}"
+        elif article.pmid:
+            url = f"https://pubmed.ncbi.nlm.nih.gov/{article.pmid}"
+        else:
+            url = self._infer_url(kind, identifier)
+
+        # Check title for retraction markers
+        title_lower = (article.title or "").lower()
+        if "retract" in title_lower:
+            status = "retracted"
+        elif "concern" in title_lower or "expression of concern" in title_lower:
+            status = "concern"
+        else:
+            status = "clean"
+
+        return CitationProvenance(
+            identifier=identifier,
+            kind=kind,
+            status=status,
+            title=article.title if article.title != "[Article not found]" else None,
+            url=url,
+            cached=False,
+            source="europepmc",
+            metadata={
+                "pmid": article.pmid,
+                "pmcid": article.pmcid,
+                "doi": article.doi,
+                "journal": article.journal,
+                "pub_date": article.pub_date,
+                "authors": article.authors[:3],  # First 3 authors
+                "citation_count": article.citation_count,
+            },
+        )
+
+    def _fetch_live(self, kind: str, identifier: str) -> CitationProvenance | None:
+        """Attempt live fetch from Europe PMC. Returns None on failure."""
+        try:
+            if kind == "pmid":
+                # Strip PMID: prefix if present
+                pmid = identifier.replace("PMID:", "").strip()
+                article = self.pmc_tool.fetch(pmid)
+            else:  # doi
+                article = self.pmc_tool.fetch_by_doi(identifier)
+
+            # Check if article was actually found
+            if article.title == "[Article not found]":
+                logger.debug("Article not found in Europe PMC: %s", identifier)
+                return None
+
+            return self._article_to_provenance(article, kind, identifier)
+        except Exception as e:
+            logger.warning("Live fetch failed for %s: %s", identifier, e)
+            return None
+
     # ----------------------------------------------------------------- public
     def fetch(self, identifier: str) -> CitationProvenance:
         """Fetch provenance for a single PMID or DOI with caching."""
@@ -117,6 +196,14 @@ class ProvenanceFetcher:
         if cached:
             return cached
 
+        # Try live API first if enabled
+        if self.use_live:
+            record = self._fetch_live(kind, normalized)
+            if record:
+                self._write_cache(record)
+                return record
+
+        # Fall back to heuristic-based record
         status = self._infer_status(normalized)
         url = self._infer_url(kind, normalized)
 

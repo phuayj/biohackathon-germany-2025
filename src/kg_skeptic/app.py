@@ -13,7 +13,7 @@ import streamlit as st
 from typing import cast
 
 from kg_skeptic.models import Claim, EntityMention
-from kg_skeptic.pipeline import AuditResult, SkepticPipeline
+from kg_skeptic.pipeline import AuditResult, ClaimNormalizer, SkepticPipeline
 from kg_skeptic.provenance import CitationProvenance
 from kg_skeptic.rules import RuleEvaluation
 
@@ -44,19 +44,33 @@ CANNED_CLAIM = Claim(
 )
 
 
-def _get_pipeline() -> SkepticPipeline:
-    if "pipeline" not in st.session_state:
-        st.session_state["pipeline"] = SkepticPipeline()
-    return cast(SkepticPipeline, st.session_state["pipeline"])
+def _get_pipeline(use_gliner: bool = False) -> SkepticPipeline:
+    """Get or create a pipeline with the specified GLiNER2 setting."""
+    cache_key = f"pipeline_gliner_{use_gliner}"
+    if cache_key not in st.session_state:
+        normalizer = ClaimNormalizer(use_gliner=use_gliner)
+        st.session_state[cache_key] = SkepticPipeline(normalizer=normalizer)
+    return cast(SkepticPipeline, st.session_state[cache_key])
 
 
 def render_entity_badge(entity: EntityMention) -> None:
     """Render an entity as a styled badge."""
+    # Determine source badge
+    source = entity.source
+    if source == "gliner+mini_kg":
+        source_badge = '<span style="background-color: #5c6bc0; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.7em; margin-left: 4px;">GLiNER+KG</span>'
+    elif source == "gliner":
+        source_badge = '<span style="background-color: #7e57c2; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.7em; margin-left: 4px;">GLiNER</span>'
+    elif source == "mini_kg":
+        source_badge = '<span style="background-color: #26a69a; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.7em; margin-left: 4px;">KG</span>'
+    else:
+        source_badge = f'<span style="background-color: #78909c; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.7em; margin-left: 4px;">{source}</span>'
+
     if entity.norm_id:
         st.markdown(
             f'<span style="background-color: #1a472a; color: #98fb98; '
             f'padding: 2px 8px; border-radius: 4px; font-size: 0.9em;">'
-            f"**{entity.mention}** → `{entity.norm_id}`</span>",
+            f"**{entity.mention}** → `{entity.norm_id}`</span>{source_badge}",
             unsafe_allow_html=True,
         )
         if entity.norm_label:
@@ -65,7 +79,7 @@ def render_entity_badge(entity: EntityMention) -> None:
         st.markdown(
             f'<span style="background-color: #8b0000; color: #ffb6c1; '
             f'padding: 2px 8px; border-radius: 4px; font-size: 0.9em;">'
-            f"**{entity.mention}** → ⚠️ unnormalized</span>",
+            f"**{entity.mention}** → ⚠️ unnormalized</span>{source_badge}",
             unsafe_allow_html=True,
         )
 
@@ -197,25 +211,91 @@ def main() -> None:
     if "audit_run" not in st.session_state:
         st.session_state.audit_run = False
 
-    # Display canned claim info before audit
-    st.subheader("Demo Claim")
-    st.info(f'**"{CANNED_CLAIM.text}"**')
+    # Sidebar settings
+    with st.sidebar:
+        st.header("Settings")
+        use_gliner = st.toggle(
+            "Use GLiNER2 NER",
+            value=True,
+            help="Enable GLiNER2 neural entity recognition for improved entity extraction from claims.",
+        )
+        if use_gliner:
+            st.caption("🧠 Using GLiNER2 model for entity extraction")
+        else:
+            st.caption("📖 Using dictionary-based entity matching")
 
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        st.caption(f"Entities: {len(CANNED_CLAIM.entities)}")
-    with col2:
-        st.caption(f"Evidence: {len(CANNED_CLAIM.evidence)} citations")
+        st.divider()
+        st.caption("**Entity Source Legend:**")
+        st.markdown(
+            '<span style="background-color: #5c6bc0; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.8em;">GLiNER+KG</span> Neural + KG normalized',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<span style="background-color: #7e57c2; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.8em;">GLiNER</span> Neural extraction only',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<span style="background-color: #26a69a; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.8em;">KG</span> Dictionary/KG match',
+            unsafe_allow_html=True,
+        )
 
-    st.divider()
+    # Claim input section
+    st.subheader("Enter Claim")
 
-    # Audit button
-    if st.button("🔍 Run Audit", type="primary", use_container_width=True):
-        with st.spinner("Running audit..."):
-            pipeline = _get_pipeline()
-            result = pipeline.run(CANNED_CLAIM)
-            st.session_state.audit_run = True
-            st.session_state.result = result
+    # Tab for demo vs custom claim
+    tab_demo, tab_custom = st.tabs(["Demo Claim", "Custom Claim"])
+
+    with tab_demo:
+        st.info(f'**"{CANNED_CLAIM.text}"**')
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            st.caption(f"Entities: {len(CANNED_CLAIM.entities)}")
+        with col2:
+            st.caption(f"Evidence: {len(CANNED_CLAIM.evidence)} citations")
+
+        if st.button(
+            "🔍 Audit Demo Claim", type="primary", use_container_width=True, key="demo_btn"
+        ):
+            with st.spinner(
+                "Running audit..." + (" (loading GLiNER2 model...)" if use_gliner else "")
+            ):
+                pipeline = _get_pipeline(use_gliner=use_gliner)
+                result = pipeline.run(CANNED_CLAIM)
+                st.session_state.audit_run = True
+                st.session_state.result = result
+
+    with tab_custom:
+        claim_text = st.text_area(
+            "Claim text",
+            placeholder="e.g., TP53 mutations are associated with lung cancer development.",
+            height=100,
+        )
+        evidence_input = st.text_input(
+            "Evidence (comma-separated PMIDs/DOIs)",
+            placeholder="e.g., PMID:12345678, PMID:87654321",
+        )
+
+        if st.button(
+            "🔍 Audit Custom Claim", type="primary", use_container_width=True, key="custom_btn"
+        ):
+            if not claim_text.strip():
+                st.error("Please enter a claim text.")
+            else:
+                # Parse evidence
+                evidence = [e.strip() for e in evidence_input.split(",") if e.strip()]
+
+                with st.spinner(
+                    "Running audit..." + (" (loading GLiNER2 model...)" if use_gliner else "")
+                ):
+                    pipeline = _get_pipeline(use_gliner=use_gliner)
+                    result = pipeline.run(
+                        {
+                            "text": claim_text,
+                            "evidence": evidence,
+                        }
+                    )
+                    st.session_state.audit_run = True
+                    st.session_state.result = result
 
     # Show results if audit has been run
     if st.session_state.audit_run:

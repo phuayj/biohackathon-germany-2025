@@ -20,6 +20,7 @@ from .mcp.mini_kg import load_mini_kg_backend
 from .mcp.kg import InMemoryBackend, KGEdge
 from .provenance import CitationProvenance, ProvenanceFetcher
 from .rules import RuleEngine, RuleEvaluation
+from .ner import GLiNER2Extractor, ExtractedEntity
 
 Config = Mapping[str, object]
 AuditPayload = Mapping[str, object] | str | Claim
@@ -104,9 +105,24 @@ class NormalizationResult:
 class ClaimNormalizer:
     """Normalize claims into typed triples and extract citations."""
 
-    def __init__(self, kg_backend: InMemoryBackend | None = None) -> None:
+    def __init__(
+        self,
+        kg_backend: InMemoryBackend | None = None,
+        *,
+        use_gliner: bool = False,
+    ) -> None:
         self.backend = kg_backend or load_mini_kg_backend()
         self.label_index = self._build_label_index(self.backend.edges)
+        self.use_gliner = use_gliner
+        self._gliner_extractor: GLiNER2Extractor | None = None
+
+    def _get_gliner_extractor(self) -> GLiNER2Extractor:
+        """Lazily initialize GLiNER2 extractor."""
+        if self._gliner_extractor is None:
+            self._gliner_extractor = GLiNER2Extractor(
+                entity_types=["gene", "protein", "disease", "phenotype", "pathway"],
+            )
+        return self._gliner_extractor
 
     @staticmethod
     def _build_label_index(edges: Sequence[KGEdge]) -> dict[str, tuple[str, str]]:
@@ -177,10 +193,66 @@ class ClaimNormalizer:
             )
         return None
 
-    def _pick_entities_from_text(
+    def _gliner_to_normalized(self, entity: ExtractedEntity) -> NormalizedEntity:
+        """Convert a GLiNER2 extracted entity to a NormalizedEntity."""
+        # Map GLiNER2 labels to our category system
+        label_map = {
+            "gene": "gene",
+            "protein": "gene",  # Treat proteins as genes for now
+            "disease": "disease",
+            "phenotype": "phenotype",
+            "pathway": "pathway",
+        }
+        category = label_map.get(entity.label, "unknown")
+
+        # Try to resolve against mini KG first for better normalization
+        text_lower = entity.text.lower()
+        if text_lower in self.label_index:
+            ent_id, kg_category = self.label_index[text_lower]
+            return NormalizedEntity(
+                id=ent_id,
+                label=entity.text,
+                category=kg_category,
+                ancestors=[kg_category] if kg_category != "unknown" else [],
+                mention=entity.text,
+                source="gliner+mini_kg",
+            )
+
+        # Fall back to GLiNER2 category without KG normalization
+        return NormalizedEntity(
+            id=f"gliner:{entity.text.lower().replace(' ', '_')}",
+            label=entity.text,
+            category=category,
+            ancestors=[category] if category != "unknown" else [],
+            mention=entity.text,
+            source="gliner",
+        )
+
+    def _pick_entities_from_text_gliner(
         self, text: str
     ) -> tuple[NormalizedEntity | None, NormalizedEntity | None]:
-        """Heuristic entity detection: pick first gene and first non-gene target."""
+        """Entity detection using GLiNER2 model."""
+        extractor = self._get_gliner_extractor()
+        entities = extractor.extract(text)
+
+        gene: NormalizedEntity | None = None
+        target: NormalizedEntity | None = None
+
+        for entity in entities:
+            normalized = self._gliner_to_normalized(entity)
+            if normalized.category in ("gene",) and gene is None:
+                gene = normalized
+            elif target is None:
+                target = normalized
+            if gene and target:
+                break
+
+        return gene, target
+
+    def _pick_entities_from_text_dict(
+        self, text: str
+    ) -> tuple[NormalizedEntity | None, NormalizedEntity | None]:
+        """Heuristic entity detection using dictionary matching."""
         text_lower = text.lower()
         gene: NormalizedEntity | None = None
         target: NormalizedEntity | None = None
@@ -202,6 +274,30 @@ class ClaimNormalizer:
             if gene and target:
                 break
         return gene, target
+
+    def _pick_entities_from_text(
+        self, text: str
+    ) -> tuple[NormalizedEntity | None, NormalizedEntity | None]:
+        """Pick subject/object entities from text.
+
+        Uses GLiNER2 if enabled, otherwise falls back to dictionary matching.
+        If GLiNER2 fails or returns incomplete results, dictionary matching is used
+        as a fallback.
+        """
+        if self.use_gliner:
+            try:
+                gene, target = self._pick_entities_from_text_gliner(text)
+                # Fall back to dictionary if GLiNER2 didn't find both entities
+                if gene is None or target is None:
+                    dict_gene, dict_target = self._pick_entities_from_text_dict(text)
+                    gene = gene or dict_gene
+                    target = target or dict_target
+                return gene, target
+            except (ImportError, RuntimeError):
+                # Fall back to dictionary matching if GLiNER2 fails
+                pass
+
+        return self._pick_entities_from_text_dict(text)
 
     def _claim_from_payload(self, payload: Mapping[str, object] | str | Claim) -> Claim:
         if isinstance(payload, Claim):
