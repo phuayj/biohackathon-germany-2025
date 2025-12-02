@@ -50,7 +50,6 @@
 - [x] **ontology_sibling_conflict:** WARN when subject/object are ontology siblings (e.g., HPO siblings) instead of parent/child; expose `WARN_ontology_sibling_conflict` label. Once implemented, update `REAL_O01` expectations in `tests/test_pipeline_e2e.py`.
 - [ ] **time_freshness (optional):** Decay for old unsupported claims.
 - [x] **self_negation_conflict:** Model explicit self-negation / refuting-evidence conflicts (e.g., `REAL_F04`); once implemented, re-run `uv run pytest -m e2e tests/test_pipeline_e2e.py::TestSkepticPipelineE2E::test_seed_claim_fixture_jsonl` and update expectations for `REAL_F04` in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`.
-- [ ] **negation_detection_improvement:** Move negation cue detection to a data-driven/linguistic pattern set instead of hard-coded phrases.
 - [ ] **extraction_low_confidence:** Add a rule capturing low-confidence extraction / vague predicates (e.g., `REAL_F05`); after implementation, re-run the same E2E seed fixture test and update `REAL_F05` expectations in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`.
 - [ ] **opposite_predicate_same_context:** Add a rule for opposite predicates in the same context (e.g., `REAL_025`); after implementation, re-run the same E2E seed fixture test and update `REAL_025` expectations in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`, removing the temporary WARN override.
 
@@ -126,7 +125,8 @@
 - [ ] Deterministic card generation (numbers as fixed fields, LLM only writes connective text).
 - [ ] UI: badges, copy-to-clipboard JSON, "Not medical advice" banner.
 - [ ] Anonymized audit logs for reproducibility.
- - [ ] Refine variant-context detection beyond simple mutation keywords (e.g., better patterns/NER for `has_variant_context` on GeneToDiseaseAssociation edges).
+- [ ] Improve negation detection beyond hard-coded phrases (data-driven patterns or lightweight NLP cues) alongside variant cue hardening.
+- [ ] Refine variant-context detection beyond simple mutation keywords (e.g., better patterns/NER for `has_variant_context` on GeneToDiseaseAssociation edges).
 
 ### Integration Testing
 - [ ] Measure hallucination-reduction when auditor guards a small LLM QA/KG agent.
