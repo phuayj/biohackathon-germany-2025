@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable, Mapping, Optional
 
+from kg_skeptic.mcp.crossref import CrossRefTool, RetractionStatus
 from kg_skeptic.mcp.europepmc import EuropePMCArticle, EuropePMCTool
 
 logger = logging.getLogger(__name__)
@@ -73,11 +74,18 @@ class ProvenanceFetcher:
         self,
         cache_dir: Path | str | None = None,
         use_live: bool = True,
+        use_crossref: bool | None = None,
+        crossref_email: Optional[str] = None,
     ) -> None:
         self.cache_dir = Path(cache_dir) if cache_dir else _default_cache_dir()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.use_live = use_live
         self._pmc_tool: EuropePMCTool | None = None
+        # CrossRef integration (for retraction status)
+        # Default to mirroring use_live unless explicitly overridden.
+        self.use_crossref = use_crossref if use_crossref is not None else use_live
+        self.crossref_email = crossref_email
+        self._crossref_tool: CrossRefTool | None = None
 
     @property
     def pmc_tool(self) -> EuropePMCTool:
@@ -85,6 +93,13 @@ class ProvenanceFetcher:
         if self._pmc_tool is None:
             self._pmc_tool = EuropePMCTool()
         return self._pmc_tool
+
+    @property
+    def crossref_tool(self) -> CrossRefTool:
+        """Lazy-initialize CrossRef retraction tool."""
+        if self._crossref_tool is None:
+            self._crossref_tool = CrossRefTool(email=self.crossref_email)
+        return self._crossref_tool
 
     # ------------------------------------------------------------------ utils
     def _cache_path(self, kind: str, identifier: str) -> Path:
@@ -186,6 +201,62 @@ class ProvenanceFetcher:
             logger.warning("Live fetch failed for %s: %s", identifier, e)
             return None
 
+    def _augment_with_crossref(self, record: CitationProvenance) -> CitationProvenance:
+        """Augment a provenance record with CrossRef retraction status, if available.
+
+        This only runs when CrossRef integration is enabled and a DOI can be
+        resolved for the record. Any CrossRef-derived status is folded into the
+        existing `status` field and additional details are stored under
+        `metadata["crossref_*"]`.
+        """
+        if not self.use_crossref:
+            return record
+
+        # Resolve DOI from record
+        doi: str | None = None
+        if record.kind == "doi":
+            identifier = record.identifier.strip()
+            if "doi.org/" in identifier:
+                doi = identifier.split("doi.org/")[-1]
+            else:
+                doi = identifier
+        else:
+            meta_doi = record.metadata.get("doi")
+            if isinstance(meta_doi, str) and meta_doi:
+                doi = meta_doi
+
+        if not doi:
+            return record
+
+        try:
+            info = self.crossref_tool.retractions(doi)
+        except Exception as e:  # pragma: no cover - network/transport errors
+            logger.debug("CrossRef retraction lookup failed for %s: %s", doi, e)
+            return record
+
+        # Always record CrossRef signal in metadata
+        record.metadata["crossref_status"] = info.status.value
+        record.metadata["crossref_doi"] = info.doi
+        if info.notice_doi:
+            record.metadata["crossref_notice_doi"] = info.notice_doi
+        if info.notice_url:
+            record.metadata["crossref_notice_url"] = info.notice_url
+        if info.date:
+            record.metadata["crossref_notice_date"] = info.date
+        if info.message:
+            record.metadata["crossref_message"] = info.message
+
+        # Map CrossRef status into our coarse-grained status categories
+        if info.status is RetractionStatus.RETRACTED:
+            record.status = "retracted"
+        elif info.status is RetractionStatus.CONCERN:
+            record.status = "concern"
+        # For corrections/errata we keep the existing status but still expose
+        # details via metadata, so rules can be extended later without
+        # changing pipeline semantics now.
+
+        return record
+
     # ----------------------------------------------------------------- public
     def fetch(self, identifier: str) -> CitationProvenance:
         """Fetch provenance for a single PMID or DOI with caching."""
@@ -200,6 +271,8 @@ class ProvenanceFetcher:
         if self.use_live:
             record = self._fetch_live(kind, normalized)
             if record:
+                # If we have a DOI, refine retraction status via CrossRef.
+                record = self._augment_with_crossref(record)
                 self._write_cache(record)
                 return record
 
@@ -215,6 +288,9 @@ class ProvenanceFetcher:
             cached=False,
             source="fallback",
         )
+        # Even when Europe PMC is unavailable, we can still attempt a CrossRef
+        # retraction lookup for DOIs if live mode is enabled.
+        record = self._augment_with_crossref(record)
         self._write_cache(record)
         return record
 

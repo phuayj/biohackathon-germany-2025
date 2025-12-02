@@ -41,7 +41,7 @@
 
 ### Provenance Fetch
 - [x] For each PMID/DOI in claim or KG edge, call `europepmc.fetch`.
-- [ ] Integrate `crossref.retractions` for robust retraction checking (currently using heuristics).
+- [x] Integrate `crossref.retractions` for robust retraction checking (augmenting heuristics).
 - [x] Cache all responses to `data/cache` (JSON).
 - [x] Graceful fallback when APIs are down (show WARN, don't auto-PASS).
 
