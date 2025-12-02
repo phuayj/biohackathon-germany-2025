@@ -33,7 +33,7 @@
 ### Claim Pipeline
 - [x] Implement claim ingest/normalization pipeline that turns agent transcripts into atomic claims with entity IDs and provenance.
 - [x] LLM-based triple extraction from natural language (optional, rule-first fallback).
-- [ ] Resolve canonical IDs via `ids.*` tools; attach labels and ontology ancestors.
+- [x] Resolve canonical IDs via `ids.*` tools; attach labels and ontology ancestors.
 
 ### Provenance & Caching
 - [x] For each PMID/DOI, fetch via `europepmc.fetch`.

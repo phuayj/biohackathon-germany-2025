@@ -110,6 +110,42 @@ class IDNormalizerTool:
 
         return cast(dict[str, object], payload)
 
+    # -------------------------------------------------------------------------
+    # Ontology helpers
+    # -------------------------------------------------------------------------
+
+    def _get_obo_ancestors(self, ontology: str, obo_id: Optional[str]) -> list[str]:
+        """Fetch ontology ancestors (by OBO ID) from OLS4.
+
+        Returns a best-effort list of ancestor OBO IDs. Network errors or
+        unexpected payloads are treated as "no ancestors".
+        """
+        if not obo_id:
+            return []
+
+        iri = f"http://purl.obolibrary.org/obo/{obo_id.replace(':', '_')}"
+        url = f"{self.OLS_API_URL}/ontologies/{ontology}/terms/{quote(iri, safe='')}/ancestors"
+
+        try:
+            data = self._fetch_json(url)
+        except RuntimeError:
+            return []
+
+        embedded_value = data.get("_embedded", {})
+        terms_list: list[Mapping[str, object]] = []
+        if isinstance(embedded_value, Mapping):
+            terms_value = embedded_value.get("terms", [])
+            if isinstance(terms_value, list):
+                terms_list = [term for term in terms_value if isinstance(term, Mapping)]
+
+        ancestors: list[str] = []
+        for term in terms_list:
+            obo_value = term.get("obo_id")
+            if isinstance(obo_value, str) and obo_value != obo_id:
+                ancestors.append(obo_value)
+
+        return ancestors
+
     # =========================================================================
     # HGNC / Gene Symbol Normalization
     # =========================================================================
@@ -437,6 +473,7 @@ class IDNormalizerTool:
         synonyms_value = term.get("synonyms", [])
         synonyms_list = synonyms_value if isinstance(synonyms_value, list) else []
         synonyms = [str(s) for s in synonyms_list]
+        ancestors = self._get_obo_ancestors("mondo", obo_id)
 
         return NormalizedID(
             input_value=mondo_id,
@@ -449,6 +486,7 @@ class IDNormalizerTool:
             metadata={
                 "description": term.get("description", []),
                 "iri": term.get("iri"),
+                "ancestors": ancestors,
             },
         )
 
@@ -493,6 +531,7 @@ class IDNormalizerTool:
         synonym_value = doc.get("synonym", [])
         synonym_list = synonym_value if isinstance(synonym_value, list) else []
         synonyms = [str(s) for s in synonym_list]
+        ancestors = self._get_obo_ancestors("mondo", obo_id)
         return NormalizedID(
             input_value=term,
             input_type=IDType.MONDO,
@@ -503,6 +542,7 @@ class IDNormalizerTool:
             found=True,
             metadata={
                 "iri": doc.get("iri"),
+                "ancestors": ancestors,
             },
         )
 
@@ -570,6 +610,7 @@ class IDNormalizerTool:
         synonyms_value = term.get("synonyms", [])
         synonyms_list = synonyms_value if isinstance(synonyms_value, list) else []
         synonyms = [str(s) for s in synonyms_list]
+        ancestors = self._get_obo_ancestors("hp", obo_id)
 
         return NormalizedID(
             input_value=hpo_id,
@@ -582,6 +623,7 @@ class IDNormalizerTool:
             metadata={
                 "description": term.get("description", []),
                 "iri": term.get("iri"),
+                "ancestors": ancestors,
             },
         )
 
@@ -626,6 +668,7 @@ class IDNormalizerTool:
         synonym_value = doc.get("synonym", [])
         synonym_list = synonym_value if isinstance(synonym_value, list) else []
         synonyms = [str(s) for s in synonym_list]
+        ancestors = self._get_obo_ancestors("hp", obo_id)
         return NormalizedID(
             input_value=term,
             input_type=IDType.HPO,
@@ -636,6 +679,7 @@ class IDNormalizerTool:
             found=True,
             metadata={
                 "iri": doc.get("iri"),
+                "ancestors": ancestors,
             },
         )
 

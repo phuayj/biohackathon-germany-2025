@@ -140,6 +140,10 @@ phenotype = ids.normalize_hpo("seizure")
 print(f"HPO ID: {phenotype.normalized_id}")  # HP:0001250
 print(f"Label: {phenotype.label}")
 
+# Ontology ancestry (MONDO/HPO)
+print(disease.metadata.get("ancestors"))   # e.g., MONDO parent/ancestor IDs
+print(phenotype.metadata.get("ancestors")) # e.g., HP ancestor IDs
+
 # Cross-references
 uniprot_ids = ids.hgnc_to_uniprot("HGNC:1100")  # ['P38398']
 hgnc_id = ids.uniprot_to_hgnc("P38398")          # HGNC:1100

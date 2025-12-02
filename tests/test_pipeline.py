@@ -7,6 +7,7 @@ import pytest
 
 from kg_skeptic.pipeline import ClaimNormalizer, SkepticPipeline
 from kg_skeptic.provenance import ProvenanceFetcher
+from kg_skeptic.mcp.ids import NormalizedID, IDType
 
 
 class TestSkepticPipeline:
@@ -34,7 +35,16 @@ class TestSkepticPipeline:
         assert result.verdict == "PASS"
         assert result.score >= pipeline.PASS_THRESHOLD
         assert result.report.stats["verdict"] == "PASS"
-        assert result.report.claims[0].metadata.get("normalized_triple")
+        triple = result.report.claims[0].metadata.get("normalized_triple")
+        assert isinstance(triple, dict)
+        subject = triple.get("subject")
+        obj = triple.get("object")
+        assert isinstance(subject, dict)
+        assert isinstance(obj, dict)
+        # Ancestors should be present for at least one side
+        assert isinstance(subject.get("ancestors"), list)
+        assert isinstance(obj.get("ancestors"), list)
+        assert subject["ancestors"] or obj["ancestors"]
 
     def test_pipeline_flags_retracted_citation(self, tmp_path: Path) -> None:
         """Retracted evidence should trigger FAIL verdict."""
@@ -109,6 +119,48 @@ class TestClaimNormalizerGLiNER:
         )
         assert result.triple.subject is not None
         assert result.triple.object is not None
+
+    def test_normalizer_uses_ids_ancestors(self) -> None:
+        """Test that ids.* ancestors are propagated into claim metadata."""
+        normalizer = ClaimNormalizer(use_gliner=False)
+
+        # Stub ID normalizer tool with deterministic MONDO ancestors
+        mock_tool = MagicMock()
+        mondo_norm = NormalizedID(
+            input_value="breast cancer",
+            input_type=IDType.MONDO,
+            normalized_id="MONDO:TEST",
+            label="breast cancer",
+            synonyms=[],
+            source="mondo",
+            found=True,
+            metadata={"ancestors": ["MONDO:PARENT1", "MONDO:PARENT2"]},
+        )
+        gene_norm = NormalizedID(
+            input_value="BRCA1",
+            input_type=IDType.HGNC_SYMBOL,
+            normalized_id=None,
+            label="BRCA1",
+            synonyms=[],
+            source="hgnc",
+            found=False,
+            metadata={},
+        )
+        mock_tool.normalize_mondo.return_value = mondo_norm
+        mock_tool.normalize_hgnc.return_value = gene_norm
+        normalizer._id_tool = mock_tool
+
+        result = normalizer.normalize(
+            {"text": "BRCA1 mutations cause breast cancer.", "evidence": []}
+        )
+        claim = result.claim
+        assert claim.entities, "Claim should have normalized entities"
+        # Expect subject to be gene, object to be disease
+        subject_meta = claim.entities[0].metadata
+        object_meta = claim.entities[1].metadata
+        assert subject_meta.get("category") == "gene"
+        assert object_meta.get("category") == "disease"
+        assert object_meta.get("ancestors") == ["MONDO:PARENT1", "MONDO:PARENT2"]
 
 
 @pytest.mark.e2e

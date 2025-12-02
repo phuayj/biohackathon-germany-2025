@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Sequence
 from collections.abc import Mapping
 
+from kg_skeptic.mcp.ids import IDNormalizerTool
 from .models import Claim, EntityMention, Report
 from .mcp.mini_kg import load_mini_kg_backend
 from .mcp.kg import InMemoryBackend, KGEdge
@@ -115,6 +116,7 @@ class ClaimNormalizer:
         self.label_index = self._build_label_index(self.backend.edges)
         self.use_gliner = use_gliner
         self._gliner_extractor: GLiNER2Extractor | None = None
+        self._id_tool: IDNormalizerTool | None = None
 
     def _get_gliner_extractor(self) -> GLiNER2Extractor:
         """Lazily initialize GLiNER2 extractor."""
@@ -123,6 +125,12 @@ class ClaimNormalizer:
                 entity_types=["gene", "protein", "disease", "phenotype", "pathway"],
             )
         return self._gliner_extractor
+
+    def _get_id_tool(self) -> IDNormalizerTool:
+        """Lazily initialize ID normalizer tool."""
+        if self._id_tool is None:
+            self._id_tool = IDNormalizerTool()
+        return self._id_tool
 
     @staticmethod
     def _build_label_index(edges: Sequence[KGEdge]) -> dict[str, tuple[str, str]]:
@@ -227,6 +235,60 @@ class ClaimNormalizer:
             mention=entity.text,
             source="gliner",
         )
+
+    def _enrich_with_ids_tool(self, entity: NormalizedEntity) -> NormalizedEntity:
+        """Use ids.* MCP tools to resolve canonical IDs and ontology ancestors.
+
+        Best-effort: if the tools or network are unavailable, the original
+        entity is returned unchanged.
+        """
+        try:
+            tool = self._get_id_tool()
+        except Exception:
+            return entity
+
+        try:
+            if entity.category == "gene":
+                identifier = (
+                    entity.id if entity.id.startswith("HGNC:") else entity.label or entity.id
+                )
+                norm = tool.normalize_hgnc(identifier)
+                if norm.found and norm.normalized_id:
+                    entity.id = norm.normalized_id
+                    if norm.label:
+                        entity.label = norm.label
+                    entity.source = "ids.hgnc"
+            elif entity.category == "disease":
+                identifier = (
+                    entity.id if entity.id.startswith("MONDO:") else entity.label or entity.id
+                )
+                norm = tool.normalize_mondo(identifier)
+                if norm.found and norm.normalized_id:
+                    entity.id = norm.normalized_id
+                    if norm.label:
+                        entity.label = norm.label
+                    entity.source = "ids.mondo"
+                    ancestors_value = norm.metadata.get("ancestors")
+                    if isinstance(ancestors_value, list):
+                        entity.ancestors = [str(a) for a in ancestors_value]
+            elif entity.category == "phenotype":
+                identifier = entity.id if entity.id.startswith("HP:") else entity.label or entity.id
+                norm = tool.normalize_hpo(identifier)
+                if norm.found and norm.normalized_id:
+                    entity.id = norm.normalized_id
+                    if norm.label:
+                        entity.label = norm.label
+                    entity.source = "ids.hpo"
+                    ancestors_value = norm.metadata.get("ancestors")
+                    if isinstance(ancestors_value, list):
+                        entity.ancestors = [str(a) for a in ancestors_value]
+        except Exception:
+            # Keep original entity on any MCP/HTTP failure
+            return entity
+
+        if not entity.ancestors and entity.category != "unknown":
+            entity.ancestors = [entity.category]
+        return entity
 
     def _pick_entities_from_text_gliner(
         self, text: str
@@ -351,6 +413,11 @@ class ClaimNormalizer:
 
         if not subject or not obj:
             raise ValueError("Unable to normalize claim entities from payload or text.")
+
+        # Enrich entities via ids.* MCP tools to obtain canonical IDs, labels,
+        # and ontology ancestors where possible.
+        subject = self._enrich_with_ids_tool(subject)
+        obj = self._enrich_with_ids_tool(obj)
 
         triple = NormalizedTriple(
             subject=subject,

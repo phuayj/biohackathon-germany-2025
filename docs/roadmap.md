@@ -37,7 +37,7 @@
 
 ### Claim → ID Normalization Flow
 - [x] LLM extracts triples from sentence OR accepts structured JSON input.
-- [ ] `ids.*` tools resolve to canonical IDs; attach labels and ontology ancestors.
+- [x] `ids.*` tools resolve to canonical IDs; attach labels and ontology ancestors.
 
 ### Provenance Fetch
 - [x] For each PMID/DOI in claim or KG edge, call `europepmc.fetch`.

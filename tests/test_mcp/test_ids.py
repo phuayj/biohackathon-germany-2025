@@ -161,6 +161,9 @@ class TestIDNormalizerTool:
         assert result.found is True
         assert result.normalized_id == "MONDO:0007254"
         assert result.label == "breast cancer"
+        # Ancestors metadata should be present (may be empty list in mocked tests)
+        assert "ancestors" in result.metadata
+        assert isinstance(result.metadata["ancestors"], list)
 
     @patch("kg_skeptic.mcp.ids.urlopen")
     def test_normalize_hpo(self, mock_urlopen: MagicMock) -> None:
@@ -191,6 +194,9 @@ class TestIDNormalizerTool:
         assert result.found is True
         assert result.normalized_id == "HP:0001250"
         assert result.label == "Seizure"
+        # Ancestors metadata should be present (may be empty list in mocked tests)
+        assert "ancestors" in result.metadata
+        assert isinstance(result.metadata["ancestors"], list)
 
     @patch("kg_skeptic.mcp.ids.urlopen")
     def test_hgnc_to_uniprot(self, mock_urlopen: MagicMock) -> None:
