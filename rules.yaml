@@ -39,6 +39,16 @@ rules:
           value: true
     because: "because ontology closure was available for at least one entity"
 
+  - id: ontology_sibling_conflict
+    description: Subject/object appear to be ontology siblings rather than parent/child
+    weight: -0.6
+    when:
+      all:
+        - fact: ontology.is_sibling_conflict
+          op: equals
+          value: true
+    because: "because {ontology.subject_label} and {ontology.object_label} look like ontology siblings (shared ancestors: {ontology.sibling_shared_ancestors})"
+
   - id: retraction_gate
     description: Fail hard if any supporting citation is retracted
     weight: -1.5

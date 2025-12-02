@@ -12,23 +12,26 @@ from pathlib import Path
 import json
 
 import pytest
+from typing import cast
 
 from kg_skeptic.pipeline import SkepticPipeline
 from kg_skeptic.provenance import ProvenanceFetcher
 
 
-def _load_e2e_claim_fixtures() -> list[dict]:
+def _load_e2e_claim_fixtures() -> list[dict[str, object]]:
     """Load curated seed claim fixtures from JSONL."""
     fixtures_path = Path(__file__).parent / "fixtures" / "e2e_claim_fixtures.jsonl"
     assert fixtures_path.is_file(), "Seed claim fixtures file should exist"
 
-    examples: list[dict] = []
+    examples: list[dict[str, object]] = []
     with fixtures_path.open() as f:
         for line in f:
             raw = line.strip()
             if not raw:
                 continue
-            examples.append(json.loads(raw))
+            loaded = json.loads(raw)
+            if isinstance(loaded, dict):
+                examples.append(loaded)
     return examples
 
 
@@ -77,14 +80,16 @@ class TestSkepticPipelineE2E:
         _load_e2e_claim_fixtures(),
         ids=lambda ex: str(ex.get("id")),
     )
-    def test_seed_claim_fixture_jsonl(self, example: dict, tmp_path: Path) -> None:
+    def test_seed_claim_fixture_jsonl(
+        self, example: dict[str, object], tmp_path: Path
+    ) -> None:
         """Run pipeline against a single curated seed claim fixture."""
         pipeline = SkepticPipeline(
             provenance_fetcher=ProvenanceFetcher(cache_dir=tmp_path, use_live=True),
         )
 
-        subject_info = example.get("subject") or {}
-        object_info = example.get("object") or {}
+        subject_info = cast(dict[str, object], example.get("subject") or {})
+        object_info = cast(dict[str, object], example.get("object") or {})
 
         subject_payload = {
             "id": subject_info.get("curie"),
@@ -99,7 +104,11 @@ class TestSkepticPipelineE2E:
         # retraction/concern status into synthetic PMID-style IDs so the
         # provenance layer can infer status without live network calls.
         citations: list[str] = []
-        for ev in example.get("evidence", []):
+        evidence_raw = example.get("evidence", [])
+        evidence_list = evidence_raw if isinstance(evidence_raw, list) else []
+        for ev in evidence_list:
+            if not isinstance(ev, dict):
+                continue
             ev_type = ev.get("type")
             if ev_type == "pubmed":
                 pmid = str(ev.get("pmid"))

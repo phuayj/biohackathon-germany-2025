@@ -47,7 +47,7 @@
 - [x] **expression_of_concern:** −0.5 score + WARN.
 - [x] **ontology_closure_hpo:** HPO consistency with known disease phenotypes.
 - [x] **multi_source_bonus:** +0.3 if ≥2 independent sources.
-- [ ] **ontology_sibling_conflict:** WARN when subject/object are ontology siblings (e.g., HPO siblings) instead of parent/child; expose `WARN_ontology_sibling_conflict` label. Once implemented, update `REAL_O01` expectations in `tests/test_pipeline_e2e.py`.
+- [x] **ontology_sibling_conflict:** WARN when subject/object are ontology siblings (e.g., HPO siblings) instead of parent/child; expose `WARN_ontology_sibling_conflict` label. Once implemented, update `REAL_O01` expectations in `tests/test_pipeline_e2e.py`.
 - [ ] **time_freshness (optional):** Decay for old unsupported claims.
 - [ ] **self_negation_conflict:** Model explicit self-negation / refuting-evidence conflicts (e.g., `REAL_F04`); once implemented, re-run `uv run pytest -m e2e tests/test_pipeline_e2e.py::TestSkepticPipelineE2E::test_seed_claim_fixture_jsonl` and update expectations for `REAL_F04` in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`.
 - [ ] **extraction_low_confidence:** Add a rule capturing low-confidence extraction / vague predicates (e.g., `REAL_F05`); after implementation, re-run the same E2E seed fixture test and update `REAL_F05` expectations in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`.

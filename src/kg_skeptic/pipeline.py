@@ -29,6 +29,14 @@ from .ner import GLiNER2Extractor, ExtractedEntity
 Config = Mapping[str, object]
 AuditPayload = Mapping[str, object] | str | Claim
 JSONValue = object
+ONTOLOGY_ROOT_TERMS: dict[str, set[str]] = {
+    # HPO: Phenotypic abnormality (root) and All
+    "HP": {"HP:0000118", "HP:0000001"},
+    # MONDO: disease or disorder
+    "MONDO": {"MONDO:0000001"},
+    # GO roots (molecular function, biological process, cellular component)
+    "GO": {"GO:0003674", "GO:0008150", "GO:0005575"},
+}
 
 
 # ---------------------------------------------------------------------------
@@ -646,6 +654,68 @@ class ClaimNormalizer:
 
 
 # ---------------------------------------------------------------------------
+# Ontology helpers
+# ---------------------------------------------------------------------------
+def _normalize_ancestor_ids(raw_values: Sequence[object] | list[object]) -> set[str]:
+    """Filter and normalize ancestor identifiers to uppercase CURIEs."""
+    ancestors: set[str] = set()
+    for value in raw_values:
+        if not isinstance(value, str):
+            continue
+        curie = value.strip()
+        if ":" not in curie:
+            continue
+        ancestors.add(curie.upper())
+    return ancestors
+
+
+def _detect_sibling_conflict(
+    subject: NormalizedEntity, obj: NormalizedEntity, predicate: str
+) -> tuple[bool, list[str]]:
+    """Detect ontology sibling conflicts between subject and object entities.
+
+    Returns:
+        A tuple of (is_conflict, shared_ancestors) where shared_ancestors is a
+        list of ontology ancestor CURIEs (excluding high-level roots).
+    """
+    if subject.id == obj.id:
+        return False, []
+    if subject.category != obj.category or subject.category == "unknown":
+        return False, []
+
+    predicate_lower = predicate.lower()
+    likely_peer_relation = predicate_lower in {"sibling_of"}
+    subj_prefix = subject.id.split(":", 1)[0].upper() if ":" in subject.id else ""
+    obj_prefix = obj.id.split(":", 1)[0].upper() if ":" in obj.id else ""
+
+    subj_ancestors = _normalize_ancestor_ids(subject.ancestors)
+    obj_ancestors = _normalize_ancestor_ids(obj.ancestors)
+
+    # Remove ontology root terms to avoid trivial overlaps.
+    roots = ONTOLOGY_ROOT_TERMS.get(subj_prefix, set())
+    subj_ancestors -= roots
+    obj_ancestors -= roots
+
+    subj_id_upper = subject.id.upper()
+    obj_id_upper = obj.id.upper()
+
+    # Skip when one term is an ancestor of the other (parent/child rather than siblings).
+    if subj_id_upper in obj_ancestors or obj_id_upper in subj_ancestors:
+        return False, []
+
+    shared = sorted(subj_ancestors & obj_ancestors)
+    if shared:
+        return True, shared
+
+    # Heuristic: for explicit sibling predicates in the same ontology namespace,
+    # treat as a sibling conflict even if ancestor data is missing.
+    if likely_peer_relation and subj_prefix and subj_prefix == obj_prefix:
+        return True, []
+
+    return False, []
+
+
+# ---------------------------------------------------------------------------
 # Facts builder and pipeline orchestration
 # ---------------------------------------------------------------------------
 def build_rule_facts(
@@ -657,6 +727,22 @@ def build_rule_facts(
     concerns = [p for p in provenance if p.status == "concern"]
     clean = [p for p in provenance if p.status == "clean"]
 
+    predicate = triple.predicate
+    subject_category = triple.subject.category
+    object_category = triple.object.category
+
+    # Allow ontology peer relations (e.g., sibling_of) between like-typed entities.
+    is_peer_relation = predicate.lower() in {"sibling_of"}
+    domain_valid = subject_category in {"gene"}
+    range_valid = object_category in {"disease", "phenotype", "pathway", "gene"}
+    if is_peer_relation and subject_category == object_category and subject_category != "unknown":
+        domain_valid = True
+        range_valid = True
+
+    sibling_conflict, shared_ancestors = _detect_sibling_conflict(
+        triple.subject, triple.object, predicate
+    )
+
     return {
         "claim": {
             "predicate": triple.predicate,
@@ -664,14 +750,18 @@ def build_rule_facts(
             "citation_count": len(provenance),
         },
         "type": {
-            "domain_category": triple.subject.category,
-            "range_category": triple.object.category,
-            "domain_valid": triple.subject.category in {"gene"},
-            "range_valid": triple.object.category in {"disease", "phenotype", "pathway", "gene"},
+            "domain_category": subject_category,
+            "range_category": object_category,
+            "domain_valid": domain_valid,
+            "range_valid": range_valid,
         },
         "ontology": {
             "subject_has_ancestors": bool(triple.subject.ancestors),
             "object_has_ancestors": bool(triple.object.ancestors),
+            "sibling_shared_ancestors": shared_ancestors,
+            "is_sibling_conflict": sibling_conflict,
+            "subject_label": triple.subject.label,
+            "object_label": triple.object.label,
         },
         "evidence": {
             "retracted": [p.identifier for p in retracted],
@@ -871,6 +961,13 @@ class SkepticPipeline:
         # Gate PASS on positive evidence signals so structurally well-formed
         # but weakly supported claims are downgraded to WARN.
         if verdict == "PASS" and not self._has_positive_evidence(facts):
+            verdict = "WARN"
+
+        # Downgrade ontology sibling conflicts to WARN so sibling-like pairs
+        # are surfaced even if other signals are strong.
+        ontology_raw = facts.get("ontology")
+        ontology = ontology_raw if isinstance(ontology_raw, Mapping) else {}
+        if verdict == "PASS" and ontology.get("is_sibling_conflict"):
             verdict = "WARN"
 
         # Build a report with key stats embedded
