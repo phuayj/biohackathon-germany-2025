@@ -158,18 +158,6 @@ class TestSkepticPipelineE2E:
         expected_decision = str(example.get("expected_decision"))
         expected_verdict = expected_decision.split("_", 1)[0]
 
-        # A few fixtures encode future, more fine-grained error types that are
-        # not yet represented as hard FAILs in the current rule set. Align the
-        # top-level verdict expectations with the implemented behavior until
-        # dedicated rules are added:
-        #
-        # - REAL_025: opposite predicate in the same context → currently a
-        #   WARN because the rule set does not yet model predicate-level
-        #   contradiction explicitly.
-        future_fail_warn_ids = {"REAL_025"}
-        if example_id in future_fail_warn_ids:
-            expected_verdict = "WARN"
-
         # Exercise normalized triple mapping: subject/object/predicate.
         claim = result.report.claims[0]
         triple = claim.metadata.get("normalized_triple")

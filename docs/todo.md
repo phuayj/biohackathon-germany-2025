@@ -51,7 +51,7 @@
 - [ ] **time_freshness (optional):** Decay for old unsupported claims.
 - [x] **self_negation_conflict:** Model explicit self-negation / refuting-evidence conflicts (e.g., `REAL_F04`); once implemented, re-run `uv run pytest -m e2e tests/test_pipeline_e2e.py::TestSkepticPipelineE2E::test_seed_claim_fixture_jsonl` and update expectations for `REAL_F04` in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`.
 - [x] **extraction_low_confidence:** Add a rule capturing low-confidence extraction / vague predicates (e.g., `REAL_F05`); after implementation, re-run the same E2E seed fixture test and update `REAL_F05` expectations in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`.
-- [ ] **opposite_predicate_same_context:** Add a rule for opposite predicates in the same context (e.g., `REAL_025`); after implementation, re-run the same E2E seed fixture test and update `REAL_025` expectations in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`, removing the temporary WARN override.
+- [x] **opposite_predicate_same_context:** Add a rule for opposite predicates in the same context (e.g., `REAL_025`); after implementation, re-run the same E2E seed fixture test and update `REAL_025` expectations in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`, removing the temporary WARN override.
 
 ### Scoring & Decision
 - [x] Concatenate rule features → weighted sum → scalar audit score.
@@ -79,6 +79,8 @@
 - [ ] Compute node features: degree, clustering, path counts, PPI weights.
 - [ ] Add rule feature aggregates to edge attributes.
 - [ ] **Swap curated KG check to Monarch:** Once a Monarch KG-backed check is implemented, replace/augment the current curated KG evidence (e.g., DisGeNET) with a Monarch-based `curated_kg_match` for gene→disease edges. See [linkml-store Monarch KG](https://linkml.io/linkml-store/how-to/Query-the-Monarch-KG.html).
+- [ ] Expand predicate polarity map (positive/negative verbs and biolink aliases) used by opposite-predicate checks.
+- [ ] Add fixtures covering mixed/ambiguous context polarity to validate detection paths.
 
 ### Suspicion GNN (R-GCN)
 - [ ] Prototype suspicion GNN (2-layer R-GCN/GAT) over 2–3 hop subgraphs.

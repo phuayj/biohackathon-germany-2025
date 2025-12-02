@@ -54,7 +54,7 @@
 - [ ] **Time freshness (optional):** Old unsupported claims decay slightly.
 - [x] Add explicit rule for self-negation (`REAL_F04`); re-run `uv run pytest -m e2e tests/test_pipeline_e2e.py::TestSkepticPipelineE2E::test_seed_claim_fixture_jsonl` and clean up the temporary WARN override.
 - [x] Add explicit rule for low-confidence extraction (`REAL_F05`); once implemented, re-run `uv run pytest -m e2e tests/test_pipeline_e2e.py::TestSkepticPipelineE2E::test_seed_claim_fixture_jsonl` and clean up the temporary WARN override.
-- [ ] Add explicit rule for opposite-predicate conflicts (`REAL_025`); once implemented, re-run `uv run pytest -m e2e tests/test_pipeline_e2e.py::TestSkepticPipelineE2E::test_seed_claim_fixture_jsonl` and clean up the temporary WARN override in `tests/test_pipeline_e2e.py` / `tests/fixtures/e2e_claim_fixtures.jsonl`.
+- [x] Add explicit rule for opposite-predicate conflicts (`REAL_025`); once implemented, re-run `uv run pytest -m e2e tests/test_pipeline_e2e.py::TestSkepticPipelineE2E::test_seed_claim_fixture_jsonl` and clean up the temporary WARN override in `tests/test_pipeline_e2e.py` / `tests/fixtures/e2e_claim_fixtures.jsonl`.
 
 ### Scoring & Decision
 - [x] Concatenate rule features into scalar audit score (weighted sum).

@@ -884,6 +884,95 @@ def _detect_sibling_conflict(
     return False, []
 
 
+def _predicate_polarity(predicate: str) -> str | None:
+    """Map predicate text to a coarse polarity."""
+    normalized = predicate.lower()
+    positive_markers = {
+        "increase",
+        "activate",
+        "upregulate",
+        "positively_regulate",
+        "promote",
+        "induce",
+        "stimulate",
+        "enhance",
+        "contribute",
+    }
+    negative_markers = {
+        "decrease",
+        "inhibit",
+        "downregulate",
+        "negatively_regulate",
+        "suppress",
+        "reduce",
+        "block",
+    }
+    for marker in positive_markers:
+        if marker in normalized:
+            return "positive"
+    for marker in negative_markers:
+        if marker in normalized:
+            return "negative"
+    return None
+
+
+def _detect_opposite_predicate_context(
+    triple: NormalizedTriple,
+    backend: KGBackend | None,
+) -> dict[str, object]:
+    """Detect if the predicate flips direction relative to known context edges."""
+    claim_polarity = _predicate_polarity(triple.predicate)
+    positive_count = 0
+    negative_count = 0
+    context_predicates: set[str] = set()
+
+    if backend is not None:
+        edges: list[KGEdge] = []
+        try:
+            edges.extend(backend.query_edge(triple.subject.id, triple.object.id).edges)
+        except Exception:
+            pass
+        try:
+            edges.extend(backend.query_edge(triple.object.id, triple.subject.id).edges)
+        except Exception:
+            pass
+
+        for edge in edges:
+            polarity = _predicate_polarity(edge.predicate)
+            if polarity is None:
+                continue
+            context_predicates.add(edge.predicate)
+            if polarity == "positive":
+                positive_count += 1
+            elif polarity == "negative":
+                negative_count += 1
+
+    context_polarity: str | None = None
+    if positive_count > 0 and negative_count == 0:
+        context_polarity = "positive"
+    elif negative_count > 0 and positive_count == 0:
+        context_polarity = "negative"
+    elif positive_count > 0 and negative_count > 0:
+        context_polarity = "mixed"
+
+    has_opposite = (
+        claim_polarity is not None
+        and context_polarity in {"positive", "negative"}
+        and claim_polarity != context_polarity
+    )
+
+    context_predicate_examples = ", ".join(sorted(context_predicates)) if context_predicates else ""
+
+    return {
+        "claim_predicate_polarity": claim_polarity,
+        "context_predicate_polarity": context_polarity,
+        "context_predicate_examples": context_predicate_examples,
+        "context_positive_predicate_count": positive_count,
+        "context_negative_predicate_count": negative_count,
+        "opposite_predicate_same_context": has_opposite,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Facts builder and pipeline orchestration
 # ---------------------------------------------------------------------------
@@ -942,6 +1031,7 @@ def build_rule_facts(
     provenance: Sequence[CitationProvenance],
     *,
     claim: Claim | None = None,
+    context_conflicts: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Construct the facts dictionary consumed by the rule engine."""
     citation_count = len(provenance)
@@ -1035,6 +1125,7 @@ def build_rule_facts(
             "refuting_stance_examples": refuting_evidence,
         },
         "conflicts": {
+            **(dict(context_conflicts) if isinstance(context_conflicts, Mapping) else {}),
             "self_negation_conflict": is_negated or has_refuting_evidence,
             "qualifier_negated": is_negated,
             "has_refuting_evidence": has_refuting_evidence,
@@ -1207,7 +1298,16 @@ class SkepticPipeline:
         """Run the skeptic on a normalized audit payload."""
         normalization = self.normalizer.normalize(audit_payload)
         provenance = self.provenance_fetcher.fetch_many(normalization.citations)
-        facts = build_rule_facts(normalization.triple, provenance, claim=normalization.claim)
+        context_conflicts = _detect_opposite_predicate_context(
+            normalization.triple,
+            getattr(self.normalizer, "backend", None),
+        )
+        facts = build_rule_facts(
+            normalization.triple,
+            provenance,
+            claim=normalization.claim,
+            context_conflicts=context_conflicts,
+        )
         # Attach curated KG signals (e.g., DisGeNET support) for rule engine.
         facts["curated_kg"] = self._build_curated_kg_facts(normalization.triple)
         evaluation = self.engine.evaluate(facts)
@@ -1249,6 +1349,8 @@ class SkepticPipeline:
         conflicts_raw = facts.get("conflicts")
         conflicts = conflicts_raw if isinstance(conflicts_raw, Mapping) else {}
         if conflicts.get("self_negation_conflict"):
+            verdict = "FAIL"
+        if conflicts.get("opposite_predicate_same_context"):
             verdict = "FAIL"
 
         extraction_raw = facts.get("extraction")

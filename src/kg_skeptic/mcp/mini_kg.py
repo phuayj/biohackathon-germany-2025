@@ -151,6 +151,25 @@ _CITATIONS: Sequence[_Citation] = [
     _Citation("PMID:30455423", "10.1038/s41586-018-0817-2", "APOE and neurodegeneration risk"),
 ]
 
+_CURATED_CONTEXT_EDGES: Sequence[KGEdge] = (
+    KGEdge(
+        subject="HGNC:12680",
+        predicate="biolink:positively_regulates",
+        object="GO:0001525",
+        subject_label="VEGFA",
+        object_label="angiogenesis",
+        properties={
+            "edge_type": "curated-gene-pathway",
+            "supporting_pmids": ["PMID:8618520"],
+            "supporting_dois": ["10.1038/376357a0"],
+            "confidence": 0.92,
+            "cohort": "curated-seed",
+            "context": "canonical pro-angiogenic role",
+        },
+        sources=["PMID:8618520", "DOI:10.1038/376357a0"],
+    ),
+)
+
 
 def _edge_properties(
     edge_type: str,
@@ -326,6 +345,12 @@ def _iter_gene_pathway_edges() -> Iterator[KGEdge]:
                 )
 
 
+def _iter_curated_context_edges() -> Iterator[KGEdge]:
+    """Yield curated context edges used for predicate polarity checks."""
+    for edge in _CURATED_CONTEXT_EDGES:
+        yield edge
+
+
 def iter_mini_kg_edges(max_edges: Optional[int] = None) -> Iterator[KGEdge]:
     """
     Iterate over the pre-seeded mini KG edges.
@@ -339,6 +364,7 @@ def iter_mini_kg_edges(max_edges: Optional[int] = None) -> Iterator[KGEdge]:
         _iter_gene_phenotype_edges,
         _iter_ppi_edges,
         _iter_gene_pathway_edges,
+        _iter_curated_context_edges,
     )
 
     for generator in generators:

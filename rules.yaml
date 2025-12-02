@@ -82,6 +82,16 @@ rules:
           value: true
     because: "because the claim carries a negation qualifier or refuting evidence (sources: {conflicts.negation_sources}; refuting={conflicts.refuting_evidence})"
 
+  - id: opposite_predicate_same_context
+    description: Predicate direction conflicts with known context for this subject/object pair
+    weight: -1.3
+    when:
+      all:
+        - fact: conflicts.opposite_predicate_same_context
+          op: equals
+          value: true
+    because: "because the predicate polarity ({conflicts.claim_predicate_polarity}) opposes context evidence ({conflicts.context_predicate_polarity}); context predicates: {conflicts.context_predicate_examples}"
+
   - id: extraction_low_confidence
     description: Low-confidence extraction with hedging language and fallback predicate
     weight: -1.1
