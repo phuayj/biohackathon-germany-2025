@@ -46,6 +46,8 @@ class TestSkepticPipeline:
         assert isinstance(subject.get("ancestors"), list)
         assert isinstance(obj.get("ancestors"), list)
         assert subject["ancestors"] or obj["ancestors"]
+        # Predicate should be canonical gene→condition
+        assert triple.get("predicate") == "biolink:gene_associated_with_condition"
 
     def test_pipeline_flags_retracted_citation(self, tmp_path: Path) -> None:
         """Retracted evidence should trigger FAIL verdict."""
@@ -267,6 +269,49 @@ class TestClaimNormalizerPathways:
         assert pathway_entity.norm_id == "GO:0007165"
         assert pathway_entity.norm_label == "signal transduction"
         assert pathway_entity.source == "pathways.go"
+
+
+class TestPredicateInference:
+    """Tests for canonical predicate and qualifier inference."""
+
+    def test_gene_disease_claim_infers_canonical_predicate_and_qualifier(self) -> None:
+        """Gene→disease text should yield canonical predicate and narrative qualifier."""
+        normalizer = ClaimNormalizer(use_gliner=False)
+
+        # Stub ID normalizer to avoid network calls and keep entities unchanged.
+        mock_tool = MagicMock()
+        gene_norm = NormalizedID(
+            input_value="BRCA1",
+            input_type=IDType.HGNC_SYMBOL,
+            normalized_id=None,
+            label="BRCA1",
+            synonyms=[],
+            source="hgnc",
+            found=False,
+            metadata={},
+        )
+        disease_norm = NormalizedID(
+            input_value="breast cancer",
+            input_type=IDType.MONDO,
+            normalized_id=None,
+            label="breast cancer",
+            synonyms=[],
+            source="mondo",
+            found=False,
+            metadata={},
+        )
+        mock_tool.normalize_hgnc.return_value = gene_norm
+        mock_tool.normalize_mondo.return_value = disease_norm
+        normalizer._id_tool = mock_tool
+
+        text = "BRCA1 mutations increase breast cancer risk."
+        result = normalizer.normalize({"text": text, "evidence": []})
+        triple = result.triple
+
+        # Predicate should be promoted from related_to to canonical gene_associated_with_condition
+        assert triple.predicate == "biolink:gene_associated_with_condition"
+        # Qualifier should capture the relation phrase between subject and object
+        assert triple.qualifiers.get("association_narrative") == "mutations increase"
 
 
 @pytest.mark.e2e

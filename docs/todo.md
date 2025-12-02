@@ -59,7 +59,7 @@
 - [x] Templated rationale with "because" messages from rule traces.
 
 ### Evidence & Predicate Hardening
-- [ ] **Make predicate explicit:** Record edges as `biolink:gene_associated_with_condition` (canonical gene→disease predicate) with optional free-text qualifiers (e.g., "increases risk") so type-domain-range rules fire positively. See [Biolink docs](https://biolink.github.io/biolink-model/gene_associated_with_condition/).
+- [x] **Make predicate explicit:** Record edges as `biolink:gene_associated_with_condition` (canonical gene→disease predicate) with optional free-text qualifiers (e.g., "increases risk") so type-domain-range rules fire positively. See [Biolink docs](https://biolink.github.io/biolink-model/gene_associated_with_condition/).
 - [ ] **Gate PASS on evidence signals:** Current PASS relies only on `has_species_context` and `has_concrete_entities`. Add at least one positive evidence rule (`curated_kg_match` or `evidence_multi_source`) so weaker claims can't PASS on structure alone. Validate gene→disease edges against Monarch KG. See [linkml-store Monarch KG](https://linkml.io/linkml-store/how-to/Query-the-Monarch-KG.html).
 - [ ] **Retraction/concern check enforcement:** Wire retraction rule so retracted PMID forces **FAIL** and "expression of concern" triggers **WARN**. Ensure integration with CrossRef retraction API.
 - [ ] **Variant-level qualifier (stretch):** When text mentions "mutations," store variant/allelic qualifier or boolean `has_variant_context=true` under `GeneToDiseaseAssociation` subclass. See [Biolink GeneToDiseaseAssociation](https://biolink.github.io/biolink-model/GeneToDiseaseAssociation/).

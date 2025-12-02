@@ -94,26 +94,13 @@ export DISGENET_API_KEY=your_disgenet_token
 
 before launching Streamlit. When configured, the audit card will include a “DisGeNET: Gene–Disease Associations” expander summarizing top-scoring disease associations for the normalized primary gene (via the `DisGeNETTool` MCP adapter).
 
-## Repository layout
-```
-src/kg_skeptic/
-├── app.py            # Streamlit UI
-├── pipeline.py       # End-to-end audit orchestration
-├── models.py         # Claim, Report, Finding dataclasses
-├── rules.py          # YAML-based rule engine
-├── ner.py            # GLiNER2 entity extraction
-├── provenance.py     # Citation fetching and caching
-├── mcp/              # MCP tool adapters
-│   ├── europepmc.py  # Europe PMC search/fetch
-│   ├── crossref.py   # Retraction lookups
-│   ├── ids.py        # ID normalization (HGNC, MONDO, HPO)
-│   ├── kg.py         # KG query interface
-│   └── mini_kg.py    # In-memory KG backend
-└── schemas/          # JSON schemas for reports
-rules.yaml            # Declarative audit rules
-docs/                 # Design notes, architecture, roadmap
-tests/                # Test suite (models, rules, MCP tools, pipeline)
-```
+## Project structure
+
+- **`src/kg_skeptic/`** — Core library: pipeline orchestration, data models, rule engine, NER, and provenance handling.
+- **`src/kg_skeptic/mcp/`** — MCP tool adapters for external services (Europe PMC, CrossRef, ID normalization) and the knowledge graph backends.
+- **`rules.yaml`** — Declarative audit rules (type constraints, ontology checks, evidence scoring).
+- **`tests/`** — Unit and integration tests for models, rules, MCP tools, and the full pipeline.
+- **`docs/`** — Design notes, architecture decisions, and roadmap.
 
 ## Current features
 - **Skeptic report schema**: Structured format for claims, findings, and suggested fixes with full provenance (`src/kg_skeptic/models.py`).

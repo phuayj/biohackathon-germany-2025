@@ -435,6 +435,51 @@ class ClaimNormalizer:
 
         return self._pick_entities_from_text_dict(text)
 
+    @staticmethod
+    def _infer_predicate_and_qualifiers(
+        subject: NormalizedEntity,
+        obj: NormalizedEntity,
+        predicate: str,
+        claim_text: str,
+    ) -> tuple[str, dict[str, JSONValue]]:
+        """Infer a canonical predicate and lightweight free-text qualifier.
+
+        For gene→condition style claims where no explicit predicate was supplied
+        (we default to ``biolink:related_to``), promote the edge to the
+        canonical Biolink predicate ``biolink:gene_associated_with_condition``
+        and attach a simple free-text qualifier capturing the relation phrase
+        from the original claim text where possible.
+        """
+        qualifiers: dict[str, JSONValue] = {}
+
+        # Respect explicit predicates supplied by the caller.
+        if predicate and predicate != "biolink:related_to":
+            return predicate, qualifiers
+
+        # Canonicalize common gene→condition relations.
+        if subject.category == "gene" and obj.category in {"disease", "phenotype"}:
+            relation_text = claim_text.strip()
+            subj_mention = (subject.mention or subject.label or "").strip()
+            obj_mention = (obj.mention or obj.label or "").strip()
+            text_lower = claim_text.lower()
+            subj_lower = subj_mention.lower()
+            obj_lower = obj_mention.lower()
+
+            # Best-effort extraction of the phrase between subject and object.
+            if subj_lower and obj_lower:
+                subj_idx = text_lower.find(subj_lower)
+                obj_idx = text_lower.find(obj_lower)
+                if 0 <= subj_idx < obj_idx:
+                    start = subj_idx + len(subj_mention)
+                    between = claim_text[start:obj_idx].strip(" .,:;")
+                    if between:
+                        relation_text = between
+
+            qualifiers["association_narrative"] = relation_text
+            return "biolink:gene_associated_with_condition", qualifiers
+
+        return predicate, qualifiers
+
     def _claim_from_payload(self, payload: Mapping[str, object] | str | Claim) -> Claim:
         if isinstance(payload, Claim):
             return payload
@@ -524,24 +569,33 @@ class ClaimNormalizer:
         subject = self._enrich_with_pathway_tool(subject)
         obj = self._enrich_with_pathway_tool(obj)
 
+        # Infer canonical predicate + lightweight qualifiers once entities
+        # are normalized and typed.
+        predicate, qualifiers = self._infer_predicate_and_qualifiers(
+            subject=subject,
+            obj=obj,
+            predicate=predicate,
+            claim_text=claim.text,
+        )
+
         triple = NormalizedTriple(
             subject=subject,
             predicate=predicate,
             object=obj,
-            qualifiers={},
+            qualifiers=qualifiers,
             citations=citations,
             provenance={"source": "normalizer-kg"},
         )
 
         # Mirror normalized entities back onto the claim for UI/reporting.
-        subject_metadata = {
+        subject_metadata: dict[str, object] = {
             "category": subject.category,
             "ancestors": subject.ancestors,
         }
         if subject.metadata:
             subject_metadata.update(subject.metadata)
 
-        object_metadata = {
+        object_metadata: dict[str, object] = {
             "category": obj.category,
             "ancestors": obj.ancestors,
         }
