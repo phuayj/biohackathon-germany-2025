@@ -9,7 +9,9 @@ This is the MVP "hello audit card" demonstrating:
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 
 import streamlit as st
 from collections.abc import Iterable
@@ -20,6 +22,109 @@ from kg_skeptic.pipeline import AuditResult, ClaimNormalizer, SkepticPipeline
 from kg_skeptic.mcp.kg import KGBackend, Neo4jBackend
 from kg_skeptic.provenance import CitationProvenance
 from kg_skeptic.rules import RuleEvaluation
+
+
+def _load_demo_claims_from_fixtures() -> list[tuple[str, Claim]]:
+    """Load demo claims from test fixtures and convert to Claim objects."""
+    # Try to find the fixtures file relative to project root
+    fixtures_path = (
+        Path(__file__).parent.parent.parent / "tests" / "fixtures" / "e2e_claim_fixtures.jsonl"
+    )
+    if not fixtures_path.exists():
+        return []
+
+    demo_claims: list[tuple[str, Claim]] = []
+    # Selected fixture IDs that showcase different scenarios
+    selected_ids = {
+        "REAL_D01": "PASS: TNF activates NF-κB",
+        "REAL_P11": "WARN: CFTR causes cystic fibrosis",
+        "REAL_E01": "FAIL: Retracted citation (STAT3)",
+        "REAL_Q01": "WARN: Tissue mismatch (RHO)",
+        "REAL_T01": "FAIL: Type violation (disease activates gene)",
+        "REAL_F04": "FAIL: Self-negation (IL6)",
+        "REAL_P05": "WARN: VEGFA increases angiogenesis",
+        "REAL_P10": "WARN: APP associated with Alzheimer's",
+        "REAL_M01": "PASS: Multi-source (CFTR)",
+    }
+
+    with open(fixtures_path) as f:
+        for line in f:
+            if not line.strip():
+                continue
+            fixture = json.loads(line)
+            fixture_id = fixture.get("id", "")
+            if fixture_id not in selected_ids:
+                continue
+
+            # Convert fixture to Claim with EntityMention objects
+            entities: list[EntityMention] = []
+
+            # Add subject entity
+            subject = fixture.get("subject", {})
+            if subject.get("curie") and subject.get("label"):
+                subject_type = fixture.get("subject_type", "unknown")
+                entities.append(
+                    EntityMention(
+                        mention=subject.get("label", ""),
+                        norm_id=subject.get("curie", ""),
+                        norm_label=subject.get("label", ""),
+                        source="fixture",
+                        metadata={"category": subject_type, "role": "subject"},
+                    )
+                )
+
+            # Add object entity
+            obj = fixture.get("object", {})
+            if obj.get("curie") and obj.get("label"):
+                obj_type = fixture.get("object_type", "unknown")
+                entities.append(
+                    EntityMention(
+                        mention=obj.get("label", ""),
+                        norm_id=obj.get("curie", ""),
+                        norm_label=obj.get("label", ""),
+                        source="fixture",
+                        metadata={"category": obj_type, "role": "object"},
+                    )
+                )
+
+            # Convert evidence to list of strings
+            evidence_list: list[str] = []
+            for ev in fixture.get("evidence", []):
+                ev_type = ev.get("type", "")
+                if ev_type == "pubmed" and ev.get("pmid"):
+                    evidence_list.append(f"PMID:{ev['pmid']}")
+                elif ev_type == "go" and ev.get("id"):
+                    evidence_list.append(ev["id"])
+                elif ev_type == "reactome" and ev.get("id"):
+                    evidence_list.append(ev["id"])
+                elif ev_type == "mondo" and ev.get("id"):
+                    evidence_list.append(ev["id"])
+                elif ev_type == "hpo" and ev.get("id"):
+                    evidence_list.append(ev["id"])
+
+            claim = Claim(
+                id=fixture_id,
+                text=fixture.get("claim", ""),
+                entities=entities,
+                support_span=None,
+                evidence=evidence_list,
+                metadata={
+                    "predicate": fixture.get("predicate", ""),
+                    "qualifiers": fixture.get("qualifiers", {}),
+                    "expected_decision": fixture.get("expected_decision", ""),
+                },
+            )
+
+            display_name = selected_ids[fixture_id]
+            demo_claims.append((display_name, claim))
+
+    # Sort by display name to keep consistent order
+    demo_claims.sort(key=lambda x: x[0])
+    return demo_claims
+
+
+# Load demo claims from fixtures
+DEMO_CLAIMS = _load_demo_claims_from_fixtures()
 
 
 def _extract_pathway_entities(claim: Claim) -> list[EntityMention]:
@@ -70,8 +175,8 @@ def _render_pathway_section(claim: Claim) -> None:
         st.write("")
 
 
-# Canned claim for demonstration
-CANNED_CLAIM = Claim(
+# Fallback canned claim for demonstration (used when fixtures aren't available)
+FALLBACK_CLAIM = Claim(
     id="claim-demo-001",
     text="BRCA1 mutations increase breast cancer risk in humans.",
     entities=[
@@ -80,7 +185,7 @@ CANNED_CLAIM = Claim(
             norm_id="HGNC:1100",
             norm_label="BRCA1 DNA repair associated",
             source="dictionary",
-            metadata={"symbol": "BRCA1", "alias": ["BRCC1", "FANCS"]},
+            metadata={"symbol": "BRCA1", "alias": ["BRCC1", "FANCS"], "category": "gene"},
         ),
         EntityMention(
             mention="breast cancer",
@@ -94,6 +199,10 @@ CANNED_CLAIM = Claim(
     evidence=["PMID:7545954", "PMID:28632866"],
     metadata={"confidence": 0.95, "extraction_method": "rule"},
 )
+
+# Add fallback to demo claims if fixtures weren't loaded
+if not DEMO_CLAIMS:
+    DEMO_CLAIMS.append(("Demo: BRCA1 and breast cancer", FALLBACK_CLAIM))
 
 
 def _build_neo4j_backend_from_env() -> KGBackend | None:
@@ -389,12 +498,69 @@ def main() -> None:
     tab_demo, tab_custom = st.tabs(["Demo Claim", "Custom Claim"])
 
     with tab_demo:
-        st.info(f'**"{CANNED_CLAIM.text}"**')
+        # Demo claim selector
+        demo_options = [name for name, _ in DEMO_CLAIMS]
+        selected_demo_idx = st.selectbox(
+            "Select a demo claim",
+            range(len(demo_options)),
+            format_func=lambda i: demo_options[i],
+            key="demo_select",
+        )
+        selected_claim = DEMO_CLAIMS[selected_demo_idx][1]
+
+        # Show claim text
+        st.info(f'**"{selected_claim.text}"**')
+
+        # Show metadata if available (expected decision, predicate)
+        expected = selected_claim.metadata.get("expected_decision", "")
+        predicate = selected_claim.metadata.get("predicate", "")
+        if expected or predicate:
+            meta_parts = []
+            if predicate:
+                meta_parts.append(f"Predicate: `{predicate}`")
+            if expected:
+                meta_parts.append(f"Expected: `{expected}`")
+            st.caption(" | ".join(meta_parts))
+
+        # Show evidence for the selected claim
+        st.markdown("**Evidence:**")
+        if selected_claim.evidence:
+            for ev in selected_claim.evidence:
+                # Color based on evidence type
+                if ev.startswith("PMID:"):
+                    color = "#1565c0"
+                    ev_type = "PMID"
+                elif ev.startswith("GO:"):
+                    color = "#2e7d32"
+                    ev_type = "GO"
+                elif ev.startswith("R-HSA"):
+                    color = "#6a1b9a"
+                    ev_type = "Reactome"
+                elif ev.startswith("MONDO:"):
+                    color = "#c62828"
+                    ev_type = "MONDO"
+                elif ev.startswith("HP:"):
+                    color = "#e65100"
+                    ev_type = "HPO"
+                else:
+                    color = "#455a64"
+                    ev_type = "Other"
+
+                st.markdown(
+                    f'<span style="background-color: {color}; color: white; padding: 2px 8px; '
+                    f'border-radius: 4px; font-size: 0.85em; margin-right: 4px;">'
+                    f"{ev_type}</span> `{ev}`",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.caption("No pre-defined evidence")
+
+        # Show evidence count
         col1, col2 = st.columns([1, 1])
         with col1:
-            st.caption(f"Entities: {len(CANNED_CLAIM.entities)}")
+            st.caption(f"Entities: {len(selected_claim.entities)}")
         with col2:
-            st.caption(f"Evidence: {len(CANNED_CLAIM.evidence)} citations")
+            st.caption(f"Evidence: {len(selected_claim.evidence)} citations")
 
         if st.button(
             "🔍 Audit Demo Claim", type="primary", use_container_width=True, key="demo_btn"
@@ -403,7 +569,7 @@ def main() -> None:
                 "Running audit..." + (" (loading GLiNER2 model...)" if use_gliner else "")
             ):
                 pipeline = _get_pipeline(use_gliner=use_gliner)
-                result = pipeline.run(CANNED_CLAIM)
+                result = pipeline.run(selected_claim)
                 st.session_state.audit_run = True
                 st.session_state.result = result
 
