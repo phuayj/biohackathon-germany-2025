@@ -737,6 +737,7 @@ class ClaimNormalizer:
         predicate = "biolink:related_to"
         citations: list[str] = list(claim.evidence)
         provided_qualifiers: dict[str, JSONValue] = {}
+        text_predicate: str | None = None
 
         if isinstance(payload, Mapping):
             subject_candidate = payload.get("subject") or payload.get("subj")
@@ -768,7 +769,11 @@ class ClaimNormalizer:
         if not predicate_provided and predicate == "biolink:related_to":
             inferred_predicate = _extract_predicate_from_text(claim.text)
             if inferred_predicate:
-                predicate = inferred_predicate
+                # Keep the textual cue separate from the structural predicate
+                # so we can both (a) promote gene→condition claims to the
+                # canonical Biolink predicate and (b) still reason about
+                # polarity/opposite-predicate conflicts.
+                text_predicate = inferred_predicate
                 predicate_provided = True
 
         # Resolve explicit subject/object if provided
@@ -846,6 +851,12 @@ class ClaimNormalizer:
             predicate=predicate,
             claim_text=claim.text,
         )
+
+        # Surface any text-inferred predicate as a qualifier so downstream
+        # polarity/context rules can still inspect it without overriding the
+        # canonical Biolink predicate on the edge itself.
+        if text_predicate is not None and "text_predicate" not in provided_qualifiers:
+            provided_qualifiers["text_predicate"] = text_predicate
 
         merged_qualifiers = dict(provided_qualifiers)
         for key, value in qualifiers.items():
@@ -992,7 +1003,17 @@ def _detect_opposite_predicate_context(
     backend: KGBackend | None,
 ) -> dict[str, object]:
     """Detect if the predicate flips direction relative to known context edges."""
-    claim_polarity = _predicate_polarity(triple.predicate)
+    # Prefer a text-level predicate cue when available (e.g., "increases"/
+    # "decreases") so we can detect polarity even when the structural
+    # predicate has been canonicalized to a Biolink term such as
+    # biolink:gene_associated_with_condition.
+    claim_predicate = triple.predicate
+    qualifiers_map = triple.qualifiers if isinstance(triple.qualifiers, Mapping) else {}
+    text_predicate = qualifiers_map.get("text_predicate")
+    if isinstance(text_predicate, str) and text_predicate.strip():
+        claim_predicate = text_predicate
+
+    claim_polarity = _predicate_polarity(claim_predicate)
     positive_count = 0
     negative_count = 0
     context_predicates: set[str] = set()
