@@ -51,6 +51,7 @@
 - [x] **Retract-gate:** If any supporting citation retracted → `trust=0`, FAIL; expression of concern → −0.5, WARN.
 - [x] **Source redundancy:** Multiple independent sources → bonus; single source → penalty.
 - [ ] **Time freshness (optional):** Old unsupported claims decay slightly.
+- [ ] Add explicit rules for self-negation (`REAL_F04`), low-confidence extraction (`REAL_F05`), and opposite-predicate conflicts (`REAL_025`); once implemented, re-run `uv run pytest -m e2e tests/test_pipeline_e2e.py::TestSkepticPipelineE2E::test_seed_claim_fixture_jsonl` and clean up the temporary WARN overrides for these fixtures in `tests/test_pipeline_e2e.py` / `tests/fixtures/e2e_claim_fixtures.jsonl`.
 
 ### Scoring & Decision
 - [x] Concatenate rule features into scalar audit score (weighted sum).
