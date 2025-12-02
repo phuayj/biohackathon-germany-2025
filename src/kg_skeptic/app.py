@@ -431,14 +431,27 @@ def main() -> None:
                     "Running audit..." + (" (loading GLiNER2 model...)" if use_gliner else "")
                 ):
                     pipeline = _get_pipeline(use_gliner=use_gliner)
-                    result = pipeline.run(
-                        {
-                            "text": claim_text,
-                            "evidence": evidence,
-                        }
-                    )
-                    st.session_state.audit_run = True
-                    st.session_state.result = result
+                    try:
+                        result = pipeline.run(
+                            {
+                                "text": claim_text,
+                                "evidence": evidence,
+                            }
+                        )
+                    except ValueError as exc:
+                        st.error(
+                            "Could not normalize entities from the claim text. "
+                            "Try adding clearer gene/disease names or enable GLiNER."
+                        )
+                        st.caption(f"Details: {exc}")
+                        st.session_state.audit_run = False
+                    except Exception as exc:  # pragma: no cover - UI surface
+                        st.error("Audit failed due to an unexpected error.")
+                        st.caption(f"Details: {exc}")
+                        st.session_state.audit_run = False
+                    else:
+                        st.session_state.audit_run = True
+                        st.session_state.result = result
 
     # Show results if audit has been run
     if st.session_state.audit_run:

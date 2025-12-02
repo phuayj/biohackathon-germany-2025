@@ -510,6 +510,24 @@ class ClaimNormalizer:
 
         return predicate, qualifiers
 
+    @staticmethod
+    def _has_negation_language(text: str) -> bool:
+        """Lightweight detection of explicit negation cues in free text."""
+        lowered = text.lower()
+        patterns = [
+            r"\bdoes\s+not\b",
+            r"\bdo\s+not\b",
+            r"\bdid\s+not\b",
+            r"\bis\s+not\b",
+            r"\bare\s+not\b",
+            r"\bwas\s+not\b",
+            r"\bwere\s+not\b",
+            r"\bcannot\b",
+            r"\bcan't\b",
+            r"\bnot\b",
+        ]
+        return any(re.search(pattern, lowered) for pattern in patterns)
+
     def _claim_from_payload(self, payload: Mapping[str, object] | str | Claim) -> Claim:
         if isinstance(payload, Claim):
             return payload
@@ -521,8 +539,26 @@ class ClaimNormalizer:
         claim_id = str(payload.get("id") or f"claim-{_sha1_slug(str(payload))}")
         text = str(payload.get("text") or "")
         evidence_raw = payload.get("evidence", [])
-        evidence = [str(e) for e in evidence_raw] if isinstance(evidence_raw, list) else []
-        return Claim(id=claim_id, text=text, evidence=evidence)
+        evidence: list[str] = []
+        structured_evidence: list[dict[str, object]] = []
+
+        if isinstance(evidence_raw, list):
+            for item in evidence_raw:
+                if isinstance(item, Mapping):
+                    structured_evidence.append(dict(item))
+                evidence.append(str(item))
+
+        extra_structured = payload.get("evidence_structured") or payload.get("evidence_items")
+        if isinstance(extra_structured, list):
+            for item in extra_structured:
+                if isinstance(item, Mapping):
+                    structured_evidence.append(dict(item))
+
+        metadata: dict[str, object] = {}
+        if structured_evidence:
+            metadata["structured_evidence"] = structured_evidence
+
+        return Claim(id=claim_id, text=text, evidence=evidence, metadata=metadata)
 
     def normalize(self, payload: AuditPayload) -> NormalizationResult:
         """Normalize a raw payload into a Claim + NormalizedTriple."""
@@ -532,6 +568,7 @@ class ClaimNormalizer:
         object_raw: str | Mapping[str, object] | None = None
         predicate = "biolink:related_to"
         citations: list[str] = list(claim.evidence)
+        provided_qualifiers: dict[str, JSONValue] = {}
 
         if isinstance(payload, Mapping):
             subject_candidate = payload.get("subject") or payload.get("subj")
@@ -545,6 +582,9 @@ class ClaimNormalizer:
             payload_citations = payload.get("citations") or payload.get("evidence")
             if isinstance(payload_citations, list):
                 citations.extend(str(c) for c in payload_citations)
+            qualifiers_raw = payload.get("qualifiers")
+            if isinstance(qualifiers_raw, Mapping):
+                provided_qualifiers = {str(k): v for k, v in qualifiers_raw.items()}
 
         # Pull citations from text/support spans
         citations.extend(self._extract_citations(claim.text))
@@ -608,11 +648,22 @@ class ClaimNormalizer:
             claim_text=claim.text,
         )
 
+        merged_qualifiers = dict(provided_qualifiers)
+        for key, value in qualifiers.items():
+            if key not in merged_qualifiers:
+                merged_qualifiers[key] = value
+
+        # If no explicit negation qualifier was supplied, infer one from
+        # common negation cues in the claim text so self-negation conflicts
+        # are surfaced in UI flows that only provide free text.
+        if not merged_qualifiers.get("negated") and self._has_negation_language(claim.text):
+            merged_qualifiers["negated"] = True
+
         triple = NormalizedTriple(
             subject=subject,
             predicate=predicate,
             object=obj,
-            qualifiers=qualifiers,
+            qualifiers=merged_qualifiers,
             citations=citations,
             provenance={"source": "normalizer-kg"},
         )
@@ -718,9 +769,39 @@ def _detect_sibling_conflict(
 # ---------------------------------------------------------------------------
 # Facts builder and pipeline orchestration
 # ---------------------------------------------------------------------------
+def _collect_structured_evidence(claim: Claim | None) -> list[Mapping[str, object]]:
+    """Extract structured evidence entries from claim metadata if present."""
+    if claim is None:
+        return []
+
+    raw = claim.metadata.get("structured_evidence") if isinstance(claim.metadata, Mapping) else None
+    evidence_list = raw if isinstance(raw, list) else []
+    entries: list[Mapping[str, object]] = []
+    for item in evidence_list:
+        if isinstance(item, Mapping):
+            entries.append(item)
+    return entries
+
+
+def _evidence_identifier(ev: Mapping[str, object]) -> str:
+    """Best-effort identifier for an evidence record."""
+    for key in ("pmid", "pmcid", "doi", "id", "curie", "url"):
+        val = ev.get(key)
+        if isinstance(val, str) and val.strip():
+            if key == "pmid" and not val.upper().startswith("PMID:"):
+                return f"PMID:{val.strip()}"
+            return val.strip()
+    ev_type = ev.get("type")
+    if isinstance(ev_type, str) and ev_type.strip():
+        return ev_type.strip()
+    return str(ev)
+
+
 def build_rule_facts(
     triple: NormalizedTriple,
     provenance: Sequence[CitationProvenance],
+    *,
+    claim: Claim | None = None,
 ) -> dict[str, object]:
     """Construct the facts dictionary consumed by the rule engine."""
     retracted = [p for p in provenance if p.status == "retracted"]
@@ -743,6 +824,32 @@ def build_rule_facts(
         triple.subject, triple.object, predicate
     )
 
+    qualifiers_map = triple.qualifiers if isinstance(triple.qualifiers, Mapping) else {}
+    is_negated = bool(qualifiers_map.get("negated"))
+
+    structured_evidence = _collect_structured_evidence(claim)
+    supporting_evidence: list[str] = []
+    refuting_evidence: list[str] = []
+    neutral_evidence: list[str] = []
+
+    for ev in structured_evidence:
+        stance_raw = ev.get("stance")
+        stance = stance_raw.lower().strip() if isinstance(stance_raw, str) else ""
+        identifier = _evidence_identifier(ev)
+        if stance in {"refute", "refutes", "refuted", "contradict", "contradicts"}:
+            refuting_evidence.append(identifier)
+        elif stance in {"support", "supports", "supported", "corroborates", "backs"}:
+            supporting_evidence.append(identifier)
+        else:
+            neutral_evidence.append(identifier)
+
+    has_refuting_evidence = bool(refuting_evidence)
+    negation_sources: list[str] = []
+    if is_negated:
+        negation_sources.append("negated qualifier")
+    if has_refuting_evidence:
+        negation_sources.append("refuting evidence")
+
     return {
         "claim": {
             "predicate": triple.predicate,
@@ -763,6 +870,10 @@ def build_rule_facts(
             "subject_label": triple.subject.label,
             "object_label": triple.object.label,
         },
+        "qualifiers": {
+            "negated": is_negated,
+            "raw": qualifiers_map,
+        },
         "evidence": {
             "retracted": [p.identifier for p in retracted],
             "concerns": [p.identifier for p in concerns],
@@ -771,6 +882,19 @@ def build_rule_facts(
             "concern_count": len(concerns),
             "clean_count": len(clean),
             "has_multiple_sources": len(provenance) >= 2,
+            "supporting_stance_count": len(supporting_evidence),
+            "refuting_stance_count": len(refuting_evidence),
+            "has_refuting_stance": has_refuting_evidence,
+            "refuting_stance_examples": refuting_evidence,
+        },
+        "conflicts": {
+            "self_negation_conflict": is_negated or has_refuting_evidence,
+            "qualifier_negated": is_negated,
+            "has_refuting_evidence": has_refuting_evidence,
+            "refuting_evidence": refuting_evidence,
+            "supporting_evidence": supporting_evidence,
+            "neutral_evidence": neutral_evidence,
+            "negation_sources": negation_sources,
         },
     }
 
@@ -924,7 +1048,7 @@ class SkepticPipeline:
         """Run the skeptic on a normalized audit payload."""
         normalization = self.normalizer.normalize(audit_payload)
         provenance = self.provenance_fetcher.fetch_many(normalization.citations)
-        facts = build_rule_facts(normalization.triple, provenance)
+        facts = build_rule_facts(normalization.triple, provenance, claim=normalization.claim)
         # Attach curated KG signals (e.g., DisGeNET support) for rule engine.
         facts["curated_kg"] = self._build_curated_kg_facts(normalization.triple)
         evaluation = self.engine.evaluate(facts)
@@ -962,6 +1086,11 @@ class SkepticPipeline:
         # but weakly supported claims are downgraded to WARN.
         if verdict == "PASS" and not self._has_positive_evidence(facts):
             verdict = "WARN"
+
+        conflicts_raw = facts.get("conflicts")
+        conflicts = conflicts_raw if isinstance(conflicts_raw, Mapping) else {}
+        if conflicts.get("self_negation_conflict"):
+            verdict = "FAIL"
 
         # Downgrade ontology sibling conflicts to WARN so sibling-like pairs
         # are surfaced even if other signals are strong.

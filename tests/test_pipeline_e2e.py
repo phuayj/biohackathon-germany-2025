@@ -80,9 +80,7 @@ class TestSkepticPipelineE2E:
         _load_e2e_claim_fixtures(),
         ids=lambda ex: str(ex.get("id")),
     )
-    def test_seed_claim_fixture_jsonl(
-        self, example: dict[str, object], tmp_path: Path
-    ) -> None:
+    def test_seed_claim_fixture_jsonl(self, example: dict[str, object], tmp_path: Path) -> None:
         """Run pipeline against a single curated seed claim fixture."""
         pipeline = SkepticPipeline(
             provenance_fetcher=ProvenanceFetcher(cache_dir=tmp_path, use_live=True),
@@ -149,6 +147,11 @@ class TestSkepticPipelineE2E:
             "predicate": example.get("predicate"),
             "evidence": citations,
         }
+        qualifiers_raw = example.get("qualifiers")
+        if isinstance(qualifiers_raw, dict):
+            payload["qualifiers"] = qualifiers_raw
+        if evidence_list:
+            payload["evidence_structured"] = evidence_list
 
         result = pipeline.run(payload)
         example_id = str(example.get("id"))
@@ -168,7 +171,7 @@ class TestSkepticPipelineE2E:
         # - REAL_025: opposite predicate in the same context → currently a
         #   WARN because the rule set does not yet model predicate-level
         #   contradiction explicitly.
-        future_fail_warn_ids = {"REAL_F04", "REAL_F05", "REAL_025"}
+        future_fail_warn_ids = {"REAL_F05", "REAL_025"}
         if example_id in future_fail_warn_ids:
             expected_verdict = "WARN"
 

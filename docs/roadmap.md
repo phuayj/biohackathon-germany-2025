@@ -52,7 +52,9 @@
 - [x] **Source redundancy:** Multiple independent sources → bonus; single source → penalty.
 - [x] **Ontology sibling conflict:** Warn on sibling-like subject/object pairs and expose a dedicated label.
 - [ ] **Time freshness (optional):** Old unsupported claims decay slightly.
-- [ ] Add explicit rules for self-negation (`REAL_F04`), low-confidence extraction (`REAL_F05`), and opposite-predicate conflicts (`REAL_025`); once implemented, re-run `uv run pytest -m e2e tests/test_pipeline_e2e.py::TestSkepticPipelineE2E::test_seed_claim_fixture_jsonl` and clean up the temporary WARN overrides for these fixtures in `tests/test_pipeline_e2e.py` / `tests/fixtures/e2e_claim_fixtures.jsonl`.
+- [x] Add explicit rule for self-negation (`REAL_F04`); re-run `uv run pytest -m e2e tests/test_pipeline_e2e.py::TestSkepticPipelineE2E::test_seed_claim_fixture_jsonl` and clean up the temporary WARN override.
+- [ ] Add explicit rule for low-confidence extraction (`REAL_F05`); once implemented, re-run `uv run pytest -m e2e tests/test_pipeline_e2e.py::TestSkepticPipelineE2E::test_seed_claim_fixture_jsonl` and clean up the temporary WARN override.
+- [ ] Add explicit rule for opposite-predicate conflicts (`REAL_025`); once implemented, re-run `uv run pytest -m e2e tests/test_pipeline_e2e.py::TestSkepticPipelineE2E::test_seed_claim_fixture_jsonl` and clean up the temporary WARN override in `tests/test_pipeline_e2e.py` / `tests/fixtures/e2e_claim_fixtures.jsonl`.
 
 ### Scoring & Decision
 - [x] Concatenate rule features into scalar audit score (weighted sum).
@@ -149,6 +151,7 @@
 - [ ] **Strict vs Lenient auditor** switch.
 - [ ] **Provenance explain:** Link from each edge to exact PMIDs/DOIs in side panel.
 - [ ] **Batch mode:** Upload list of claims; get CSV of audit results.
+- [ ] **Negation & variant cue hardening:** Replace hard-coded negation phrases and mutation keywords with a data-driven pattern set or lightweight NLP to improve both self-negation and variant-context detection.
 
 **Definition of Done:** One-click run, reliable demo, concise metrics slide; each teammate can demo a scene.
 
