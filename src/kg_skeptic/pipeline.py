@@ -65,6 +65,7 @@ class NormalizedEntity:
     ancestors: list[str] = field(default_factory=list)
     mention: str | None = None
     source: str = "mini_kg"
+    metadata: dict[str, JSONValue] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -74,6 +75,7 @@ class NormalizedEntity:
             "ancestors": self.ancestors,
             "mention": self.mention,
             "source": self.source,
+            "metadata": self.metadata,
         }
 
 
@@ -282,6 +284,9 @@ class ClaimNormalizer:
                     if norm.label:
                         entity.label = norm.label
                     entity.source = "ids.hgnc"
+                    ncbi_gene_id = norm.metadata.get("ncbi_gene_id")
+                    if isinstance(ncbi_gene_id, (str, int)):
+                        entity.metadata["ncbi_gene_id"] = str(ncbi_gene_id)
             elif entity.category == "disease":
                 identifier = (
                     entity.id if entity.id.startswith("MONDO:") else entity.label or entity.id
@@ -529,20 +534,34 @@ class ClaimNormalizer:
         )
 
         # Mirror normalized entities back onto the claim for UI/reporting.
+        subject_metadata = {
+            "category": subject.category,
+            "ancestors": subject.ancestors,
+        }
+        if subject.metadata:
+            subject_metadata.update(subject.metadata)
+
+        object_metadata = {
+            "category": obj.category,
+            "ancestors": obj.ancestors,
+        }
+        if obj.metadata:
+            object_metadata.update(obj.metadata)
+
         claim.entities = [
             EntityMention(
                 mention=subject.mention or subject.label,
                 norm_id=subject.id,
                 norm_label=subject.label,
                 source=subject.source,
-                metadata={"category": subject.category, "ancestors": subject.ancestors},
+                metadata=subject_metadata,
             ),
             EntityMention(
                 mention=obj.mention or obj.label,
                 norm_id=obj.id,
                 norm_label=obj.label,
                 source=obj.source,
-                metadata={"category": obj.category, "ancestors": obj.ancestors},
+                metadata=object_metadata,
             ),
         ]
         claim.metadata["normalized_triple"] = triple.to_dict()

@@ -18,6 +18,7 @@ from typing import Protocol, cast
 from kg_skeptic.models import Claim, EntityMention
 from kg_skeptic.pipeline import AuditResult, ClaimNormalizer, SkepticPipeline
 from kg_skeptic.mcp.kg import KGBackend, Neo4jBackend
+from kg_skeptic.mcp import DisGeNETTool
 from kg_skeptic.provenance import CitationProvenance
 from kg_skeptic.rules import RuleEvaluation
 
@@ -156,6 +157,21 @@ def _get_kg_backend() -> KGBackend | None:
     backend = _build_neo4j_backend_from_env()
     st.session_state["kg_backend"] = backend
     return backend
+
+
+def _get_disgenet_tool() -> DisGeNETTool | None:
+    """Return a cached DisGeNET tool instance, if available."""
+    if "disgenet_tool" in st.session_state:
+        return cast(DisGeNETTool | None, st.session_state["disgenet_tool"])
+
+    api_key = os.environ.get("DISGENET_API_KEY")
+    try:
+        tool = DisGeNETTool(api_key=api_key)
+    except Exception:
+        tool = None
+
+    st.session_state["disgenet_tool"] = tool
+    return tool
 
 
 def _get_pipeline(use_gliner: bool = False) -> SkepticPipeline:
@@ -310,6 +326,9 @@ def render_audit_card(result: AuditResult) -> None:
     # Pathway context (GO / Reactome) if present
     _render_pathway_section(claim)
 
+    # DisGeNET gene–disease associations (best-effort)
+    _render_disgenet_section(claim)
+
     # Evidence
     st.subheader("Evidence")
     render_provenance(result.provenance)
@@ -317,6 +336,75 @@ def render_audit_card(result: AuditResult) -> None:
     # Rules fired
     st.subheader("Rules Fired")
     render_rule_trace(evaluation)
+
+
+def _render_disgenet_section(claim: Claim) -> None:
+    """Render DisGeNET gene–disease associations for the primary gene, if available."""
+    gene_entity: EntityMention | None = None
+    for entity in claim.entities:
+        metadata = entity.metadata if isinstance(entity.metadata, dict) else {}
+        if metadata.get("category") == "gene":
+            gene_entity = entity
+            break
+
+    if gene_entity is None:
+        return
+
+    metadata = gene_entity.metadata if isinstance(gene_entity.metadata, dict) else {}
+    ncbi_gene_id = metadata.get("ncbi_gene_id")
+    if not ncbi_gene_id:
+        return
+
+    gene_label = gene_entity.norm_label or gene_entity.mention or str(ncbi_gene_id)
+    tool = _get_disgenet_tool()
+    if tool is None:
+        return
+
+    has_api_key = bool(getattr(tool, "api_key", None))
+
+    with st.expander("DisGeNET: Gene–Disease Associations", expanded=False):
+        if has_api_key:
+            st.caption(
+                "Best-effort lookup via DisGeNET for the primary gene entity "
+                "(using DISGENET_API_KEY from the environment)."
+            )
+        else:
+            st.caption(
+                "Best-effort lookup via DisGeNET for the primary gene entity "
+                "(no DISGENET_API_KEY set; results may be empty or partial)."
+            )
+
+        try:
+            with st.spinner(f"Querying DisGeNET for {gene_label} (NCBI {ncbi_gene_id})..."):
+                associations = tool.gene_to_diseases(str(ncbi_gene_id), max_results=5)
+        except Exception as exc:
+            st.warning(f"Error querying DisGeNET (network/auth issue?): {exc}")
+            return
+
+        if not associations:
+            if not has_api_key:
+                st.info(
+                    f"DisGeNET returned no associations for NCBI gene ID {ncbi_gene_id} "
+                    "without an API key. Configure DISGENET_API_KEY to confirm whether "
+                    "this gene truly has no recorded associations in DisGeNET."
+                )
+            else:
+                st.info(
+                    f"DisGeNET returned no associations for NCBI gene ID {ncbi_gene_id}. "
+                    "This usually means there are currently no recorded gene–disease "
+                    "associations for this gene in DisGeNET."
+                )
+            return
+
+        rows = [
+            {
+                "disease_id": assoc.disease_id,
+                "score": assoc.score,
+                "source": assoc.source,
+            }
+            for assoc in associations
+        ]
+        st.table(rows)
 
 
 def main() -> None:
