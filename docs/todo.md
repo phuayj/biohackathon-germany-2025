@@ -131,6 +131,8 @@
 - [ ] Anonymized audit logs for reproducibility.
 - [ ] Improve negation detection beyond hard-coded phrases (data-driven patterns or lightweight NLP cues) alongside variant cue hardening.
 - [ ] Refine variant-context detection beyond simple mutation keywords (e.g., better patterns/NER for `has_variant_context` on GeneToDiseaseAssociation edges).
+- [x] Modernize predicate polarity detection using pattern sets or lightweight classifiers (beyond manual verb lists) and expose configurable synonym maps.
+- [ ] Add corpus-derived predicate canonicalization (embedding/alias lookup) so opposite-predicate detection covers nuanced phrasing.
 
 ### Integration Testing
 - [ ] Measure hallucination-reduction when auditor guards a small LLM QA/KG agent.

@@ -59,6 +59,80 @@ def _category_from_id(identifier: str) -> str:
     return "unknown"
 
 
+POSITIVE_POLARITY_MARKERS: tuple[str, ...] = (
+    "increase",
+    "increases",
+    "activate",
+    "activates",
+    "upregulate",
+    "upregulates",
+    "positively_regulate",
+    "positively_regulates",
+    "promote",
+    "promotes",
+    "induce",
+    "induces",
+    "stimulate",
+    "stimulates",
+    "enhance",
+    "enhances",
+    "contribute",
+    "contributes",
+)
+
+NEGATIVE_POLARITY_MARKERS: tuple[str, ...] = (
+    "decrease",
+    "decreases",
+    "inhibit",
+    "inhibits",
+    "downregulate",
+    "downregulates",
+    "negatively_regulate",
+    "negatively_regulates",
+    "suppress",
+    "suppresses",
+    "reduce",
+    "reduces",
+    "block",
+    "blocks",
+)
+
+CANONICAL_PREDICATE_MAP: dict[str, str] = {
+    "increase": "increases",
+    "increases": "increases",
+    "activate": "activates",
+    "activates": "activates",
+    "upregulate": "upregulates",
+    "upregulates": "upregulates",
+    "positively_regulate": "positively_regulates",
+    "positively_regulates": "positively_regulates",
+    "promote": "promotes",
+    "promotes": "promotes",
+    "induce": "induces",
+    "induces": "induces",
+    "stimulate": "stimulates",
+    "stimulates": "stimulates",
+    "enhance": "enhances",
+    "enhances": "enhances",
+    "contribute": "contributes",
+    "contributes": "contributes",
+    "decrease": "decreases",
+    "decreases": "decreases",
+    "inhibit": "inhibits",
+    "inhibits": "inhibits",
+    "downregulate": "downregulates",
+    "downregulates": "downregulates",
+    "negatively_regulate": "negatively_regulates",
+    "negatively_regulates": "negatively_regulates",
+    "suppress": "suppresses",
+    "suppresses": "suppresses",
+    "reduce": "reduces",
+    "reduces": "reduces",
+    "block": "blocks",
+    "blocks": "blocks",
+}
+
+
 def _sha1_slug(text: str) -> str:
     """Deterministic slug for claim IDs."""
     digest = hashlib.sha1(text.encode("utf-8")).hexdigest()
@@ -689,6 +763,14 @@ class ClaimNormalizer:
             citations.extend(self._extract_citations(claim.support_span))
         citations = list(dict.fromkeys(citations))
 
+        # If no explicit predicate was provided, try to recover a predicate
+        # cue directly from the claim text (e.g., "increases"/"decreases").
+        if not predicate_provided and predicate == "biolink:related_to":
+            inferred_predicate = _extract_predicate_from_text(claim.text)
+            if inferred_predicate:
+                predicate = inferred_predicate
+                predicate_provided = True
+
         # Resolve explicit subject/object if provided
         subject = self._resolve_entity(subject_raw) if subject_raw else None
         obj = self._resolve_entity(object_raw) if object_raw else None
@@ -886,33 +968,22 @@ def _detect_sibling_conflict(
 
 def _predicate_polarity(predicate: str) -> str | None:
     """Map predicate text to a coarse polarity."""
-    normalized = predicate.lower()
-    positive_markers = {
-        "increase",
-        "activate",
-        "upregulate",
-        "positively_regulate",
-        "promote",
-        "induce",
-        "stimulate",
-        "enhance",
-        "contribute",
-    }
-    negative_markers = {
-        "decrease",
-        "inhibit",
-        "downregulate",
-        "negatively_regulate",
-        "suppress",
-        "reduce",
-        "block",
-    }
-    for marker in positive_markers:
+    normalized = predicate.lower().replace(" ", "_")
+    for marker in POSITIVE_POLARITY_MARKERS:
         if marker in normalized:
             return "positive"
-    for marker in negative_markers:
+    for marker in NEGATIVE_POLARITY_MARKERS:
         if marker in normalized:
             return "negative"
+    return None
+
+
+def _extract_predicate_from_text(claim_text: str) -> str | None:
+    """Extract a canonical predicate token from free text when none supplied."""
+    normalized = claim_text.lower().replace(" ", "_")
+    for marker in POSITIVE_POLARITY_MARKERS + NEGATIVE_POLARITY_MARKERS:
+        if marker in normalized:
+            return CANONICAL_PREDICATE_MAP.get(marker)
     return None
 
 
