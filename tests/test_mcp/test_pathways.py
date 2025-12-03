@@ -32,6 +32,7 @@ class TestPathwayRecord:
         metadata_value = d["metadata"]
         assert isinstance(metadata_value, dict)
         assert metadata_value["aspect"] == "P"
+        assert "provenance" in d
 
 
 class TestPathwayTool:
@@ -71,6 +72,9 @@ class TestPathwayTool:
         assert rec.label == "signal transduction"
         assert "signaling" in rec.synonyms
         assert rec.metadata.get("aspect") == "P"
+        # GO terms should include provenance
+        assert rec.provenance is not None
+        assert rec.provenance.source_db == "go"
 
     @patch("kg_skeptic.mcp.pathways.urlopen")
     def test_fetch_reactome_pathway(self, mock_urlopen: MagicMock) -> None:

@@ -19,6 +19,8 @@ from urllib.parse import quote, urlencode
 from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
 
+from .provenance import ToolProvenance, make_live_provenance
+
 
 class IDType(str, Enum):
     """Types of biomedical identifiers."""
@@ -45,6 +47,7 @@ class NormalizedID:
     source: str = "unknown"
     found: bool = False
     metadata: dict[str, object] = field(default_factory=dict)
+    provenance: ToolProvenance | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -56,6 +59,7 @@ class NormalizedID:
             "source": self.source,
             "found": self.found,
             "metadata": self.metadata,
+            "provenance": self.provenance.to_dict() if self.provenance else None,
         }
 
 
@@ -67,6 +71,7 @@ class CrossReference:
     source_type: IDType
     target_id: str
     target_type: IDType
+    provenance: ToolProvenance | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -74,6 +79,7 @@ class CrossReference:
             "source_type": self.source_type.value,
             "target_id": self.target_id,
             "target_type": self.target_type.value,
+            "provenance": self.provenance.to_dict() if self.provenance else None,
         }
 
 
@@ -185,6 +191,7 @@ class IDNormalizerTool:
                 input_type=IDType.HGNC,
                 found=False,
                 source="hgnc",
+                provenance=make_live_provenance(source_db="hgnc"),
             )
 
         response_value = data.get("response", {})
@@ -200,6 +207,7 @@ class IDNormalizerTool:
                 input_type=IDType.HGNC,
                 found=False,
                 source="hgnc",
+                provenance=make_live_provenance(source_db="hgnc"),
             )
 
         return self._parse_hgnc_doc(docs_list[0], hgnc_id)
@@ -215,6 +223,7 @@ class IDNormalizerTool:
                 input_type=IDType.HGNC_SYMBOL,
                 found=False,
                 source="hgnc",
+                provenance=make_live_provenance(source_db="hgnc"),
             )
 
         response_value = data.get("response", {})
@@ -241,6 +250,7 @@ class IDNormalizerTool:
                 input_type=IDType.HGNC_SYMBOL,
                 found=False,
                 source="hgnc",
+                provenance=make_live_provenance(source_db="hgnc"),
             )
 
         response_value = data.get("response", {})
@@ -256,6 +266,7 @@ class IDNormalizerTool:
                 input_type=IDType.HGNC_SYMBOL,
                 found=False,
                 source="hgnc",
+                provenance=make_live_provenance(source_db="hgnc"),
             )
 
         return self._parse_hgnc_doc(docs_list[0], symbol)
@@ -291,6 +302,7 @@ class IDNormalizerTool:
                 "uniprot_ids": doc.get("uniprot_ids", []),
                 "ncbi_gene_id": doc.get("entrez_id"),
             },
+            provenance=make_live_provenance(source_db="hgnc"),
         )
 
     def hgnc_to_uniprot(self, hgnc_id: str) -> list[str]:
@@ -334,6 +346,7 @@ class IDNormalizerTool:
                 input_type=IDType.UNIPROT,
                 found=False,
                 source="uniprot",
+                provenance=make_live_provenance(source_db="uniprot"),
             )
 
         accession_value = data.get("primaryAccession", identifier)
@@ -384,6 +397,7 @@ class IDNormalizerTool:
                 "gene_names": gene_names,
                 "reviewed": data.get("entryType") == "UniProtKB reviewed (Swiss-Prot)",
             },
+            provenance=make_live_provenance(source_db="uniprot"),
         )
 
     def uniprot_to_hgnc(self, uniprot_id: str) -> Optional[str]:
@@ -449,6 +463,7 @@ class IDNormalizerTool:
                 input_type=IDType.MONDO,
                 found=False,
                 source="mondo",
+                provenance=make_live_provenance(source_db="ols.mondo"),
             )
 
         # OLS4 returns results in _embedded.terms array
@@ -465,6 +480,7 @@ class IDNormalizerTool:
                 input_type=IDType.MONDO,
                 found=False,
                 source="mondo",
+                provenance=make_live_provenance(source_db="ols.mondo"),
             )
 
         term = terms_list[0]
@@ -505,6 +521,7 @@ class IDNormalizerTool:
                 "ancestors": ancestors,
                 "umls_ids": umls_ids,
             },
+            provenance=make_live_provenance(source_db="ols.mondo"),
         )
 
     def _search_mondo(self, term: str) -> NormalizedID:
@@ -525,6 +542,7 @@ class IDNormalizerTool:
                 input_type=IDType.MONDO,
                 found=False,
                 source="mondo",
+                provenance=make_live_provenance(source_db="ols.mondo"),
             )
 
         response_value = data.get("response", {})
@@ -540,6 +558,7 @@ class IDNormalizerTool:
                 input_type=IDType.MONDO,
                 found=False,
                 source="mondo",
+                provenance=make_live_provenance(source_db="ols.mondo"),
             )
 
         doc = docs_list[0]
@@ -577,6 +596,7 @@ class IDNormalizerTool:
                 "ancestors": ancestors,
                 "umls_ids": umls_ids,
             },
+            provenance=make_live_provenance(source_db="ols.mondo"),
         )
 
     # =========================================================================
@@ -619,6 +639,7 @@ class IDNormalizerTool:
                 input_type=IDType.HPO,
                 found=False,
                 source="hpo",
+                provenance=make_live_provenance(source_db="ols.hpo"),
             )
 
         # OLS4 returns results in _embedded.terms array
@@ -635,6 +656,7 @@ class IDNormalizerTool:
                 input_type=IDType.HPO,
                 found=False,
                 source="hpo",
+                provenance=make_live_provenance(source_db="ols.hpo"),
             )
 
         term = terms_list[0]
@@ -658,6 +680,7 @@ class IDNormalizerTool:
                 "iri": term.get("iri"),
                 "ancestors": ancestors,
             },
+            provenance=make_live_provenance(source_db="ols.hpo"),
         )
 
     def _search_hpo(self, term: str) -> NormalizedID:
@@ -678,6 +701,7 @@ class IDNormalizerTool:
                 input_type=IDType.HPO,
                 found=False,
                 source="hpo",
+                provenance=make_live_provenance(source_db="ols.hpo"),
             )
 
         response_value = data.get("response", {})
@@ -693,6 +717,7 @@ class IDNormalizerTool:
                 input_type=IDType.HPO,
                 found=False,
                 source="hpo",
+                provenance=make_live_provenance(source_db="ols.hpo"),
             )
 
         doc = docs_list[0]
@@ -714,6 +739,7 @@ class IDNormalizerTool:
                 "iri": doc.get("iri"),
                 "ancestors": ancestors,
             },
+            provenance=make_live_provenance(source_db="ols.hpo"),
         )
 
     # =========================================================================
@@ -748,6 +774,7 @@ class IDNormalizerTool:
                         source_type=from_type,
                         target_id=uid,
                         target_type=to_type,
+                        provenance=make_live_provenance(source_db="kg_skeptic.ids"),
                     )
                 )
 
@@ -760,6 +787,7 @@ class IDNormalizerTool:
                         source_type=from_type,
                         target_id=hgnc_id,
                         target_type=to_type,
+                        provenance=make_live_provenance(source_db="kg_skeptic.ids"),
                     )
                 )
 
@@ -772,6 +800,7 @@ class IDNormalizerTool:
                         source_type=from_type,
                         target_id=hgnc_id,
                         target_type=to_type,
+                        provenance=make_live_provenance(source_db="kg_skeptic.ids"),
                     )
                 )
 

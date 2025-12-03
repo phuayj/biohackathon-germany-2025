@@ -16,6 +16,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from .provenance import ToolProvenance, make_live_provenance
+
 
 DISGENET_BASE_URL = "https://api.disgenet.com/api/v1"
 
@@ -28,6 +30,7 @@ class GeneDiseaseAssociation:
     disease_id: str
     score: float
     source: str
+    provenance: ToolProvenance | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -35,6 +38,7 @@ class GeneDiseaseAssociation:
             "disease_id": self.disease_id,
             "score": self.score,
             "source": self.source,
+            "provenance": self.provenance.to_dict() if self.provenance else None,
         }
 
 
@@ -126,6 +130,7 @@ class DisGeNETTool:
                     disease_id=disease_id,
                     score=score,
                     source=source,
+                    provenance=make_live_provenance(source_db="disgenet"),
                 )
             )
 

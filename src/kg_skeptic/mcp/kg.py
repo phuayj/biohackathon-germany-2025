@@ -20,6 +20,8 @@ from urllib.parse import quote
 from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
 
+from .provenance import ToolProvenance, make_live_provenance, make_static_provenance
+
 
 class EdgeDirection(str, Enum):
     """Direction of an edge."""
@@ -37,6 +39,7 @@ class KGNode:
     label: Optional[str] = None
     category: Optional[str] = None
     properties: dict[str, _object] = field(default_factory=dict)
+    provenance: ToolProvenance | None = None
 
     def to_dict(self) -> dict[str, _object]:
         return {
@@ -44,6 +47,7 @@ class KGNode:
             "label": self.label,
             "category": self.category,
             "properties": self.properties,
+            "provenance": self.provenance.to_dict() if self.provenance else None,
         }
 
 
@@ -58,6 +62,7 @@ class KGEdge:
     object_label: Optional[str] = None
     properties: dict[str, _object] = field(default_factory=dict)
     sources: list[str] = field(default_factory=list)
+    provenance: ToolProvenance | None = None
 
     def to_dict(self) -> dict[str, _object]:
         return {
@@ -68,6 +73,7 @@ class KGEdge:
             "object_label": self.object_label,
             "properties": self.properties,
             "sources": self.sources,
+            "provenance": self.provenance.to_dict() if self.provenance else None,
         }
 
 
@@ -81,6 +87,7 @@ class EdgeQueryResult:
     exists: bool
     edges: list[KGEdge] = field(default_factory=list)
     source: str = "unknown"
+    provenance: ToolProvenance | None = None
 
     def to_dict(self) -> dict[str, _object]:
         return {
@@ -90,6 +97,7 @@ class EdgeQueryResult:
             "exists": self.exists,
             "edges": [e.to_dict() for e in self.edges],
             "source": self.source,
+            "provenance": self.provenance.to_dict() if self.provenance else None,
         }
 
 
@@ -102,6 +110,7 @@ class EgoNetworkResult:
     nodes: list[KGNode] = field(default_factory=list)
     edges: list[KGEdge] = field(default_factory=list)
     source: str = "unknown"
+    provenance: ToolProvenance | None = None
 
     def to_dict(self) -> dict[str, _object]:
         return {
@@ -110,6 +119,7 @@ class EgoNetworkResult:
             "nodes": [n.to_dict() for n in self.nodes],
             "edges": [e.to_dict() for e in self.edges],
             "source": self.source,
+            "provenance": self.provenance.to_dict() if self.provenance else None,
         }
 
 
@@ -193,6 +203,8 @@ class MonarchBackend(KGBackend):
         if predicate:
             url += f"&predicate={quote(predicate)}"
 
+        provenance = make_live_provenance(source_db="monarch")
+
         try:
             data = self._fetch_json(url)
         except RuntimeError:
@@ -202,6 +214,7 @@ class MonarchBackend(KGBackend):
                 predicate=predicate,
                 exists=False,
                 source="monarch",
+                provenance=provenance,
             )
 
         edges: list[KGEdge] = []
@@ -236,8 +249,13 @@ class MonarchBackend(KGBackend):
                 properties={
                     "category": item.get("category"),
                     "primary_knowledge_source": item.get("primary_knowledge_source"),
+                    "source_db": "monarch",
+                    "db_version": provenance.db_version,
+                    "retrieved_at": provenance.retrieved_at,
+                    "cache_ttl": provenance.cache_ttl,
                 },
                 sources=sources,
+                provenance=provenance,
             )
             edges.append(edge)
 
@@ -248,6 +266,7 @@ class MonarchBackend(KGBackend):
             exists=len(edges) > 0,
             edges=edges,
             source="monarch",
+            provenance=provenance,
         )
 
     def ego(
@@ -265,6 +284,7 @@ class MonarchBackend(KGBackend):
         all_edges: list[KGEdge] = []
         all_nodes: dict[str, KGNode] = {}
         frontier = {node_id}
+        provenance = make_live_provenance(source_db="monarch")
 
         for hop in range(k):
             new_frontier: set[str] = set()
@@ -284,6 +304,7 @@ class MonarchBackend(KGBackend):
                             all_nodes[edge.object] = KGNode(
                                 id=edge.object,
                                 label=edge.object_label,
+                                provenance=provenance,
                             )
 
                 # Get incoming edges
@@ -296,13 +317,14 @@ class MonarchBackend(KGBackend):
                             all_nodes[edge.subject] = KGNode(
                                 id=edge.subject,
                                 label=edge.subject_label,
+                                provenance=provenance,
                             )
 
             frontier = new_frontier - visited_nodes
 
         # Add center node
         if node_id not in all_nodes:
-            all_nodes[node_id] = KGNode(id=node_id)
+            all_nodes[node_id] = KGNode(id=node_id, provenance=provenance)
 
         return EgoNetworkResult(
             center_node=node_id,
@@ -310,6 +332,7 @@ class MonarchBackend(KGBackend):
             nodes=list(all_nodes.values()),
             edges=all_edges,
             source="monarch",
+            provenance=provenance,
         )
 
     def _get_associations(
@@ -319,6 +342,7 @@ class MonarchBackend(KGBackend):
         limit: int = 50,
     ) -> list[KGEdge]:
         """Get associations for a node."""
+        provenance = make_live_provenance(source_db="monarch")
         if outgoing:
             url = f"{self.BASE_URL}/association?subject={quote(node_id)}&limit={limit}"
         else:
@@ -360,8 +384,13 @@ class MonarchBackend(KGBackend):
                 ),
                 properties={
                     "category": item.get("category"),
+                    "source_db": "monarch",
+                    "db_version": provenance.db_version,
+                    "retrieved_at": provenance.retrieved_at,
+                    "cache_ttl": provenance.cache_ttl,
                 },
                 sources=sources,
+                provenance=provenance,
             )
             edges.append(edge)
 
@@ -389,9 +418,17 @@ class InMemoryBackend(KGBackend):
         self.edges.append(edge)
         # Auto-create nodes if they don't exist
         if edge.subject not in self.nodes:
-            self.nodes[edge.subject] = KGNode(id=edge.subject, label=edge.subject_label)
+            self.nodes[edge.subject] = KGNode(
+                id=edge.subject,
+                label=edge.subject_label,
+                provenance=edge.provenance,
+            )
         if edge.object not in self.nodes:
-            self.nodes[edge.object] = KGNode(id=edge.object, label=edge.object_label)
+            self.nodes[edge.object] = KGNode(
+                id=edge.object,
+                label=edge.object_label,
+                provenance=edge.provenance,
+            )
 
     def query_edge(
         self,
@@ -406,6 +443,8 @@ class InMemoryBackend(KGBackend):
                 if predicate is None or edge.predicate == predicate:
                     matching.append(edge)
 
+        provenance = make_static_provenance(source_db="in_memory_kg")
+
         return EdgeQueryResult(
             subject=subject,
             object=object,
@@ -413,6 +452,7 @@ class InMemoryBackend(KGBackend):
             exists=len(matching) > 0,
             edges=matching,
             source="in-memory",
+            provenance=provenance,
         )
 
     def ego(
@@ -459,6 +499,7 @@ class InMemoryBackend(KGBackend):
             nodes=result_nodes,
             edges=result_edges,
             source="in-memory",
+            provenance=make_static_provenance(source_db="in_memory_kg"),
         )
 
 
@@ -546,6 +587,7 @@ class Neo4jBackend(KGBackend):
         records = self._iter_records(query, params)
 
         edges: list[KGEdge] = []
+        provenance = make_static_provenance(source_db="neo4j")
         for rec in records:
             rel = rec.get("rel", {})
             props: dict[str, _object] = {}
@@ -564,6 +606,7 @@ class Neo4jBackend(KGBackend):
                 ),
                 properties=props,
                 sources=[],
+                provenance=provenance,
             )
             edges.append(edge)
 
@@ -574,6 +617,7 @@ class Neo4jBackend(KGBackend):
             exists=len(edges) > 0,
             edges=edges,
             source="neo4j",
+            provenance=provenance,
         )
 
     def ego(
@@ -588,9 +632,15 @@ class Neo4jBackend(KGBackend):
         This uses a simple variable‑length path query and then flattens
         the resulting nodes/relations into KGNode/KGEdge objects.
         """
+        provenance = make_static_provenance(source_db="neo4j")
         if k <= 0:
             return EgoNetworkResult(
-                center_node=node_id, k_hops=0, nodes=[KGNode(id=node_id)], edges=[], source="neo4j"
+                center_node=node_id,
+                k_hops=0,
+                nodes=[KGNode(id=node_id, provenance=provenance)],
+                edges=[],
+                source="neo4j",
+                provenance=provenance,
             )
 
         # Inline hop count into the pattern to avoid using a Cypher
@@ -646,6 +696,7 @@ class Neo4jBackend(KGBackend):
                             else None
                         ),
                         properties=node_props,
+                        provenance=provenance,
                     )
 
             rel_props = rec.get("rel_props", {})
@@ -668,12 +719,13 @@ class Neo4jBackend(KGBackend):
                 ),
                 properties=props,
                 sources=[],
+                provenance=provenance,
             )
             edges.append(edge)
 
         # Ensure center node is present
         if node_id not in nodes:
-            nodes[node_id] = KGNode(id=node_id)
+            nodes[node_id] = KGNode(id=node_id, provenance=provenance)
 
         return EgoNetworkResult(
             center_node=node_id,
@@ -681,6 +733,7 @@ class Neo4jBackend(KGBackend):
             nodes=list(nodes.values()),
             edges=edges,
             source="neo4j",
+            provenance=provenance,
         )
 
 

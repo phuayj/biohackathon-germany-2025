@@ -30,6 +30,7 @@ class TestKGDataClasses:
         assert d["id"] == "HGNC:1100"
         assert d["label"] == "BRCA1"
         assert d["category"] == "Gene"
+        assert "provenance" in d
 
     def test_kg_edge_to_dict(self) -> None:
         """Test KGEdge serialization."""
@@ -48,6 +49,7 @@ class TestKGDataClasses:
         sources = d["sources"]
         assert isinstance(sources, list)
         assert "PMID:12345678" in sources
+        assert "provenance" in d
 
     def test_edge_query_result_to_dict(self) -> None:
         """Test EdgeQueryResult serialization."""
@@ -72,6 +74,7 @@ class TestKGDataClasses:
         assert isinstance(source, str)
         assert len(edges) == 1
         assert source == "monarch"
+        assert "provenance" in d
 
     def test_ego_network_result_to_dict(self) -> None:
         """Test EgoNetworkResult serialization."""
@@ -266,6 +269,10 @@ class TestMonarchBackend:
         assert result.exists is True
         assert len(result.edges) == 1
         assert result.edges[0].predicate == "biolink:causes"
+        # Monarch backend should expose provenance on results and edges
+        assert result.provenance is not None
+        assert result.provenance.source_db == "monarch"
+        assert result.edges[0].provenance is not None
 
     @patch("kg_skeptic.mcp.kg.urlopen")
     def test_query_edge_not_found_mocked(self, mock_urlopen: MagicMock) -> None:

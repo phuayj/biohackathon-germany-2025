@@ -52,6 +52,7 @@
 - [x] **self_negation_conflict:** Model explicit self-negation / refuting-evidence conflicts (e.g., `REAL_F04`); once implemented, re-run `uv run pytest -m e2e tests/test_pipeline_e2e.py::TestSkepticPipelineE2E::test_seed_claim_fixture_jsonl` and update expectations for `REAL_F04` in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`.
 - [x] **extraction_low_confidence:** Add a rule capturing low-confidence extraction / vague predicates (e.g., `REAL_F05`); after implementation, re-run the same E2E seed fixture test and update `REAL_F05` expectations in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`.
 - [x] **opposite_predicate_same_context:** Add a rule for opposite predicates in the same context (e.g., `REAL_025`); after implementation, re-run the same E2E seed fixture test and update `REAL_025` expectations in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`, removing the temporary WARN override.
+- [x] Fix all mypy strict type-checking errors in `src/`.
 
 ### Scoring & Decision
 - [x] Concatenate rule features → weighted sum → scalar audit score.
@@ -115,8 +116,8 @@
 > Transforms the graph from a static cache into a **live view** over curated sources.
 
 #### MCP Provenance Metadata
-- [ ] Add provenance metadata to MCP tool returns: `source_db`, `db_version`, `retrieved_at`, `cache_ttl` fields.
-- [ ] Standardize provenance schema across all MCP adapters (EuropePMC, CrossRef, IDs, Pathways, DisGeNET, KG).
+- [x] Add provenance metadata to MCP tool returns: `source_db`, `db_version`, `retrieved_at`, `cache_ttl` fields.
+- [x] Standardize provenance schema across all MCP adapters (EuropePMC, CrossRef, IDs, Pathways, DisGeNET, KG).
 - [ ] Wire `live_edges_for_gene(gene_id)` wrapper that fans out to Reactome/GO/IntAct and returns edges with raw evidence.
 
 #### Neo4j Provenance Schema

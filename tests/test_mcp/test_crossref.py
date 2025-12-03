@@ -21,6 +21,7 @@ class TestCrossRefTool:
         assert d["doi"] == "10.1234/test"
         assert d["status"] == "retracted"
         assert d["notice_doi"] == "10.1234/retraction"
+        assert "provenance" in d
 
     def test_retraction_status_enum(self) -> None:
         """Test RetractionStatus enum values."""
@@ -65,6 +66,9 @@ class TestCrossRefTool:
 
         assert result.status == RetractionStatus.NONE
         assert result.doi == "10.1234/test"
+        # CrossRef lookups should expose provenance metadata
+        assert result.provenance is not None
+        assert result.provenance.source_db == "crossref"
 
     @patch("kg_skeptic.mcp.crossref.urlopen")
     def test_retractions_retracted(self, mock_urlopen: MagicMock) -> None:

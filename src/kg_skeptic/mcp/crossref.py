@@ -15,6 +15,8 @@ from urllib.parse import quote
 from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
 
+from .provenance import ToolProvenance, make_live_provenance
+
 
 CROSSREF_API_URL = "https://api.crossref.org/works"
 
@@ -51,6 +53,7 @@ class RetractionInfo:
     notice_doi: Optional[str] = None
     notice_url: Optional[str] = None
     message: Optional[str] = None
+    provenance: ToolProvenance | None = None
 
     def to_dict(self) -> dict[str, JSONValue]:
         return {
@@ -60,6 +63,7 @@ class RetractionInfo:
             "notice_doi": self.notice_doi,
             "notice_url": self.notice_url,
             "message": self.message,
+            "provenance": cast(JSONValue, self.provenance.to_dict()) if self.provenance else None,
         }
 
 
@@ -110,6 +114,7 @@ class CrossRefTool:
                 doi=identifier,
                 status=RetractionStatus.NONE,
                 message="Could not resolve identifier to DOI",
+                provenance=make_live_provenance(source_db="crossref", db_version="live"),
             )
 
         # Fetch work metadata from CrossRef
@@ -120,6 +125,7 @@ class CrossRefTool:
                 doi=doi,
                 status=RetractionStatus.NONE,
                 message=f"Could not fetch DOI metadata: {e}",
+                provenance=make_live_provenance(source_db="crossref", db_version="live"),
             )
 
         # Check for retraction/update relationships
@@ -188,6 +194,7 @@ class CrossRefTool:
                     status=RetractionStatus.RETRACTED,
                     notice_doi=notice_doi,
                     message="This article has been retracted",
+                    provenance=make_live_provenance(source_db="crossref", db_version="live"),
                 )
 
         # Check update-policy for retractions / concerns / corrections
@@ -217,6 +224,7 @@ class CrossRefTool:
                     notice_doi=update_doi,
                     date=updated_date,
                     message="This article has been retracted",
+                    provenance=make_live_provenance(source_db="crossref", db_version="live"),
                 )
             if update_type in ("expression_of_concern", "expression-of-concern"):
                 return RetractionInfo(
@@ -225,6 +233,7 @@ class CrossRefTool:
                     notice_doi=update_doi,
                     date=updated_date,
                     message="Expression of concern issued for this article",
+                    provenance=make_live_provenance(source_db="crossref", db_version="live"),
                 )
             if update_type in ("correction", "erratum"):
                 return RetractionInfo(
@@ -233,6 +242,7 @@ class CrossRefTool:
                     notice_doi=update_doi,
                     date=updated_date,
                     message="Correction/erratum issued for this article",
+                    provenance=make_live_provenance(source_db="crossref", db_version="live"),
                 )
 
         # Check if the work type itself indicates retraction
@@ -260,12 +270,14 @@ class CrossRefTool:
                     status=RetractionStatus.RETRACTED,
                     notice_doi=doi,
                     message=f"This is a retraction notice for DOI: {original_doi}",
+                    provenance=make_live_provenance(source_db="crossref", db_version="live"),
                 )
 
         return RetractionInfo(
             doi=doi,
             status=RetractionStatus.NONE,
             message="No retraction or concern found",
+            provenance=make_live_provenance(source_db="crossref", db_version="live"),
         )
 
     def check_doi(self, doi: str) -> RetractionInfo:
@@ -300,6 +312,7 @@ class CrossRefTool:
                 doi=pmid,
                 status=RetractionStatus.NONE,
                 message="Literature tool required to look up DOI from PMID",
+                provenance=make_live_provenance(source_db="crossref", db_version="live"),
             )
 
         # Fetch article to get DOI
@@ -309,6 +322,7 @@ class CrossRefTool:
                 doi=pmid,
                 status=RetractionStatus.NONE,
                 message=f"No DOI found for PMID {pmid}",
+                provenance=make_live_provenance(source_db="crossref", db_version="live"),
             )
 
         return self.retractions(article.doi)

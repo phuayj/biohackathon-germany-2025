@@ -29,6 +29,7 @@ class DbProvenance:
     source_db: str  # e.g., "Monarch", "DisGeNET"
     db_version: str | None
     retrieved_at: str | None
+    cache_ttl: int | None = None
 
 
 @dataclass
@@ -254,13 +255,45 @@ def extract_edge_inspector_data(
     sources = build_source_references(edge, provenance)
 
     # Extract DB provenance from edge properties
-    db_provenance = None
+    db_provenance: DbProvenance | None = None
     props = edge.properties
-    if props.get("primary_knowledge_source"):
+
+    # Prefer explicit ToolProvenance attached to the edge, when available,
+    # and fall back to properties populated by the KG backend.
+    edge_prov = getattr(edge, "provenance", None)
+
+    source_db_value = props.get("source_db") or props.get("primary_knowledge_source")
+    db_version_value = props.get("db_version")
+    retrieved_value = props.get("retrieved_at")
+    cache_ttl_raw = props.get("cache_ttl")
+
+    if edge_prov is not None:
+        if not source_db_value:
+            source_db_value = edge_prov.source_db
+        if db_version_value is None and edge_prov.db_version is not None:
+            db_version_value = edge_prov.db_version
+        if retrieved_value is None and edge_prov.retrieved_at:
+            retrieved_value = edge_prov.retrieved_at
+        if cache_ttl_raw is None and edge_prov.cache_ttl is not None:
+            cache_ttl_raw = edge_prov.cache_ttl
+
+    cache_ttl_value: int | None
+    if isinstance(cache_ttl_raw, (int, float)):
+        cache_ttl_value = int(cache_ttl_raw)
+    elif isinstance(cache_ttl_raw, str):
+        try:
+            cache_ttl_value = int(cache_ttl_raw)
+        except ValueError:
+            cache_ttl_value = None
+    else:
+        cache_ttl_value = None
+
+    if source_db_value:
         db_provenance = DbProvenance(
-            source_db=str(props.get("primary_knowledge_source", "Unknown")),
-            db_version=str(props.get("db_version")) if props.get("db_version") else None,
-            retrieved_at=str(props.get("retrieved_at")) if props.get("retrieved_at") else None,
+            source_db=str(source_db_value),
+            db_version=str(db_version_value) if db_version_value else None,
+            retrieved_at=str(retrieved_value) if retrieved_value else None,
+            cache_ttl=cache_ttl_value,
         )
 
     # Compute rule footprint

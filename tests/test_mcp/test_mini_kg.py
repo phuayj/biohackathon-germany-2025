@@ -27,6 +27,8 @@ def test_mini_kg_counts_and_types() -> None:
     assert isinstance(sample.properties["evidence_age"], (int, float))
     assert sample.properties["evidence_age"] >= 0
     assert sample.sources
+    # Mini KG edges should expose standardized provenance metadata on properties
+    assert sample.properties.get("source_db") == "mini_kg"
 
 
 def test_mini_kg_limit_cap() -> None:

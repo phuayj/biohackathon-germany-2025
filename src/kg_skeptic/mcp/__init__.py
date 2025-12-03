@@ -15,6 +15,7 @@ from .kg import KGTool, Neo4jBackend
 from .mini_kg import load_mini_kg_backend, mini_kg_edge_count, iter_mini_kg_edges
 from .pathways import PathwayTool, PathwayRecord
 from .disgenet import DisGeNETTool, GeneDiseaseAssociation
+from .provenance import ToolProvenance
 
 __all__ = [
     "EuropePMCTool",
@@ -29,4 +30,5 @@ __all__ = [
     "PathwayRecord",
     "DisGeNETTool",
     "GeneDiseaseAssociation",
+    "ToolProvenance",
 ]

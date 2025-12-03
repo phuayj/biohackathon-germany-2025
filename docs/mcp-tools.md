@@ -2,6 +2,21 @@
 
 The KG-Skeptic MCP (Model Context Protocol) tools provide adapters for querying external biomedical data sources. These tools are used to validate claims made by LLM bio-agents against authoritative databases.
 
+All MCP tool return types now include a small, standardized provenance block so downstream components can reason about where data came from and how fresh it is.
+
+```python
+from kg_skeptic.mcp import EuropePMCTool, ToolProvenance
+
+tool = EuropePMCTool()
+results = tool.search("BRCA1 breast cancer", max_results=5)
+
+prov = results.provenance  # ToolProvenance
+print(prov.source_db)      # e.g. "europepmc"
+print(prov.db_version)     # e.g. "live" or "unknown"
+print(prov.retrieved_at)   # ISO-8601 UTC timestamp
+print(prov.cache_ttl)      # Cache TTL in seconds (or None)
+```
+
 ## Quick Start
 
 ```bash

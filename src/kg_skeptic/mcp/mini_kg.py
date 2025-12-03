@@ -18,6 +18,7 @@ from hashlib import sha256
 from typing import Dict, Iterator, Optional, Sequence
 
 from .kg import InMemoryBackend, KGEdge
+from .provenance import make_static_provenance
 
 
 class _Entity:
@@ -238,6 +239,7 @@ def _edge_properties(
     # training while still encoding relative recency of supporting PMIDs.
     reference_year = 2024
     evidence_age = max(0.0, float(reference_year - citation.year))
+    provenance = make_static_provenance(source_db="mini_kg")
 
     return {
         "edge_type": edge_type,
@@ -246,6 +248,11 @@ def _edge_properties(
         "confidence": round(confidence, 3),
         "cohort": cohort,
         "evidence_age": evidence_age,
+        "primary_knowledge_source": "mini_kg",
+        "source_db": provenance.source_db,
+        "db_version": provenance.db_version,
+        "retrieved_at": provenance.retrieved_at,
+        "cache_ttl": provenance.cache_ttl,
     }
 
 

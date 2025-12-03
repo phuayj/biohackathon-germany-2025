@@ -19,6 +19,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from .provenance import ToolProvenance, make_live_provenance
+
 
 GO_TERM_URL = "https://www.ebi.ac.uk/QuickGO/services/ontology/go/terms"
 # Reactome ContentService v3: generic query endpoint that accepts stable IDs.
@@ -37,6 +39,7 @@ class PathwayRecord:
     species: Optional[str] = None
     definition: Optional[str] = None
     metadata: dict[str, object] = field(default_factory=dict)
+    provenance: ToolProvenance | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -47,6 +50,7 @@ class PathwayRecord:
             "species": self.species,
             "definition": self.definition,
             "metadata": self.metadata,
+            "provenance": self.provenance.to_dict() if self.provenance else None,
         }
 
 
@@ -149,6 +153,7 @@ class PathwayTool:
             metadata={
                 "aspect": aspect,
             },
+            provenance=make_live_provenance(source_db="go"),
         )
 
     # ----------------------------------------------------------------- Reactome
@@ -196,4 +201,5 @@ class PathwayTool:
                 "hasDiagram": payload.get("hasDiagram"),
                 "literatureReference": literature_value,
             },
+            provenance=make_live_provenance(source_db="reactome"),
         )

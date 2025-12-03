@@ -18,6 +18,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from .provenance import ToolProvenance, make_live_provenance
+
 SEARCH_URL = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 
 
@@ -37,6 +39,7 @@ class EuropePMCArticle:
     source: str = "MED"  # MED (PubMed), PMC, etc.
     is_open_access: bool = False
     citation_count: int = 0
+    provenance: ToolProvenance | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -52,6 +55,7 @@ class EuropePMCArticle:
             "source": self.source,
             "is_open_access": self.is_open_access,
             "citation_count": self.citation_count,
+            "provenance": self.provenance.to_dict() if self.provenance else None,
         }
 
 
@@ -62,12 +66,14 @@ class EuropePMCSearchResult:
     query: str
     count: int
     articles: list[EuropePMCArticle]
+    provenance: ToolProvenance | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
             "query": self.query,
             "count": self.count,
             "articles": [a.to_dict() for a in self.articles],
+            "provenance": self.provenance.to_dict() if self.provenance else None,
         }
 
     @property
@@ -147,7 +153,19 @@ class EuropePMCTool:
 
         articles = [self._parse_article(r) for r in results]
 
-        return EuropePMCSearchResult(query=query, count=hit_count, articles=articles)
+        provenance = make_live_provenance(source_db="europepmc", db_version="live")
+
+        # Attach shared provenance to both the result and individual articles.
+        for article in articles:
+            if article.provenance is None:
+                article.provenance = provenance
+
+        return EuropePMCSearchResult(
+            query=query,
+            count=hit_count,
+            articles=articles,
+            provenance=provenance,
+        )
 
     def fetch(self, pmid: str) -> EuropePMCArticle:
         """
@@ -164,7 +182,12 @@ class EuropePMCTool:
         if result.articles:
             return result.articles[0]
         # Return minimal article if not found
-        return EuropePMCArticle(pmid=pmid, pmcid=None, title="[Article not found]")
+        return EuropePMCArticle(
+            pmid=pmid,
+            pmcid=None,
+            title="[Article not found]",
+            provenance=make_live_provenance(source_db="europepmc", db_version="live"),
+        )
 
     def fetch_by_pmcid(self, pmcid: str) -> EuropePMCArticle:
         """
@@ -183,7 +206,12 @@ class EuropePMCTool:
         result = self.search(f"PMCID:{pmcid}", max_results=1)
         if result.articles:
             return result.articles[0]
-        return EuropePMCArticle(pmid=None, pmcid=pmcid, title="[Article not found]")
+        return EuropePMCArticle(
+            pmid=None,
+            pmcid=pmcid,
+            title="[Article not found]",
+            provenance=make_live_provenance(source_db="europepmc", db_version="live"),
+        )
 
     def fetch_by_doi(self, doi: str) -> EuropePMCArticle:
         """
@@ -198,7 +226,13 @@ class EuropePMCTool:
         result = self.search(f'DOI:"{doi}"', max_results=1)
         if result.articles:
             return result.articles[0]
-        return EuropePMCArticle(pmid=None, pmcid=None, title="[Article not found]", doi=doi)
+        return EuropePMCArticle(
+            pmid=None,
+            pmcid=None,
+            title="[Article not found]",
+            doi=doi,
+            provenance=make_live_provenance(source_db="europepmc", db_version="live"),
+        )
 
     def fetch_batch(self, pmids: list[str]) -> list[EuropePMCArticle]:
         """
@@ -312,6 +346,7 @@ class EuropePMCTool:
             source=source,
             is_open_access=is_open_access,
             citation_count=citation_count,
+            provenance=make_live_provenance(source_db="europepmc", db_version="live"),
         )
 
     def pmid_from_doi(self, doi: str) -> Optional[str]:

@@ -22,6 +22,7 @@ class TestGeneDiseaseAssociation:
         assert d["disease_id"] == "C0006826"
         assert d["score"] == 0.85
         assert d["source"] == "CURATED"
+        assert "provenance" in d
 
 
 class TestDisGeNETTool:
@@ -61,6 +62,9 @@ class TestDisGeNETTool:
         assert results[0].gene_id == "7157"
         assert results[0].disease_id == "C0006826"
         assert results[0].score == 0.9
+        # DisGeNET associations should carry provenance
+        assert results[0].provenance is not None
+        assert results[0].provenance.source_db == "disgenet"
 
     @patch("kg_skeptic.mcp.disgenet.urlopen")
     def test_disease_to_genes(self, mock_urlopen: MagicMock) -> None:

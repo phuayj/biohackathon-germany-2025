@@ -36,6 +36,8 @@ class TestEuropePMCTool:
         first_article = articles_data[0]
         assert isinstance(first_article, dict)
         assert first_article["pmid"] == "12345678"
+        # Provenance block should be present (may be None when constructed manually)
+        assert "provenance" in d
 
     def test_search_result_pmids_property(self) -> None:
         """Test pmids property for PubMed compatibility."""
@@ -130,6 +132,9 @@ class TestEuropePMCTool:
         assert result.articles[0].is_open_access is True
         assert result.articles[1].pmid == "87654321"
         assert result.query == "BRCA1"
+        # Tool-level provenance should be attached
+        assert result.provenance is not None
+        assert result.provenance.source_db == "europepmc"
 
     @patch("kg_skeptic.mcp.europepmc.urlopen")
     def test_fetch_mocked(self, mock_urlopen: MagicMock) -> None:

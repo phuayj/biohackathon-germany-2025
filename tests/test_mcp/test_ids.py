@@ -31,6 +31,9 @@ class TestIDNormalizerTool:
         assert d["input_type"] == "hgnc_symbol"
         assert d["normalized_id"] == "HGNC:1100"
         assert d["found"] is True
+        # Explicit construction without provenance should serialize a null block
+        assert "provenance" in d
+        assert d["provenance"] is None
 
     def test_cross_reference_to_dict(self) -> None:
         """Test CrossReference serialization."""
@@ -83,6 +86,9 @@ class TestIDNormalizerTool:
         assert result.normalized_id == "HGNC:1100"
         assert result.label == "BRCA1"
         assert "BRCC1" in result.synonyms
+        # HGNC responses should carry standardized provenance
+        assert result.provenance is not None
+        assert result.provenance.source_db == "hgnc"
 
     @patch("kg_skeptic.mcp.ids.urlopen")
     def test_normalize_hgnc_not_found(self, mock_urlopen: MagicMock) -> None:
