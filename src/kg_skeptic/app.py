@@ -596,6 +596,8 @@ def render_subgraph_visualization(
         st.session_state.edge_type_filter = ["G-G", "G-Dis", "G-Phe", "G-Path", "Other"]
     if "selected_edge_key" not in st.session_state:
         st.session_state.selected_edge_key = None
+    if "claim_relevant_only" not in st.session_state:
+        st.session_state.claim_relevant_only = True
 
     # Build suspicion scores dict
     suspicion_scores: dict[tuple[str, str, str], float] = {}
@@ -628,8 +630,55 @@ def render_subgraph_visualization(
             status = "unknown"
         edge_statuses[(edge.subject, edge.predicate, edge.object)] = status
 
+    # Claim-relevant filter toggle
+    claim_relevant_only = st.toggle(
+        "Show only claim-relevant nodes",
+        value=st.session_state.claim_relevant_only,
+        help="When enabled, only shows nodes on shortest paths between subject and object",
+        key="claim_relevant_toggle",
+    )
+    st.session_state.claim_relevant_only = claim_relevant_only
+
+    # Filter subgraph to claim-relevant nodes if enabled
+    display_subgraph = subgraph
+    if claim_relevant_only:
+        # Keep nodes on shortest path between subject and object
+        relevant_node_ids: set[str] = {subject_id, object_id}
+        for node_id, features in subgraph.node_features.items():
+            # Node is on a shortest path if paths_on_shortest_subject_object > 0
+            if features.get("paths_on_shortest_subject_object", 0.0) > 0:
+                relevant_node_ids.add(node_id)
+
+        # Filter nodes and edges
+        from kg_skeptic.subgraph import Subgraph
+
+        filtered_nodes = [n for n in subgraph.nodes if n.id in relevant_node_ids]
+        filtered_edges = [
+            e
+            for e in subgraph.edges
+            if e.subject in relevant_node_ids and e.object in relevant_node_ids
+        ]
+        filtered_features = {
+            nid: feats for nid, feats in subgraph.node_features.items() if nid in relevant_node_ids
+        }
+        display_subgraph = Subgraph(
+            subject=subgraph.subject,
+            object=subgraph.object,
+            k_hops=subgraph.k_hops,
+            nodes=filtered_nodes,
+            edges=filtered_edges,
+            node_features=filtered_features,
+        )
+
     # Node/Edge count summary
-    st.caption(f"Nodes: {len(subgraph.nodes)} | Edges: {len(subgraph.edges)} | k={subgraph.k_hops}")
+    total_label = (
+        f" (filtered from {len(subgraph.nodes)}/{len(subgraph.edges)})"
+        if claim_relevant_only
+        else ""
+    )
+    st.caption(
+        f"Nodes: {len(display_subgraph.nodes)} | Edges: {len(display_subgraph.edges)} | k={subgraph.k_hops}{total_label}"
+    )
 
     # Edge type filter
     st.markdown("**Filter by Edge Type**")
@@ -675,7 +724,7 @@ def render_subgraph_visualization(
     # Build and render Pyvis network
     if edge_types:
         net = build_pyvis_network(
-            subgraph=subgraph,
+            subgraph=display_subgraph,
             suspicion_scores=suspicion_scores,
             edge_statuses=edge_statuses,
             selected_edge_types=set(edge_types),
@@ -692,7 +741,7 @@ def render_subgraph_visualization(
     st.markdown("---")
     st.markdown("**Select Edge to Inspect**")
 
-    edge_options = get_edge_options(subgraph)
+    edge_options = get_edge_options(display_subgraph)
 
     selected_edge_label = st.selectbox(
         "Choose an edge",
@@ -709,11 +758,11 @@ def render_subgraph_visualization(
     # Edge Inspector
     if st.session_state.selected_edge_key:
         subj, pred, obj = st.session_state.selected_edge_key
-        selected_edge = find_edge_by_key(subgraph, subj, pred, obj)
+        selected_edge = find_edge_by_key(display_subgraph, subj, pred, obj)
         if selected_edge:
             render_edge_inspector(
                 edge=selected_edge,
-                subgraph=subgraph,
+                subgraph=display_subgraph,
                 evaluation=evaluation,
                 suspicion_scores=suspicion_scores,
                 provenance=provenance,
