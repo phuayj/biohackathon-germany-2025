@@ -64,6 +64,31 @@ streamlit run src/kg_skeptic/app.py
 
 By default the app uses a pre-seeded in-memory mini KG for fast, offline checks.
 
+### Enabling Curated KG Signals
+
+You can enhance the audit with external curated knowledge sources. These provide "positive evidence" signals (e.g., verifying a gene-disease link exists in DisGeNET) which can help a claim PASS even if it lacks multiple citations.
+
+**1. DisGeNET (Gene-Disease Associations)**
+Requires an API key. Register at [disgenet.org](https://www.disgenet.org/signup/) to get one.
+
+```bash
+export DISGENET_API_KEY=your_disgenet_token
+```
+
+**2. Monarch Initiative (Curated KG)**
+Enabled by default in the app. The skeptic queries the Monarch KG API for curated associations (gene-disease, gene-phenotype) to complement DisGeNET.
+
+To disable it (e.g., for offline use):
+```bash
+export KG_SKEPTIC_USE_MONARCH_KG=false
+```
+
+**Example run with full features:**
+```bash
+export DISGENET_API_KEY=your_key_here
+uv run streamlit run src/kg_skeptic/app.py
+```
+
 ### With a Neo4j / BioCypher backend
 
 To use a local Neo4j graph instead:
@@ -85,14 +110,6 @@ To use a local Neo4j graph instead:
    ```
 
 The sidebar will show "Using Neo4j/BioCypher KG backend" when connected. If configuration is missing, the app falls back to the in-memory mini KG.
-
-You can also enable **DisGeNET-backed gene–disease associations** in the core skeptic pipeline. Set:
-
-```bash
-export DISGENET_API_KEY=your_disgenet_token
-```
-
-before launching Streamlit. When configured, the skeptic will use DisGeNET as an additional curated KG signal when scoring gene–disease claims (via the `DisGeNETTool` MCP adapter and dedicated rules).
 
 ## Project structure
 

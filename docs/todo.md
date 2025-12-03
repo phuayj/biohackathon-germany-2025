@@ -148,22 +148,22 @@
 - [ ] Feature centroid computation for new error types.
 - [ ] Lightweight rehearsal on 30–50 example buffer (no full retrain).
 
-### UI v2
-- [ ] Subgraph visualization with heat coloring by suspicion score.
-- [ ] Richer interactive subgraph visualization (node-link layout, hover details, zoom/pan).
-- [ ] UI controls to filter subgraph edges by type (G–G, G–Dis, G–Phe, G–Path).
-- [ ] "Why flagged?" drawer: top rules + top suspicious edges.
-- [ ] One-click patch suggestions.
+### UI v2 (Done)
+- [x] Subgraph visualization with heat coloring by suspicion score.
+- [x] Richer interactive subgraph visualization (node-link layout, hover details, zoom/pan).
+- [x] UI controls to filter subgraph edges by type (G–G, G–Dis, G–Phe, G–Path).
+- [x] "Why flagged?" drawer: top rules + top suspicious edges.
+- [x] One-click patch suggestions.
 - [ ] Surface per-edge rule feature aggregates in the subgraph edge table (e.g., show `rule_feature_sum` and `is_claim_edge_for_rule_features`).
 
-#### Edge Inspector Panel (NEW)
-- [ ] Right-panel Edge Inspector on edge click showing:
+#### Edge Inspector Panel (Done)
+- [x] Inline Edge Inspector on edge click showing:
   - Exact sources (PMIDs/DOIs) with "Open" buttons.
   - "Why this edge exists" (DB + version + query used).
   - Rule footprint (which rules passed/failed for this edge).
   - Patch suggestions (nearest valid ontology term, alternate PMIDs).
-- [ ] Edge color coding: red = retracted, amber = expression of concern, green = clean.
-- [ ] Edge thickness by evidence multiplicity.
+- [x] Edge color coding: red = retracted, amber = expression of concern, green = clean.
+- [x] Edge thickness by evidence multiplicity.
 
 ---
 

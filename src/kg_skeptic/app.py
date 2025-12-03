@@ -14,16 +14,27 @@ import os
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 from collections.abc import Iterable, Mapping
 from typing import Protocol, cast
 
 from kg_skeptic.models import Claim, EntityMention
 from kg_skeptic.pipeline import AuditResult, ClaimNormalizer, SkepticPipeline
-from kg_skeptic.mcp.kg import KGBackend, Neo4jBackend
+from kg_skeptic.mcp.kg import KGBackend, KGEdge, Neo4jBackend
 from kg_skeptic.mcp.mini_kg import load_mini_kg_backend
 from kg_skeptic.provenance import CitationProvenance
 from kg_skeptic.rules import RuleEvaluation
-from kg_skeptic.subgraph import build_pair_subgraph
+from kg_skeptic.subgraph import Subgraph, build_pair_subgraph
+from kg_skeptic.visualization import (
+    CATEGORY_COLORS,
+    EDGE_STATUS_COLORS,
+    build_pyvis_network,
+    extract_edge_inspector_data,
+    find_edge_by_key,
+    get_edge_options,
+    network_to_html,
+    suspicion_to_color,
+)
 
 
 def _load_demo_claims_from_fixtures() -> list[tuple[str, Claim]]:
@@ -425,6 +436,295 @@ def render_provenance(provenance: list[CitationProvenance]) -> None:
             st.caption(f"[Link]({record.url}) • source={record.source}")
 
 
+def render_edge_inspector(
+    edge: KGEdge,
+    subgraph: Subgraph,
+    evaluation: RuleEvaluation,
+    suspicion_scores: dict[tuple[str, str, str], float],
+    provenance: list[CitationProvenance],
+) -> None:
+    """Render edge inspector as inline expander."""
+    inspector_data = extract_edge_inspector_data(
+        edge=edge,
+        subgraph=subgraph,
+        evaluation=evaluation,
+        suspicion_scores=suspicion_scores,
+        provenance=provenance,
+    )
+
+    pred = edge.predicate
+    if pred.startswith("biolink:"):
+        pred = pred[8:]
+    label = f"{edge.subject_label or edge.subject} --[{pred}]--> {edge.object_label or edge.object}"
+
+    with st.expander(f"Edge Inspector: {label}", expanded=True):
+        # Sources section
+        st.markdown("**Sources**")
+        if inspector_data.sources:
+            for src in inspector_data.sources:
+                status_color = EDGE_STATUS_COLORS.get(src.status, "#757575")
+                col1, col2, col3 = st.columns([3, 1, 1])
+                with col1:
+                    st.code(src.identifier)
+                with col2:
+                    if src.url:
+                        st.link_button("Open", src.url)
+                with col3:
+                    st.markdown(
+                        f'<span style="background-color: {status_color}; '
+                        f'color: white; padding: 2px 6px; border-radius: 4px;">'
+                        f"{src.status}</span>",
+                        unsafe_allow_html=True,
+                    )
+        else:
+            st.caption("No sources available")
+
+        # Database provenance
+        if inspector_data.db_provenance:
+            st.markdown("**Database Provenance**")
+            st.caption(f"Source: {inspector_data.db_provenance.source_db}")
+            if inspector_data.db_provenance.db_version:
+                st.caption(f"Version: {inspector_data.db_provenance.db_version}")
+            if inspector_data.db_provenance.retrieved_at:
+                st.caption(f"Retrieved: {inspector_data.db_provenance.retrieved_at}")
+
+        # Rule footprint
+        if inspector_data.rule_footprint:
+            st.markdown("**Rule Footprint**")
+            for rule in inspector_data.rule_footprint:
+                icon = "+" if rule.passed else "-"
+                color = "#1B5E20" if rule.passed else "#B71C1C"
+                status = "PASSED" if rule.passed else "FAILED"
+                st.markdown(
+                    f'<span style="color: {color}; font-weight: bold;">[{icon}]</span> '
+                    f"{rule.rule_id}: {status}",
+                    unsafe_allow_html=True,
+                )
+                if rule.because:
+                    st.caption(f"  {rule.because}")
+
+        # Suspicion score
+        if inspector_data.suspicion_score is not None:
+            score = inspector_data.suspicion_score
+            color = suspicion_to_color(score)
+            if score < 0.3:
+                level = "low"
+            elif score < 0.5:
+                level = "moderate"
+            elif score < 0.7:
+                level = "elevated"
+            else:
+                level = "high"
+            st.markdown(f"**Suspicion Score**: {score:.2f} ({level})")
+            st.progress(score)
+
+        # Patch suggestions
+        if inspector_data.patch_suggestions:
+            st.markdown("**Patch Suggestions**")
+            for patch in inspector_data.patch_suggestions:
+                st.info(f"**{patch.patch_type}**: {patch.description}\n\n{patch.action}")
+
+
+def render_why_flagged_drawer(
+    evaluation: RuleEvaluation,
+    suspicion: dict[str, object],
+) -> None:
+    """Render the 'Why Flagged?' drawer with top rules and suspicious edges."""
+    with st.expander("Why Flagged?", expanded=False):
+        # Top fired rules
+        st.markdown("### Top Rules Fired")
+        sorted_entries = sorted(
+            evaluation.trace.entries,
+            key=lambda e: abs(e.score),
+            reverse=True,
+        )[:5]
+
+        for entry in sorted_entries:
+            if entry.score > 0:
+                icon = "+"
+                color = "#1B5E20"
+            elif entry.score == 0:
+                icon = "!"
+                color = "#E65100"
+            else:
+                icon = "-"
+                color = "#B71C1C"
+            st.markdown(
+                f'<span style="color: {color}; font-weight: bold;">[{icon}]</span> '
+                f"**{entry.rule_id}** ({entry.score:+.1f})",
+                unsafe_allow_html=True,
+            )
+            st.caption(entry.because)
+
+        # Top suspicious edges (from GNN)
+        top_edges = suspicion.get("top_edges", [])
+        if isinstance(top_edges, list) and top_edges:
+            st.markdown("### Top Suspicious Edges (GNN)")
+            for edge_data in top_edges[:5]:
+                if not isinstance(edge_data, Mapping):
+                    continue
+                try:
+                    score = float(edge_data.get("score", 0.0))
+                except (TypeError, ValueError):
+                    score = 0.0
+                color = suspicion_to_color(score)
+                is_claim = edge_data.get("is_claim_edge", False)
+                claim_badge = " **[CLAIM]**" if is_claim else ""
+
+                st.markdown(
+                    f'<span style="background-color: {color}; color: white; '
+                    f'padding: 2px 6px; border-radius: 4px;">{score:.2f}</span> '
+                    f'{edge_data.get("subject", "?")} -> {edge_data.get("object", "?")}{claim_badge}',
+                    unsafe_allow_html=True,
+                )
+
+
+def render_subgraph_visualization(
+    subgraph: Subgraph,
+    suspicion: dict[str, object],
+    evaluation: RuleEvaluation,
+    provenance: list[CitationProvenance],
+    subject_id: str,
+    object_id: str,
+) -> None:
+    """Render interactive subgraph with edge inspector.
+
+    This replaces the old DataFrame-based display with Pyvis visualization.
+    """
+    # Initialize session state for filters
+    if "edge_type_filter" not in st.session_state:
+        st.session_state.edge_type_filter = ["G-G", "G-Dis", "G-Phe", "G-Path", "Other"]
+    if "selected_edge_key" not in st.session_state:
+        st.session_state.selected_edge_key = None
+
+    # Build suspicion scores dict
+    suspicion_scores: dict[tuple[str, str, str], float] = {}
+    top_edges = suspicion.get("top_edges", [])
+    if isinstance(top_edges, list):
+        for item in top_edges:
+            if isinstance(item, Mapping):
+                key = (
+                    str(item.get("subject", "")),
+                    str(item.get("predicate", "")),
+                    str(item.get("object", "")),
+                )
+                try:
+                    suspicion_scores[key] = float(item.get("score", 0.0))
+                except (TypeError, ValueError):
+                    pass
+
+    # Build edge status dict from provenance
+    edge_statuses: dict[tuple[str, str, str], str] = {}
+    prov_status_by_id = {p.identifier: p.status for p in provenance}
+    for edge in subgraph.edges:
+        statuses = [prov_status_by_id.get(src, "unknown") for src in edge.sources]
+        if "retracted" in statuses:
+            status = "retracted"
+        elif "concern" in statuses:
+            status = "concern"
+        elif "clean" in statuses:
+            status = "clean"
+        else:
+            status = "unknown"
+        edge_statuses[(edge.subject, edge.predicate, edge.object)] = status
+
+    # Node/Edge count summary
+    st.caption(f"Nodes: {len(subgraph.nodes)} | Edges: {len(subgraph.edges)} | k={subgraph.k_hops}")
+
+    # Edge type filter
+    st.markdown("**Filter by Edge Type**")
+    edge_types = st.multiselect(
+        "Select edge types to display",
+        options=["G-G", "G-Dis", "G-Phe", "G-Path", "Other"],
+        default=st.session_state.edge_type_filter,
+        key="edge_filter_multiselect",
+        label_visibility="collapsed",
+    )
+    st.session_state.edge_type_filter = edge_types
+
+    # Color legend
+    with st.expander("Color Legend", expanded=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Node Categories**")
+            for cat, color in CATEGORY_COLORS.items():
+                st.markdown(
+                    f'<span style="background-color: {color}; color: white; '
+                    f'padding: 2px 8px; border-radius: 4px;">{cat}</span>',
+                    unsafe_allow_html=True,
+                )
+        with col2:
+            st.markdown("**Suspicion Heat Map**")
+            st.markdown(
+                '<span style="background-color: #4CAF50; color: white; padding: 2px 8px; border-radius: 4px;">Low (0.0-0.3)</span>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                '<span style="background-color: #FFEB3B; color: black; padding: 2px 8px; border-radius: 4px;">Moderate (0.3-0.5)</span>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                '<span style="background-color: #FF9800; color: white; padding: 2px 8px; border-radius: 4px;">Elevated (0.5-0.7)</span>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                '<span style="background-color: #F44336; color: white; padding: 2px 8px; border-radius: 4px;">High (0.7-1.0)</span>',
+                unsafe_allow_html=True,
+            )
+
+    # Build and render Pyvis network
+    if edge_types:
+        net = build_pyvis_network(
+            subgraph=subgraph,
+            suspicion_scores=suspicion_scores,
+            edge_statuses=edge_statuses,
+            selected_edge_types=set(edge_types),
+            claim_subject=subject_id,
+            claim_object=object_id,
+        )
+
+        html = network_to_html(net)
+        components.html(html, height=650, scrolling=True)
+    else:
+        st.warning("Select at least one edge type to display the graph.")
+
+    # Edge selector dropdown
+    st.markdown("---")
+    st.markdown("**Select Edge to Inspect**")
+
+    edge_options = get_edge_options(subgraph)
+
+    selected_edge_label = st.selectbox(
+        "Choose an edge",
+        options=["(none)"] + list(edge_options.keys()),
+        key="edge_selector_dropdown",
+        label_visibility="collapsed",
+    )
+
+    if selected_edge_label != "(none)":
+        st.session_state.selected_edge_key = edge_options[selected_edge_label]
+    else:
+        st.session_state.selected_edge_key = None
+
+    # Edge Inspector
+    if st.session_state.selected_edge_key:
+        subj, pred, obj = st.session_state.selected_edge_key
+        edge = find_edge_by_key(subgraph, subj, pred, obj)
+        if edge:
+            render_edge_inspector(
+                edge=edge,
+                subgraph=subgraph,
+                evaluation=evaluation,
+                suspicion_scores=suspicion_scores,
+                provenance=provenance,
+            )
+    else:
+        st.info("Select an edge from the dropdown to view detailed inspection.")
+
+    # Why Flagged drawer
+    render_why_flagged_drawer(evaluation, suspicion)
+
+
 def render_audit_card(result: AuditResult) -> None:
     """Render the main audit card."""
     claim = result.report.claims[0]
@@ -485,34 +785,12 @@ def render_audit_card(result: AuditResult) -> None:
     st.subheader("Rules Fired")
     render_rule_trace(evaluation)
 
-    # Optional suspicion GNN overlay (top edges).
+    # Get suspicion data for visualization
     suspicion = result.suspicion or result.report.stats.get("suspicion", {})
-    if isinstance(suspicion, Mapping):
-        top_edges_raw = suspicion.get("top_edges")
-        if isinstance(top_edges_raw, list) and top_edges_raw:
-            rows: list[dict[str, object]] = []
-            for item in top_edges_raw[:10]:
-                if not isinstance(item, Mapping):
-                    continue
-                try:
-                    score = float(item.get("score", 0.0))
-                except (TypeError, ValueError):
-                    score = 0.0
-                rows.append(
-                    {
-                        "subject": item.get("subject"),
-                        "predicate": item.get("predicate"),
-                        "object": item.get("object"),
-                        "suspicion": round(score, 3),
-                        "is_claim_edge": bool(item.get("is_claim_edge")),
-                    }
-                )
+    if not isinstance(suspicion, dict):
+        suspicion = {}
 
-            if rows:
-                st.subheader("Suspicion GNN (Top edges)")
-                st.dataframe(rows, use_container_width=True)
-
-    # Local KG subgraph (Day 3 preview)
+    # Local KG subgraph with interactive visualization
     metadata = claim.metadata if isinstance(claim.metadata, Mapping) else {}
     triple_meta = metadata.get("normalized_triple")
     subject_id: str | None = None
@@ -530,8 +808,8 @@ def render_audit_card(result: AuditResult) -> None:
                 object_id = obj_id_raw
 
     if subject_id and object_id:
-        st.subheader("Local Subgraph (Day 3 Preview)")
-        with st.expander("Show 2-hop KG subgraph around this claim", expanded=False):
+        st.subheader("Interactive Subgraph")
+        with st.expander("Show 2-hop KG subgraph around this claim", expanded=True):
             try:
                 backend = _get_subgraph_backend()
                 subgraph = build_pair_subgraph(
@@ -545,63 +823,17 @@ def render_audit_card(result: AuditResult) -> None:
                 st.error("Could not build a subgraph for this claim.")
                 st.caption(f"Details: {exc}")
             else:
-                st.caption(
-                    f"Nodes: {len(subgraph.nodes)} | "
-                    f"Edges: {len(subgraph.edges)} | "
-                    f"k={subgraph.k_hops}"
-                )
-
                 if not subgraph.nodes:
                     st.info("No nodes found in the constrained subgraph.")
-                    return
-
-                # Summarize nodes by degree
-                st.markdown("**Nodes by degree (top 15)**")
-                node_rows: list[dict[str, object]] = []
-                label_by_id = {
-                    n.id: (
-                        (n.norm_label or n.label or n.id)
-                        if hasattr(n, "norm_label")
-                        else (n.label or n.id)
-                    )
-                    for n in subgraph.nodes
-                }
-                category_by_id = {n.id: (n.category or "?") for n in subgraph.nodes}
-
-                sorted_nodes = sorted(
-                    subgraph.node_features.items(),
-                    key=lambda item: item[1].get("degree", 0.0),
-                    reverse=True,
-                )[:15]
-
-                for node_id, feats in sorted_nodes:
-                    node_rows.append(
-                        {
-                            "id": node_id,
-                            "label": label_by_id.get(node_id, node_id),
-                            "category": category_by_id.get(node_id, "?"),
-                            "degree": feats.get("degree", 0.0),
-                        }
-                    )
-
-                if node_rows:
-                    st.dataframe(node_rows, use_container_width=True)
-
-                # Show a small edge sample
-                if subgraph.edges:
-                    st.markdown("**Sample edges (up to 20)**")
-                    edge_rows: list[dict[str, object]] = []
-                    for edge in subgraph.edges[:20]:
-                        edge_rows.append(
-                            {
-                                "subject": edge.subject,
-                                "predicate": edge.predicate,
-                                "object": edge.object,
-                            }
-                        )
-                    st.dataframe(edge_rows, use_container_width=True)
                 else:
-                    st.info("No edges found in the constrained subgraph.")
+                    render_subgraph_visualization(
+                        subgraph=subgraph,
+                        suspicion=suspicion,
+                        evaluation=evaluation,
+                        provenance=result.provenance,
+                        subject_id=subject_id,
+                        object_id=object_id,
+                    )
 
 
 def main() -> None:
