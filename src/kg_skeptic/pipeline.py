@@ -1590,12 +1590,17 @@ class SkepticPipeline:
         num_relations = int(checkpoint.get("num_relations", max(1, len(predicate_to_index) or 1)))
         edge_in_channels = int(checkpoint.get("edge_in_channels", len(edge_feature_names)))
 
+        # Detect if checkpoint has error type head weights
+        has_error_type_head = any("error_type_head" in k for k in state_dict.keys())
+        num_error_types = 4 if has_error_type_head else 0
+
         try:
             model = RGCNSuspicionModel(
                 in_channels=in_channels,
                 num_relations=num_relations,
                 hidden_channels=hidden_channels,
                 edge_in_channels=edge_in_channels,
+                num_error_types=num_error_types,
             )
         except Exception:
             return None
@@ -1616,6 +1621,45 @@ class SkepticPipeline:
         self._suspicion_model = model
         self._suspicion_meta = meta
         return model, meta
+
+    def get_suspicion_model_status(self) -> dict[str, object]:
+        """Return status information about the suspicion GNN model.
+
+        Returns a dict with:
+        - enabled: Whether suspicion GNN is configured
+        - model_path: Path to the model file (if configured)
+        - loaded: Whether the model loaded successfully
+        - has_error_type_head: Whether the model includes error type classification
+        - error: Error message if loading failed
+        """
+        status: dict[str, object] = {
+            "enabled": getattr(self, "_use_suspicion_gnn", False),
+            "model_path": str(self._suspicion_model_path) if self._suspicion_model_path else None,
+            "loaded": False,
+            "has_error_type_head": False,
+            "error": None,
+        }
+
+        if not status["enabled"]:
+            if self._suspicion_model_path is None:
+                status["error"] = "No model path configured"
+            elif not self._suspicion_model_path.exists():
+                status["error"] = f"Model file not found: {self._suspicion_model_path}"
+            return status
+
+        # Try to load the model to check status
+        bundle = self._get_suspicion_model()
+        if bundle is not None:
+            model, _ = bundle
+            status["loaded"] = True
+            # Check if model has error type head
+            status["has_error_type_head"] = (
+                hasattr(model, "error_type_head") and model.error_type_head is not None
+            )
+        else:
+            status["error"] = "Model failed to load (check PyTorch installation or model format)"
+
+        return status
 
     def _compute_suspicion_gnn_scores(
         self,
@@ -1828,11 +1872,30 @@ class SkepticPipeline:
             "top_edges": top_edges,
         }
 
-        # Serialize error type predictions with string keys for JSON compatibility
+        # Serialize error type predictions with string keys for JSON compatibility.
+        # Only include predictions for edges that are claim-related:
+        # 1. The claim edge itself (connects subject and object directly)
+        # 2. Edges in the top 10 suspicious edges list
+        # This avoids showing error types for all surrounding context edges.
         if error_type_predictions:
+            # Identify claim edges and top suspicious edges
+            claim_edge_keys: set[tuple[str, str, str]] = set()
+            for row in rows:
+                if row.get("is_claim_edge"):
+                    claim_edge_keys.add((row["subject"], row["predicate"], row["object"]))
+
+            # Also include top 10 edges
+            top_edge_keys: set[tuple[str, str, str]] = set()
+            for row in rows_sorted[:10]:
+                top_edge_keys.add((row["subject"], row["predicate"], row["object"]))
+
+            # Include both claim edges and top suspicious edges
+            relevant_keys = claim_edge_keys | top_edge_keys
+
             result["error_type_predictions"] = {
                 f"{subj}|{pred}|{obj}": (et_str, conf)
                 for (subj, pred, obj), (et_str, conf) in error_type_predictions.items()
+                if (subj, pred, obj) in relevant_keys
             }
 
         return result

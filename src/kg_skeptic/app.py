@@ -1025,18 +1025,20 @@ def render_audit_card(result: AuditResult) -> None:
     if not isinstance(suspicion, dict):
         suspicion = {}
 
-    # Extract error type predictions from suspicion dict
+    # Extract error type predictions from suspicion dict.
+    # Only show error types for WARN/FAIL verdicts - PASS claims don't need error explanations.
     error_type_predictions: dict[tuple[str, str, str], tuple[str, float]] = {}
-    raw_preds = suspicion.get("error_type_predictions", {})
-    if isinstance(raw_preds, dict):
-        for key_str, value in raw_preds.items():
-            if isinstance(key_str, str) and "|" in key_str:
-                parts = key_str.split("|", 2)
-                if len(parts) == 3 and isinstance(value, (list, tuple)) and len(value) == 2:
-                    subj, pred_str, obj = parts
-                    et_str, conf = value
-                    if isinstance(et_str, str) and isinstance(conf, (int, float)):
-                        error_type_predictions[(subj, pred_str, obj)] = (et_str, float(conf))
+    if verdict != "PASS":
+        raw_preds = suspicion.get("error_type_predictions", {})
+        if isinstance(raw_preds, dict):
+            for key_str, value in raw_preds.items():
+                if isinstance(key_str, str) and "|" in key_str:
+                    parts = key_str.split("|", 2)
+                    if len(parts) == 3 and isinstance(value, (list, tuple)) and len(value) == 2:
+                        subj, pred_str, obj = parts
+                        et_str, conf = value
+                        if isinstance(et_str, str) and isinstance(conf, (int, float)):
+                            error_type_predictions[(subj, pred_str, obj)] = (et_str, float(conf))
 
     # Local KG subgraph with interactive visualization
     metadata = claim.metadata if isinstance(claim.metadata, Mapping) else {}
@@ -1126,6 +1128,19 @@ def main() -> None:
             st.caption("🕸 Using custom KG backend")
         else:
             st.caption("🧪 Using in-memory mini KG backend")
+
+        # GNN Model Status
+        pipeline = _get_pipeline(use_gliner=use_gliner)
+        model_status = pipeline.get_suspicion_model_status()
+        if model_status["loaded"]:
+            if model_status["has_error_type_head"]:
+                st.caption("🧠 GNN model loaded (with error types)")
+            else:
+                st.caption("🧠 GNN model loaded (suspicion only)")
+        elif model_status["enabled"]:
+            st.warning(f"⚠️ GNN model not loaded: {model_status['error']}")
+        else:
+            st.caption("ℹ️ No GNN model configured")
 
         st.divider()
         st.caption("**Entity Source Legend:**")
