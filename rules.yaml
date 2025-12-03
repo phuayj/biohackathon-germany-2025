@@ -144,3 +144,13 @@ rules:
           op: equals
           value: false
     because: "because DisGeNET does not report a high-scoring association for this gene–disease pair"
+
+  - id: tissue_mismatch
+    description: Claimed tissue context does not match expected tissue for this pathway/process
+    weight: -0.6
+    when:
+      all:
+        - fact: tissue.is_mismatch
+          op: equals
+          value: true
+    because: "because {tissue.mismatch_details}"

@@ -102,8 +102,11 @@ def _load_demo_claims_from_fixtures() -> list[tuple[str, Claim]]:
 
             # Convert evidence to list of strings
             evidence_list: list[str] = []
+            structured_evidence: list[dict[str, object]] = []
             for ev in fixture.get("evidence", []):
                 ev_type = ev.get("type", "")
+                # Store structured evidence for tissue mismatch detection etc.
+                structured_evidence.append(dict(ev))
                 if ev_type == "pubmed" and ev.get("pmid"):
                     evidence_list.append(f"PMID:{ev['pmid']}")
                 elif ev_type == "go" and ev.get("id"):
@@ -113,6 +116,8 @@ def _load_demo_claims_from_fixtures() -> list[tuple[str, Claim]]:
                 elif ev_type == "mondo" and ev.get("id"):
                     evidence_list.append(ev["id"])
                 elif ev_type == "hpo" and ev.get("id"):
+                    evidence_list.append(ev["id"])
+                elif ev_type == "uberon" and ev.get("id"):
                     evidence_list.append(ev["id"])
 
             claim = Claim(
@@ -125,6 +130,7 @@ def _load_demo_claims_from_fixtures() -> list[tuple[str, Claim]]:
                     "predicate": fixture.get("predicate", ""),
                     "qualifiers": fixture.get("qualifiers", {}),
                     "expected_decision": fixture.get("expected_decision", ""),
+                    "structured_evidence": structured_evidence,
                 },
             )
 

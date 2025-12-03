@@ -771,6 +771,21 @@ class ClaimNormalizer:
             if isinstance(qualifiers_raw, Mapping):
                 provided_qualifiers = {str(k): v for k, v in qualifiers_raw.items()}
 
+        # Also extract qualifiers and predicate from Claim metadata (for demo fixtures)
+        if isinstance(payload, Claim):
+            claim_meta = claim.metadata if isinstance(claim.metadata, Mapping) else {}
+            meta_qualifiers = claim_meta.get("qualifiers")
+            if isinstance(meta_qualifiers, Mapping) and not provided_qualifiers:
+                provided_qualifiers = {str(k): v for k, v in meta_qualifiers.items()}
+            meta_predicate = claim_meta.get("predicate")
+            if (
+                isinstance(meta_predicate, str)
+                and meta_predicate.strip()
+                and not predicate_provided
+            ):
+                predicate = meta_predicate
+                predicate_provided = True
+
         # Pull citations from text/support spans
         citations.extend(self._extract_citations(claim.text))
         if claim.support_span:
@@ -1095,6 +1110,65 @@ def _collect_structured_evidence(claim: Claim | None) -> list[Mapping[str, objec
     return entries
 
 
+def _detect_tissue_mismatch(
+    qualifiers: Mapping[str, object],
+    structured_evidence: list[Mapping[str, object]],
+) -> dict[str, object]:
+    """Detect tissue context mismatch between claimed and expected tissue.
+
+    The claim qualifier may specify a tissue context (e.g., "tissue": "UBERON:0002107"
+    for liver). If the evidence includes UBERON IDs for tissues where the pathway/process
+    actually occurs (e.g., retina for phototransduction), we flag a mismatch.
+
+    Returns a dictionary with tissue mismatch facts for the rule engine.
+    """
+    result: dict[str, object] = {
+        "has_tissue_qualifier": False,
+        "claimed_tissue": None,
+        "expected_tissues": [],
+        "is_mismatch": False,
+        "mismatch_details": "",
+    }
+
+    # Extract claimed tissue from qualifiers
+    claimed_tissue = qualifiers.get("tissue")
+    if not isinstance(claimed_tissue, str) or not claimed_tissue.strip():
+        return result
+
+    claimed_tissue = claimed_tissue.strip().upper()
+    if not claimed_tissue.startswith("UBERON:"):
+        return result
+
+    result["has_tissue_qualifier"] = True
+    result["claimed_tissue"] = claimed_tissue
+
+    # Extract all UBERON IDs from structured evidence
+    uberon_ids: set[str] = set()
+    for ev in structured_evidence:
+        ev_type = ev.get("type")
+        ev_id = ev.get("id")
+        if isinstance(ev_type, str) and ev_type.lower() == "uberon":
+            if isinstance(ev_id, str) and ev_id.strip():
+                uberon_ids.add(ev_id.strip().upper())
+
+    if not uberon_ids:
+        return result
+
+    # Remove the claimed tissue from expected tissues to find mismatches
+    expected_tissues = uberon_ids - {claimed_tissue}
+    result["expected_tissues"] = sorted(expected_tissues)
+
+    # If there are other UBERON IDs that don't match the claimed tissue,
+    # this indicates a tissue mismatch
+    if expected_tissues:
+        result["is_mismatch"] = True
+        result["mismatch_details"] = (
+            f"claimed {claimed_tissue} but evidence suggests {', '.join(sorted(expected_tissues))}"
+        )
+
+    return result
+
+
 def _detect_hedging_language(text: str) -> tuple[bool, list[str]]:
     """Lightweight detection of hedging/uncertainty cues in text."""
     lowered = text.lower()
@@ -1192,6 +1266,9 @@ def build_rule_facts(
     if isinstance(claim, Claim):
         predicate_provided = bool(claim.metadata.get("predicate_provided"))
 
+    # Detect tissue context mismatch
+    tissue_facts = _detect_tissue_mismatch(qualifiers_map, structured_evidence)
+
     return {
         "claim": {
             "predicate": triple.predicate,
@@ -1251,6 +1328,7 @@ def build_rule_facts(
                 and citation_count == 0
             ),
         },
+        "tissue": tissue_facts,
     }
 
 
@@ -1962,6 +2040,22 @@ class SkepticPipeline:
                     score=0.0,
                     because="because subject and object appear to be ontology siblings (downgrade PASS → WARN)",
                     description="Sibling conflict gate: downgrades PASS to WARN",
+                )
+            )
+
+        # Downgrade tissue mismatch to WARN so claims with incorrect tissue
+        # context are surfaced even if other signals are strong.
+        tissue_raw = facts.get("tissue")
+        tissue = tissue_raw if isinstance(tissue_raw, Mapping) else {}
+        if verdict == "PASS" and tissue.get("is_mismatch"):
+            verdict = "WARN"
+            mismatch_details = tissue.get("mismatch_details", "tissue mismatch detected")
+            evaluation.trace.add(
+                RuleTraceEntry(
+                    rule_id="gate:tissue_mismatch",
+                    score=0.0,
+                    because=f"because {mismatch_details} (downgrade PASS → WARN)",
+                    description="Tissue mismatch gate: downgrades PASS to WARN",
                 )
             )
 
