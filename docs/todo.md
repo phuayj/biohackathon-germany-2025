@@ -109,7 +109,7 @@
 - [x] Add `evidence_age` feature (years since newest PMID) per spec §3.0.
 - [x] Add `path_length_to_pathway` feature (shortest path to pathway touching both ends) per spec §3.0.
 - [x] Add Node2Vec embeddings (d=64) from Neo4j GDS or separate embedding step per spec §3.0 (optional).
-- [ ] Add self-supervised link prediction pretrain (GAE/GraphSAGE) per spec §D (optional).
+- [x] Add self-supervised link prediction pretrain (GAE/GraphSAGE) per spec §D (optional).
 
 ### Live Graph & Evidence Overlay (NEW)
 > Transforms the graph from a static cache into a **live view** over curated sources.

@@ -58,6 +58,323 @@ from kg_skeptic.suspicion_gnn import (
 
 
 # ---------------------------------------------------------------------------
+# Self-supervised link prediction pretrain (GAE/GraphSAGE-style)
+# ---------------------------------------------------------------------------
+
+
+class GraphSAGEEncoder(nn.Module):
+    """Simple 2-layer GraphSAGE-style encoder for link prediction.
+
+    This encoder operates on an undirected graph with numeric node
+    features and produces dense node embeddings suitable for
+    self-supervised link prediction pretraining (spec §D).
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        hidden_channels: int = 64,
+        out_channels: int = 64,
+        dropout: float = 0.3,
+    ) -> None:
+        super().__init__()
+        if in_channels <= 0:
+            raise ValueError("GraphSAGEEncoder requires in_channels > 0.")
+
+        self.in_channels = in_channels
+        self.hidden_channels = hidden_channels
+        self.out_channels = out_channels
+        self.dropout = dropout
+
+        # SAGE-style layers use concatenation of self and neighbor means.
+        self.lin1 = nn.Linear(2 * in_channels, hidden_channels)
+        self.lin2 = nn.Linear(2 * hidden_channels, out_channels)
+        self.dropout_layer = nn.Dropout(dropout)
+
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        nn.init.xavier_uniform_(self.lin1.weight)
+        if self.lin1.bias is not None:
+            nn.init.zeros_(self.lin1.bias)
+        nn.init.xavier_uniform_(self.lin2.weight)
+        if self.lin2.bias is not None:
+            nn.init.zeros_(self.lin2.bias)
+
+    def _sage_layer(self, x: Tensor, edge_index: Tensor, linear: nn.Linear) -> Tensor:
+        """Single SAGE layer with mean aggregation."""
+        if edge_index.numel() == 0:
+            # Degenerate case: no edges → just project self features.
+            h = torch.cat([x, x], dim=-1)
+            return torch.relu(linear(h))
+
+        src, dst = edge_index
+        num_nodes = x.size(0)
+
+        # Aggregate neighbor features: mean over incoming neighbors.
+        agg = torch.zeros_like(x)
+        agg.index_add_(0, dst, x[src])
+
+        deg = torch.zeros(num_nodes, device=x.device, dtype=x.dtype)
+        deg.index_add_(0, dst, torch.ones_like(dst, dtype=x.dtype))
+        deg = deg.clamp(min=1.0).unsqueeze(-1)
+        neigh = agg / deg
+
+        h = torch.cat([x, neigh], dim=-1)
+        return torch.relu(linear(h))
+
+    def forward(self, x: Tensor, edge_index: Tensor) -> Tensor:
+        h = self._sage_layer(x, edge_index, self.lin1)
+        h = self.dropout_layer(h)
+        h = self._sage_layer(h, edge_index, self.lin2)
+        return h
+
+
+def _build_global_lp_graph(
+    backend: Any,
+) -> tuple[list[str], Tensor, Tensor, Tensor, Tensor, set[tuple[int, int]]]:
+    """Build a global graph for self-supervised link prediction.
+
+    Returns:
+        node_ids: Stable list of node identifiers.
+        x: Node feature matrix [num_nodes, feat_dim].
+        edge_index: Undirected edges for message passing [2, num_edges].
+        pos_src: Positive edge source indices [num_pos].
+        pos_dst: Positive edge target indices [num_pos].
+        pos_pairs: Set of undirected positive pairs for negative sampling.
+    """
+    if not getattr(backend, "nodes", None) or not getattr(backend, "edges", None):
+        raise RuntimeError("Backend must expose 'nodes' and 'edges' for link prediction pretrain.")
+
+    nodes: Dict[str, KGNode] = backend.nodes
+    edges: List[KGEdge] = list(backend.edges)
+    if not edges:
+        raise RuntimeError("No edges available for link prediction pretrain.")
+
+    node_ids = sorted(nodes.keys())
+    node_index: Dict[str, int] = {node_id: i for i, node_id in enumerate(node_ids)}
+
+    # Degree-based features plus any existing Node2Vec-style embeddings.
+    in_deg = [0.0 for _ in node_ids]
+    out_deg = [0.0 for _ in node_ids]
+
+    pos_pairs: set[tuple[int, int]] = set()
+    for edge in edges:
+        src_idx = node_index.get(edge.subject)
+        dst_idx = node_index.get(edge.object)
+        if src_idx is None or dst_idx is None or src_idx == dst_idx:
+            continue
+        out_deg[src_idx] += 1.0
+        in_deg[dst_idx] += 1.0
+
+        a, b = (src_idx, dst_idx) if src_idx < dst_idx else (dst_idx, src_idx)
+        pos_pairs.add((a, b))
+
+    if not pos_pairs:
+        raise RuntimeError("No positive edge pairs found for link prediction pretrain.")
+
+    x_rows: list[list[float]] = []
+    for idx, node_id in enumerate(node_ids):
+        node = nodes[node_id]
+        props = getattr(node, "properties", {}) or {}
+        row: list[float] = [
+            float(in_deg[idx]),
+            float(out_deg[idx]),
+            float(in_deg[idx] + out_deg[idx]),
+        ]
+
+        # Reuse existing deterministic Node2Vec-style embeddings when present.
+        raw_vec: Any = None
+        for key in ("embedding", "node2vec", "n2v"):
+            value = props.get(key)
+            if isinstance(value, (list, tuple)):
+                raw_vec = value
+                break
+        if isinstance(raw_vec, (list, tuple)):
+            for v in raw_vec:
+                if isinstance(v, (int, float)):
+                    row.append(float(v))
+
+        x_rows.append(row)
+
+    x = torch.tensor(x_rows, dtype=torch.float32)
+
+    # Undirected edge_index for message passing.
+    mp_src: list[int] = []
+    mp_dst: list[int] = []
+    for a, b in pos_pairs:
+        mp_src.extend([a, b])
+        mp_dst.extend([b, a])
+
+    edge_index = torch.tensor([mp_src, mp_dst], dtype=torch.long)
+
+    pos_src: list[int] = []
+    pos_dst: list[int] = []
+    for a, b in pos_pairs:
+        pos_src.append(a)
+        pos_dst.append(b)
+
+    pos_src_tensor = torch.tensor(pos_src, dtype=torch.long)
+    pos_dst_tensor = torch.tensor(pos_dst, dtype=torch.long)
+
+    return node_ids, x, edge_index, pos_src_tensor, pos_dst_tensor, pos_pairs
+
+
+def _sample_negative_pairs(
+    num_nodes: int,
+    num_samples: int,
+    positive_pairs: set[tuple[int, int]],
+    rng: random.Random,
+    device: torch.device,
+) -> tuple[Tensor, Tensor]:
+    """Sample negative node pairs that are not in the positive edge set."""
+    neg_src: list[int] = []
+    neg_dst: list[int] = []
+
+    if num_nodes <= 1 or num_samples <= 0:
+        return (
+            torch.empty((0,), dtype=torch.long, device=device),
+            torch.empty((0,), dtype=torch.long, device=device),
+        )
+
+    max_tries = max(num_samples * 10, 100)
+    tries = 0
+    while len(neg_src) < num_samples and tries < max_tries:
+        i = rng.randrange(num_nodes)
+        j = rng.randrange(num_nodes)
+        tries += 1
+        if i == j:
+            continue
+        a, b = (i, j) if i < j else (j, i)
+        if (a, b) in positive_pairs:
+            continue
+        neg_src.append(i)
+        neg_dst.append(j)
+
+    if not neg_src:
+        return (
+            torch.empty((0,), dtype=torch.long, device=device),
+            torch.empty((0,), dtype=torch.long, device=device),
+        )
+
+    return (
+        torch.tensor(neg_src, dtype=torch.long, device=device),
+        torch.tensor(neg_dst, dtype=torch.long, device=device),
+    )
+
+
+def pretrain_link_prediction(
+    backend: Any,
+    *,
+    epochs: int = 5,
+    lr: float = 1e-3,
+    device: str = "cpu",
+    seed: int = 13,
+    negative_ratio: int = 1,
+) -> Dict[str, list[float]]:
+    """Self-supervised link prediction pretrain (GAE/GraphSAGE-style).
+
+    This trains a small GraphSAGE encoder to distinguish real KG edges
+    from randomly sampled non-edges using a dot-product link prediction
+    head. The resulting node embeddings can be attached to KG nodes
+    (e.g., under ``embedding``) so downstream GNNs consume them via the
+    existing Node2Vec-style feature hooks.
+    """
+    (
+        node_ids,
+        x,
+        edge_index,
+        pos_src,
+        pos_dst,
+        pos_pairs,
+    ) = _build_global_lp_graph(backend)
+
+    torch_device = torch.device(device)
+    x = x.to(torch_device)
+    edge_index = edge_index.to(torch_device)
+    pos_src = pos_src.to(torch_device)
+    pos_dst = pos_dst.to(torch_device)
+
+    encoder = GraphSAGEEncoder(
+        in_channels=x.shape[1],
+        hidden_channels=64,
+        out_channels=64,
+        dropout=0.3,
+    ).to(torch_device)
+
+    optimizer = torch.optim.Adam(encoder.parameters(), lr=lr)
+    loss_fn = nn.BCEWithLogitsLoss()
+
+    rng = random.Random(seed)
+    num_nodes = x.size(0)
+    num_pos = pos_src.numel()
+    if num_pos == 0:
+        raise RuntimeError("No positive edges available for link prediction pretrain.")
+
+    print(
+        f"Pretraining GraphSAGE link predictor on {num_nodes} nodes "
+        f"and {num_pos} positive edges (device={torch_device.type})."
+    )
+
+    for epoch in range(1, epochs + 1):
+        encoder.train()
+        optimizer.zero_grad()
+
+        z = encoder(x, edge_index)
+
+        pos_logits = (z[pos_src] * z[pos_dst]).sum(dim=-1)
+        num_neg = max(num_pos * max(1, negative_ratio), 1)
+        neg_src, neg_dst = _sample_negative_pairs(
+            num_nodes,
+            num_neg,
+            pos_pairs,
+            rng,
+            torch_device,
+        )
+        if neg_src.numel() == 0:
+            # Fall back to positives-only loss if we could not sample negatives.
+            logits = pos_logits
+            labels = torch.ones_like(pos_logits)
+        else:
+            neg_logits = (z[neg_src] * z[neg_dst]).sum(dim=-1)
+            logits = torch.cat([pos_logits, neg_logits], dim=0)
+            labels = torch.cat(
+                [
+                    torch.ones_like(pos_logits),
+                    torch.zeros_like(neg_logits),
+                ],
+                dim=0,
+            )
+
+        loss = loss_fn(logits, labels)
+        loss.backward()
+        optimizer.step()
+
+        with torch.no_grad():
+            probs = torch.sigmoid(logits).detach().cpu().tolist()
+            y_true = labels.detach().cpu().tolist()
+            if HAS_SKLEARN and len(set(y_true)) > 1:
+                try:
+                    auroc = roc_auc_score(y_true, probs)
+                except ValueError:
+                    auroc = 0.0
+            else:
+                auroc = 0.0
+
+        print(f"[LP Pretrain {epoch:02d}] loss={loss.item():.4f} AUROC={auroc:.3f}")
+
+    encoder.eval()
+    with torch.no_grad():
+        final_z = encoder(x, edge_index).cpu()
+
+    embeddings: Dict[str, list[float]] = {}
+    for idx, node_id in enumerate(node_ids):
+        embeddings[node_id] = final_z[idx].tolist()
+
+    return embeddings
+
+
+# ---------------------------------------------------------------------------
 # Dataset & ontology helpers
 # ---------------------------------------------------------------------------
 
@@ -811,6 +1128,7 @@ def build_dataset(
     *,
     seed: int = 13,
     k_hops: int = 2,
+    backend: Any | None = None,
 ) -> tuple[list[GraphSample], Dict[str, int]]:
     """Construct a small graph-level dataset for training the suspicion GNN.
 
@@ -819,7 +1137,8 @@ def build_dataset(
     - perturbed variants with flipped directions, phenotype swaps, and
       synthetic retracted-support annotations.
     """
-    backend = load_mini_kg_backend()
+    if backend is None:
+        backend = load_mini_kg_backend()
 
     all_pairs = list(_iter_unique_gene_disease_pairs())
     if not all_pairs:
@@ -1522,6 +1841,36 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=0.3,
         help="Dropout probability for regularization (spec recommends 0.2-0.5, default: 0.3).",
     )
+    parser.add_argument(
+        "--pretrain-link-prediction",
+        action="store_true",
+        help=(
+            "Enable self-supervised link prediction pretrain (GAE/GraphSAGE-style) on the mini KG "
+            "before supervised suspicion GNN training (spec §D, optional)."
+        ),
+    )
+    parser.add_argument(
+        "--pretrain-epochs",
+        type=int,
+        default=5,
+        help="Number of epochs for link prediction pretrain (default: 5).",
+    )
+    parser.add_argument(
+        "--pretrain-lr",
+        type=float,
+        default=1e-3,
+        help="Learning rate for link prediction pretrain (default: 1e-3).",
+    )
+    parser.add_argument(
+        "--save-pretrain-embeddings",
+        type=str,
+        default="data/suspicion_gnn/link_pred_embeddings.pt",
+        help=(
+            "Optional path to save pre-trained node embeddings from link prediction pretrain "
+            "via torch.save (e.g., data/suspicion_gnn/link_pred_embeddings.pt). "
+            "Set to an empty string to disable saving."
+        ),
+    )
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
@@ -1583,12 +1932,63 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.quick:
         args.num_subgraphs = min(args.num_subgraphs, 32)
         args.epochs = 1
+        if getattr(args, "pretrain_link_prediction", False):
+            args.pretrain_epochs = min(args.pretrain_epochs, 1)
+
+    # Build a shared mini KG backend so optional pretraining and
+    # supervised training operate on the same node set.
+    backend = load_mini_kg_backend()
+
+    # Optional self-supervised link prediction pretrain (GAE/GraphSAGE-style).
+    if getattr(args, "pretrain_link_prediction", False):
+        try:
+            embeddings = pretrain_link_prediction(
+                backend,
+                epochs=args.pretrain_epochs,
+                lr=args.pretrain_lr,
+                device=args.device,
+                seed=args.seed,
+                negative_ratio=1,
+            )
+        except RuntimeError as exc:
+            print(f"✖ Link prediction pretrain skipped: {exc}", file=sys.stderr)
+            embeddings = None
+
+        if embeddings:
+            for node_id, vec in embeddings.items():
+                node = backend.nodes.get(node_id)
+                if node is None:
+                    continue
+                props = node.properties
+                # Do not overwrite any existing embeddings coming from
+                # external pipelines; store under a separate key.
+                if "embedding" not in props:
+                    props["embedding"] = vec
+
+            save_path = getattr(args, "save_pretrain_embeddings", "") or ""
+            if save_path:
+                try:
+                    path = Path(save_path)
+                    if path.parent and not path.parent.exists():
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                    payload = {
+                        "embeddings": embeddings,
+                        "metadata": {
+                            "dim": len(next(iter(embeddings.values()))) if embeddings else 0,
+                            "num_nodes": len(embeddings),
+                        },
+                    }
+                    torch.save(payload, path)
+                    print(f"Saved link prediction embeddings to {path}")
+                except OSError as exc:
+                    print(f"✖ Failed to save link prediction embeddings to {save_path}: {exc}")
 
     try:
         samples, predicate_to_index = build_dataset(
             num_subgraphs=args.num_subgraphs,
             seed=args.seed,
             k_hops=2,
+            backend=backend,
         )
     except RuntimeError as exc:
         print(f"✖ Failed to build dataset: {exc}", file=sys.stderr)
