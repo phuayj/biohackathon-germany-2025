@@ -45,6 +45,16 @@ class TestNeo4jBackend:
 
         result = backend.query_edge("HGNC:1100", "MONDO:0007254")
 
+        assert session.last_query is not None
+        assert "MATCH (s)-[r]->(o)" in session.last_query
+        assert "s.id = $subject" in session.last_query
+        assert "o.id = $object" in session.last_query
+        assert "type(r) AS predicate" in session.last_query
+        assert session.last_params == {
+            "subject": "HGNC:1100",
+            "object": "MONDO:0007254",
+        }
+
         assert result.exists is True
         assert len(result.edges) == 1
         edge = result.edges[0]
@@ -76,6 +86,14 @@ class TestNeo4jBackend:
         backend = Neo4jBackend(session)
 
         result = backend.ego("HGNC:1100", k=1, direction=EdgeDirection.BOTH)
+
+        assert session.last_query is not None
+        assert "MATCH (n)-[r*1..1]-(m)" in session.last_query
+        assert "WHERE n.id = $center" in session.last_query
+        assert "type(rel) AS predicate" in session.last_query
+        assert session.last_params == {
+            "center": "HGNC:1100",
+        }
 
         assert result.center_node == "HGNC:1100"
         node_ids = {n.id for n in result.nodes}

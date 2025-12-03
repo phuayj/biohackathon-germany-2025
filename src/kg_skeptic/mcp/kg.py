@@ -472,13 +472,19 @@ class Neo4jBackend(KGBackend):
     It assumes a simple property graph schema:
     - nodes carry an ``id`` property (CURIE like ``HGNC:1100``)
     - optional ``label`` and ``category`` properties on nodes
-    - relationships carry an optional ``predicate`` property; if absent,
-      the relationship type is used.
+    - relationships encode their Biolink predicate via the relationship
+      type (e.g., ``:biolink_gene_associated_with_condition``).
     - relationship properties and identifiers are returned verbatim in
       the edge ``properties`` mapping for downstream rules.
     """
 
     def __init__(self, session: Neo4jSession) -> None:
+        """
+        Initialize Neo4j backend.
+
+        Args:
+            session: Neo4j/BioCypher session object with a ``run`` method.
+        """
         self.session = session
 
     def _iter_records(
@@ -513,27 +519,31 @@ class Neo4jBackend(KGBackend):
         object: str,
         predicate: Optional[str] = None,
     ) -> EdgeQueryResult:
-        """Query for edges between subject and object in Neo4j."""
-        where_predicate = " AND (r.predicate = $predicate)" if predicate else ""
+        """Query for edges between subject and object in Neo4j.
+
+        Nodes are matched by their ``id`` property (CURIE) and predicates
+        are derived from the relationship type.
+        """
+        where_predicate = " AND type(r) = $predicate" if predicate else ""
+
         query = (
-            "MATCH (s {id: $subject})-[r]->(o {id: $object}) "
-            f"WHERE 1=1{where_predicate} "
+            "MATCH (s)-[r]->(o) "
+            "WHERE s.id = $subject AND o.id = $object"
+            f"{where_predicate} "
             "RETURN s.id AS subject, "
             "o.id AS object, "
-            "coalesce(r.predicate, type(r)) AS predicate, "
-            "s.label AS subject_label, "
-            "o.label AS object_label, "
+            "type(r) AS predicate, "
             "r AS rel"
         )
 
-        records = self._iter_records(
-            query,
-            (
-                {"subject": subject, "object": object, "predicate": predicate}
-                if predicate
-                else {"subject": subject, "object": object}
-            ),
-        )
+        params: dict[str, _object] = {
+            "subject": subject,
+            "object": object,
+        }
+        if predicate is not None:
+            params["predicate"] = predicate
+
+        records = self._iter_records(query, params)
 
         edges: list[KGEdge] = []
         for rec in records:
@@ -583,29 +593,33 @@ class Neo4jBackend(KGBackend):
                 center_node=node_id, k_hops=0, nodes=[KGNode(id=node_id)], edges=[], source="neo4j"
             )
 
+        # Inline hop count into the pattern to avoid using a Cypher
+        # parameter inside the variable-length relationship, which can
+        # trigger syntax errors on some Neo4j versions.
+        hop_range = f"1..{int(k)}"
         if direction is EdgeDirection.OUTGOING:
-            pattern = " (n {id: $center})-[r*1..$k]->(m) "
+            pattern = f" (n)-[r*{hop_range}]->(m) "
         elif direction is EdgeDirection.INCOMING:
-            pattern = " (n {id: $center})<-[r*1..$k]-(m) "
+            pattern = f" (n)<-[r*{hop_range}]-(m) "
         else:
-            pattern = " (n {id: $center})-[r*1..$k]-(m) "
+            pattern = f" (n)-[r*{hop_range}]-(m) "
 
         query = (
-            "MATCH" + pattern + "WITH n, m, r UNWIND r AS rel "
+            "MATCH" + pattern + "WHERE n.id = $center " + "WITH n, m, r UNWIND r AS rel "
             "RETURN DISTINCT "
             "n.id AS center_id, "
             "m.id AS node_id, "
-            "m.label AS node_label, "
-            "m.category AS node_category, "
             "startNode(rel).id AS subject_id, "
             "endNode(rel).id AS object_id, "
-            "coalesce(rel.predicate, type(rel)) AS predicate, "
-            "startNode(rel).label AS subject_label, "
-            "endNode(rel).label AS object_label, "
+            "type(rel) AS predicate, "
             "rel AS rel_props"
         )
 
-        records = self._iter_records(query, {"center": node_id, "k": k})
+        params: dict[str, _object] = {
+            "center": node_id,
+        }
+
+        records = self._iter_records(query, params)
 
         nodes: dict[str, KGNode] = {}
         edges: list[KGEdge] = []

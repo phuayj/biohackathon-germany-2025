@@ -100,10 +100,11 @@ def _build_neo4j_backend(
             session = self._driver.session()
             try:
                 result = session.run(query, params)
+                iterable_result = cast(Iterable[object], result)
+                records = list(iterable_result)
             finally:
                 session.close()
-            iterable_result = cast(Iterable[object], result)
-            return list(iterable_result)
+            return records
 
     backend = Neo4jBackend(_DriverSessionWrapper(driver))
     return backend, driver

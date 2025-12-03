@@ -250,13 +250,19 @@ def _build_neo4j_backend_from_env() -> KGBackend | None:
             session = self._driver.session()
             try:
                 result = session.run(query, params)
+                iterable_result = cast(Iterable[object], result)
+                # Fully materialize records before closing the session to
+                # avoid "result has been consumed" errors from the Neo4j
+                # driver when accessing results after the session is closed.
+                records = list(iterable_result)
             finally:
                 session.close()
-            iterable_result = cast(Iterable[object], result)
-            return list(iterable_result)
+            return records
 
     driver = GraphDatabase.driver(uri, auth=(user, password))
     st.session_state["neo4j_driver"] = driver
+    # Neo4jBackend expects nodes to expose a canonical CURIE identifier
+    # via the `id` property (e.g., HGNC:1100, MONDO:0007254).
     return Neo4jBackend(_DriverSessionWrapper(driver))
 
 

@@ -288,6 +288,16 @@ with driver.session() as session:
     print(edge.exists)
 ```
 
+By default, the backend:
+- expects each node to expose a canonical CURIE identifier via the `id` property
+  (for example, `HGNC:1100`, `MONDO:0007254`, `HP:0000118`, `GO:0007165`)
+- derives edge predicates from the relationship type (`type(r)`) only.
+
+When wiring a Neo4j/BioCypher graph to Monarch and KG-Skeptic, model your schema so that:
+- nodes use `id` for the external identifier (Monarch-style CURIEs)
+- relationship types encode the Biolink predicate (for example,
+  `:biolink_gene_associated_with_condition`).
+
 ## Integration Example
 
 Verify a biomedical claim using all tools:
