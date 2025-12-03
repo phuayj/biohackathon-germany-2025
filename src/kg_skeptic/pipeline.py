@@ -20,6 +20,8 @@ from kg_skeptic.mcp.ids import IDNormalizerTool
 from kg_skeptic.mcp.pathways import PathwayTool
 from kg_skeptic.mcp.disgenet import DisGeNETTool
 from kg_skeptic.mcp.kg import EdgeQueryResult, InMemoryBackend, KGBackend, KGEdge, KGTool
+from kg_skeptic.mcp.semmed import LiteratureTriple, SemMedDBTool
+from kg_skeptic.mcp.indra import INDRATool
 from .models import Claim, EntityMention, Report
 from .mcp.mini_kg import load_mini_kg_backend
 from .provenance import CitationProvenance, ProvenanceFetcher
@@ -40,6 +42,19 @@ class SuspicionRow(TypedDict):
     object: str
     score: float
     is_claim_edge: bool
+
+
+class TextNLIFacts(TypedDict):
+    """Aggregated sentence-level NLI evidence from abstracts."""
+
+    checked: bool
+    sentence_count: int
+    support_count: int
+    refute_count: int
+    nei_count: int
+    support_examples: list[dict[str, str]]
+    refute_examples: list[dict[str, str]]
+    nei_examples: list[dict[str, str]]
 
 
 ONTOLOGY_ROOT_TERMS: dict[str, set[str]] = {
@@ -1214,6 +1229,174 @@ def _detect_hedging_language(text: str) -> tuple[bool, list[str]]:
     return bool(matches), matches
 
 
+def _split_into_sentences(text: str) -> list[str]:
+    """Lightweight sentence splitter for abstracts and free text."""
+    cleaned = re.sub(r"\s+", " ", text.strip())
+    if not cleaned:
+        return []
+    parts = re.split(r"(?<=[.!?])\s+", cleaned)
+    return [part.strip() for part in parts if part.strip()]
+
+
+def _entity_terms(entity: NormalizedEntity) -> list[str]:
+    """Collect candidate surface forms for an entity."""
+    terms: list[str] = []
+    for value in (entity.label, entity.mention):
+        if isinstance(value, str):
+            term = value.strip()
+            if term and term not in terms:
+                terms.append(term)
+    return terms
+
+
+def _sentence_has_term(sentence: str, terms: list[str]) -> bool:
+    """Check if a sentence mentions any of the given terms."""
+    lowered = sentence.lower()
+    for term in terms:
+        t = term.strip().lower()
+        if not t:
+            continue
+        if re.search(rf"\b{re.escape(t)}\b", lowered):
+            return True
+    return False
+
+
+def _infer_claim_polarity(triple: NormalizedTriple, claim: Claim | None) -> str | None:
+    """Infer coarse claim polarity (positive/negative) from predicate/text."""
+    qualifiers_map = triple.qualifiers if isinstance(triple.qualifiers, Mapping) else {}
+    text_predicate = qualifiers_map.get("text_predicate")
+    predicate_text: str | None
+    if isinstance(text_predicate, str) and text_predicate.strip():
+        predicate_text = text_predicate
+    else:
+        predicate_text = triple.predicate
+
+    polarity = _predicate_polarity(predicate_text)
+    if polarity is not None:
+        return polarity
+
+    claim_text = claim.text if isinstance(claim, Claim) else ""
+    if claim_text:
+        extracted = _extract_predicate_from_text(claim_text)
+        if extracted is not None:
+            polarity = _predicate_polarity(extracted)
+            if polarity is not None:
+                return polarity
+
+    if claim_text and ClaimNormalizer._has_negation_language(claim_text):
+        return "negative"
+    return None
+
+
+def _infer_sentence_polarity(sentence: str) -> str | None:
+    """Infer coarse polarity for an evidence sentence."""
+    extracted = _extract_predicate_from_text(sentence)
+    if extracted is not None:
+        polarity = _predicate_polarity(extracted)
+        if polarity is not None:
+            return polarity
+    if ClaimNormalizer._has_negation_language(sentence):
+        return "negative"
+    return None
+
+
+def _nli_label_for_sentence(
+    sentence: str,
+    triple: NormalizedTriple,
+    claim: Claim | None,
+) -> str:
+    """Classify a sentence as SUPPORT/REFUTE/NEI for the claim.
+
+    This is a lightweight, heuristic NLI approximation inspired by
+    SciFact: sentences must mention both subject and object and then
+    are assigned a stance based on polarity alignment.
+    """
+    subject_terms = _entity_terms(triple.subject)
+    object_terms = _entity_terms(triple.object)
+
+    has_subject = _sentence_has_term(sentence, subject_terms)
+    has_object = _sentence_has_term(sentence, object_terms)
+    if not (has_subject and has_object):
+        return "NEI"
+
+    claim_polarity = _infer_claim_polarity(triple, claim)
+    sentence_polarity = _infer_sentence_polarity(sentence)
+
+    if sentence_polarity is None:
+        return "NEI"
+
+    if claim_polarity is None:
+        claim_text = claim.text if isinstance(claim, Claim) else ""
+        claim_polarity = (
+            "negative"
+            if claim_text and ClaimNormalizer._has_negation_language(claim_text)
+            else "positive"
+        )
+
+    if claim_polarity == sentence_polarity:
+        return "SUPPORT"
+    return "REFUTE"
+
+
+def _build_text_nli_facts(
+    claim: Claim | None,
+    triple: NormalizedTriple,
+    provenance: Sequence[CitationProvenance],
+) -> TextNLIFacts:
+    """Best-effort text-level NLI-style verification over abstracts.
+
+    For each literature citation where an abstract is available, we
+    split into sentences and assign SUPPORT/REFUTE/NEI labels using a
+    simple polarity-based heuristic. The result is aggregated into
+    counts and a few example sentences per label for downstream rules
+    and UI.
+    """
+    checked = False
+    total_sentences = 0
+    support_count = 0
+    refute_count = 0
+    nei_count = 0
+    support_examples: list[dict[str, str]] = []
+    refute_examples: list[dict[str, str]] = []
+    nei_examples: list[dict[str, str]] = []
+
+    for record in provenance:
+        metadata = record.metadata
+        abstract_raw = metadata.get("abstract")
+        if not isinstance(abstract_raw, str) or not abstract_raw.strip():
+            continue
+        checked = True
+
+        sentences = _split_into_sentences(abstract_raw)
+        for sentence in sentences:
+            total_sentences += 1
+            label = _nli_label_for_sentence(sentence, triple, claim)
+            example = {"citation": record.identifier, "sentence": sentence}
+            if label == "SUPPORT":
+                support_count += 1
+                if len(support_examples) < 3:
+                    support_examples.append(example)
+            elif label == "REFUTE":
+                refute_count += 1
+                if len(refute_examples) < 3:
+                    refute_examples.append(example)
+            else:
+                nei_count += 1
+                if len(nei_examples) < 3:
+                    nei_examples.append(example)
+
+    return {
+        "checked": checked,
+        "sentence_count": total_sentences,
+        "support_count": support_count,
+        "refute_count": refute_count,
+        "nei_count": nei_count,
+        "support_examples": support_examples,
+        "refute_examples": refute_examples,
+        "nei_examples": nei_examples,
+    }
+
+
 def _evidence_identifier(ev: Mapping[str, object]) -> str:
     """Best-effort identifier for an evidence record."""
     for key in ("pmid", "pmcid", "doi", "id", "curie", "url"):
@@ -1336,6 +1519,8 @@ def build_rule_facts(
 
     # Detect tissue context mismatch
     tissue_facts = _detect_tissue_mismatch(qualifiers_map, structured_evidence)
+    # Text-level NLI-style verification over abstracts (when available)
+    text_nli_facts = _build_text_nli_facts(claim, triple, provenance)
 
     return {
         "claim": {
@@ -1397,6 +1582,7 @@ def build_rule_facts(
             ),
         },
         "tissue": tissue_facts,
+        "text_nli": text_nli_facts,
     }
 
 
@@ -1435,6 +1621,8 @@ class SkepticPipeline:
         )
         self._disgenet_tool: DisGeNETTool | None = None
         self._monarch_kg_tool: KGTool | None = None
+        self._semmed_tool: SemMedDBTool | None = None
+        self._indra_tool: INDRATool | None = None
         use_disgenet_raw = self.config.get("use_disgenet", False)
         self._use_disgenet = bool(use_disgenet_raw)
         use_monarch_raw = self.config.get("use_monarch_kg", False)
@@ -2076,6 +2264,94 @@ class SkepticPipeline:
 
         return facts
 
+    def _build_structured_literature_facts(self, triple: NormalizedTriple) -> dict[str, object]:
+        """Best-effort structured literature facts from SemMedDB / INDRA.
+
+        This consults any configured SemMedDB/INDRA tools and aggregates
+        supporting triples and PMIDs for the exact normalized
+        (subject, predicate, object) combination when available. Tools are
+        optional; absence or errors are treated as "no structured evidence".
+        """
+        subject_id = triple.subject.id
+        predicate = triple.predicate
+        object_id = triple.object.id
+
+        semmed_checked = False
+        indra_checked = False
+
+        semmed_triple_count = 0
+        indra_triple_count = 0
+
+        semmed_sources: set[str] = set()
+        indra_sources: set[str] = set()
+
+        # SemMedDB-backed triples (SQL)
+        if self._semmed_tool is not None:
+            semmed_checked = True
+            try:
+                semmed_triples: list[LiteratureTriple] = self._semmed_tool.find_triples(
+                    subject=subject_id,
+                    predicate=predicate,
+                    object=object_id,
+                    limit=100,
+                )
+                # If no triples are found with the canonical predicate (e.g.,
+                # Biolink), fall back to subject/object-only matching.
+                if not semmed_triples:
+                    semmed_triples = self._semmed_tool.find_triples(
+                        subject=subject_id,
+                        predicate=None,
+                        object=object_id,
+                        limit=100,
+                    )
+
+                semmed_triple_count = len(semmed_triples)
+                for t in semmed_triples:
+                    for src in t.sources:
+                        src_str = str(src)
+                        if src_str:
+                            semmed_sources.add(src_str)
+            except Exception:
+                semmed_triple_count = 0
+                semmed_sources.clear()
+
+        # INDRA-backed triples (Python API)
+        if self._indra_tool is not None:
+            indra_checked = True
+            try:
+                indra_triples = self._indra_tool.find_triples(
+                    subject=subject_id,
+                    predicate=predicate,
+                    object=object_id,
+                    limit=100,
+                )
+                indra_triple_count = len(indra_triples)
+                for t in indra_triples:
+                    for src in t.sources:
+                        src_str = str(src)
+                        if src_str:
+                            indra_sources.add(src_str)
+            except Exception:
+                indra_triple_count = 0
+                indra_sources.clear()
+
+        has_structured_support = semmed_triple_count > 0 or indra_triple_count > 0
+        structured_sources = semmed_sources | indra_sources
+
+        return {
+            "semmed_checked": semmed_checked,
+            "semmed_triple_count": semmed_triple_count,
+            "semmed_source_count": len(semmed_sources),
+            "semmed_sources": sorted(semmed_sources),
+            "indra_checked": indra_checked,
+            "indra_triple_count": indra_triple_count,
+            "indra_source_count": len(indra_sources),
+            "indra_sources": sorted(indra_sources),
+            "has_structured_support": has_structured_support,
+            "structured_source_count": len(structured_sources),
+            "structured_sources": sorted(structured_sources),
+        }
+
     def run(self, audit_payload: AuditPayload) -> AuditResult:
         """Run the skeptic on a normalized audit payload."""
         normalization = self.normalizer.normalize(audit_payload)
@@ -2092,6 +2368,8 @@ class SkepticPipeline:
         )
         # Attach curated KG signals (e.g., DisGeNET support) for rule engine.
         facts["curated_kg"] = self._build_curated_kg_facts(normalization.triple)
+        # Attach structured literature signals (SemMedDB / INDRA triples).
+        facts["literature"] = self._build_structured_literature_facts(normalization.triple)
         evaluation = self.engine.evaluate(facts)
         score = sum(evaluation.features.values())
         verdict = self._verdict_for_score(score)

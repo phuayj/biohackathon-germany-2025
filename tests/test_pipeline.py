@@ -10,10 +10,14 @@ from kg_skeptic.pipeline import (
     NormalizedEntity,
     NormalizedTriple,
     SkepticPipeline,
+    _build_text_nli_facts,
 )
-from kg_skeptic.provenance import ProvenanceFetcher
+from kg_skeptic.provenance import CitationProvenance, ProvenanceFetcher
+from kg_skeptic.models import Claim
 from kg_skeptic.mcp.ids import NormalizedID, IDType
 from kg_skeptic.mcp.pathways import PathwayRecord
+from kg_skeptic.mcp.semmed import DBAPIConnection, LiteratureTriple, SemMedDBTool
+from kg_skeptic.mcp.indra import INDRATool
 
 
 class TestSkepticPipeline:
@@ -27,6 +31,107 @@ class TestSkepticPipeline:
         config = {"verbose": True, "model": "gpt-4"}
         pipeline = SkepticPipeline(config=config)
         assert pipeline.config == config
+
+    def test_structured_literature_facts_aggregate_sources(self) -> None:
+        """Structured literature facts should aggregate SemMedDB and INDRA support."""
+        pipeline = SkepticPipeline()
+
+        subject = NormalizedEntity(
+            id="HGNC:1100",
+            label="BRCA1",
+            category="gene",
+            ancestors=[],
+        )
+        obj = NormalizedEntity(
+            id="MONDO:0007254",
+            label="breast cancer",
+            category="disease",
+            ancestors=[],
+        )
+        triple = NormalizedTriple(
+            subject=subject,
+            predicate="biolink:gene_associated_with_condition",
+            object=obj,
+        )
+
+        semmed_triples = [
+            LiteratureTriple(
+                subject=subject.id,
+                predicate=triple.predicate,
+                object=obj.id,
+                sources=["11111", "22222"],
+            ),
+            LiteratureTriple(
+                subject=subject.id,
+                predicate=triple.predicate,
+                object=obj.id,
+                sources=["22222"],
+            ),
+        ]
+        indra_triples = [
+            LiteratureTriple(
+                subject=subject.id,
+                predicate=triple.predicate,
+                object=obj.id,
+                sources=["33333"],
+            )
+        ]
+
+        class DummySemMedTool(SemMedDBTool):
+            def __init__(self) -> None:
+                # Avoid requiring a real DB-API connection for tests.
+                pass
+
+            def find_triples(
+                self,
+                subject: str | None = None,
+                predicate: str | None = None,
+                object: str | None = None,
+                limit: int = 50,
+                connection: DBAPIConnection | None = None,
+            ) -> list[LiteratureTriple]:
+                assert subject == subject_id
+                assert object == object_id
+                _ = predicate, limit, connection
+                return semmed_triples
+
+        class DummyINDRATool(INDRATool):
+            def __init__(self) -> None:
+                # Base class expects an INDRAClient; tests bypass the client.
+                pass
+
+            def find_triples(
+                self,
+                subject: str | None = None,
+                predicate: str | None = None,
+                object: str | None = None,
+                limit: int = 50,
+            ) -> list[LiteratureTriple]:
+                assert subject == subject_id
+                assert object == object_id
+                _ = predicate, limit
+                return indra_triples
+
+        subject_id = subject.id
+        object_id = obj.id
+
+        # Inject dummy tools directly into the pipeline instance.
+        pipeline._semmed_tool = DummySemMedTool()
+        pipeline._indra_tool = DummyINDRATool()
+
+        facts = pipeline._build_structured_literature_facts(triple)
+
+        assert facts["semmed_checked"] is True
+        assert facts["indra_checked"] is True
+        assert facts["semmed_triple_count"] == 2
+        assert facts["indra_triple_count"] == 1
+        # SemMed sources should be deduplicated
+        assert facts["semmed_source_count"] == 2
+        # INDRA sources should be counted separately
+        assert facts["indra_source_count"] == 1
+        # Combined structured sources should include all three PMIDs
+        assert facts["has_structured_support"] is True
+        assert facts["structured_source_count"] == 3
 
     def test_pipeline_passes_clean_claim(self, tmp_path: Path) -> None:
         """End-to-end run should PASS for a clean, well-supported claim."""
@@ -185,6 +290,110 @@ class TestSkepticPipeline:
         assert facts["monarch_support"] is True
         assert facts["monarch_edge_count"] == 2
         assert facts["curated_kg_match"] is True
+
+
+class TestTextLevelNLI:
+    """Tests for text-level NLI-style verification over abstracts."""
+
+    def test_text_nli_support_sentence(self) -> None:
+        """Abstract sentence aligned with claim polarity should SUPPORT."""
+        claim = Claim(
+            id="c1",
+            text="BRCA1 mutations increase breast cancer risk.",
+            evidence=[],
+            metadata={},
+        )
+        triple = NormalizedTriple(
+            subject=NormalizedEntity(
+                id="HGNC:1100",
+                label="BRCA1",
+                category="gene",
+                ancestors=[],
+            ),
+            predicate="biolink:gene_associated_with_condition",
+            object=NormalizedEntity(
+                id="MONDO:0007254",
+                label="breast cancer",
+                category="disease",
+                ancestors=[],
+            ),
+        )
+        provenance = [
+            CitationProvenance(
+                identifier="PMID:12345",
+                kind="pmid",
+                status="clean",
+                title="Test Article",
+                url=None,
+                cached=False,
+                source="test",
+                metadata={
+                    "abstract": "BRCA1 increases breast cancer risk. Control sentence.",
+                },
+            )
+        ]
+
+        facts = _build_text_nli_facts(claim, triple, provenance)
+
+        assert facts["checked"] is True
+        assert facts["support_count"] >= 1
+        assert facts["refute_count"] == 0
+        support_examples = facts["support_examples"]
+        assert isinstance(support_examples, list)
+        assert support_examples
+        example0 = support_examples[0]
+        assert example0["citation"] == "PMID:12345"
+        assert "BRCA1" in example0["sentence"]
+
+    def test_text_nli_refute_sentence(self) -> None:
+        """Negated abstract sentence should REFUTE a positive claim."""
+        claim = Claim(
+            id="c2",
+            text="BRCA1 mutations increase breast cancer risk.",
+            evidence=[],
+            metadata={},
+        )
+        triple = NormalizedTriple(
+            subject=NormalizedEntity(
+                id="HGNC:1100",
+                label="BRCA1",
+                category="gene",
+                ancestors=[],
+            ),
+            predicate="biolink:gene_associated_with_condition",
+            object=NormalizedEntity(
+                id="MONDO:0007254",
+                label="breast cancer",
+                category="disease",
+                ancestors=[],
+            ),
+        )
+        provenance = [
+            CitationProvenance(
+                identifier="PMID:67890",
+                kind="pmid",
+                status="clean",
+                title="Test Article",
+                url=None,
+                cached=False,
+                source="test",
+                metadata={
+                    "abstract": "BRCA1 is not associated with breast cancer.",
+                },
+            )
+        ]
+
+        facts = _build_text_nli_facts(claim, triple, provenance)
+
+        assert facts["checked"] is True
+        assert facts["refute_count"] >= 1
+        assert facts["support_count"] == 0
+        refute_examples = facts["refute_examples"]
+        assert isinstance(refute_examples, list)
+        assert refute_examples
+        example0 = refute_examples[0]
+        assert example0["citation"] == "PMID:67890"
+        assert "not associated" in example0["sentence"]
 
 
 class TestClaimNormalizerGLiNER:

@@ -33,6 +33,35 @@ from kg_skeptic.pipeline import _category_from_id
 ALLOWED_NODE_CATEGORIES: set[str] = {"gene", "disease", "phenotype", "pathway"}
 
 
+def _normalize_category(category: str | None) -> str:
+    """Normalize a Biolink category to a simple lowercase form.
+
+    Handles both raw categories (e.g., "gene") and Biolink-prefixed
+    categories (e.g., "biolink:Gene") from Monarch KG.
+    """
+    if not category:
+        return "unknown"
+
+    cat = category.lower()
+
+    # Strip biolink: prefix if present
+    if cat.startswith("biolink:"):
+        cat = cat[8:]
+
+    # Map Biolink category names to our simplified forms
+    category_mapping = {
+        "gene": "gene",
+        "disease": "disease",
+        "phenotypicfeature": "phenotype",
+        "biologicalprocess": "pathway",
+        "molecularactivity": "pathway",
+        "pathway": "pathway",
+        "cellularcomponent": "pathway",
+    }
+
+    return category_mapping.get(cat, cat)
+
+
 @dataclass
 class Subgraph:
     """Pair‑centric subgraph around (subject, object)."""
@@ -310,6 +339,26 @@ def _compute_rule_feature_aggregates(
     }
 
 
+def _is_kg_node_id(identifier: str) -> bool:
+    """Check if an identifier could be a node in the KG (not a literature reference)."""
+    upper = identifier.upper()
+    # These prefixes represent actual KG nodes (ontology terms, pathways, etc.)
+    kg_prefixes = (
+        "GO:",
+        "REACT:",
+        "R-HSA-",
+        "MONDO:",
+        "HP:",
+        "UBERON:",
+        "CL:",
+        "CHEBI:",
+        "HGNC:",
+        "NCBIGENE:",
+        "DRUGBANK:",
+    )
+    return upper.startswith(kg_prefixes)
+
+
 def build_pair_subgraph(
     backend: KGBackend,
     subject: str,
@@ -318,11 +367,13 @@ def build_pair_subgraph(
     k: int = 2,
     direction: EdgeDirection = EdgeDirection.BOTH,
     rule_features: dict[str, float] | None = None,
+    evidence_ids: list[str] | None = None,
 ) -> Subgraph:
     """Build a heterogeneous subgraph around a (subject, object) pair.
 
     This function:
     - fetches k‑hop ego networks for both ``subject`` and ``object``
+    - optionally includes ego networks for evidence IDs (GO, Reactome, etc.)
     - merges them into a single node/edge set
     - keeps only nodes whose inferred category is in
       {gene, disease, phenotype, pathway}
@@ -340,11 +391,21 @@ def build_pair_subgraph(
             Day 2 rule engine. When provided, compact aggregates are
             attached to each edge under ``rule_*`` keys for downstream
             GNNs.
+        evidence_ids: Optional list of evidence identifiers (GO terms,
+            Reactome IDs, etc.) to include in the subgraph. Literature
+            references (PMIDs, DOIs) are filtered out as they are not
+            KG nodes.
 
     Returns:
         Subgraph capturing the merged ego networks and simple node features.
     """
     node_map: dict[str, KGNode] = {}
+
+    # Filter evidence IDs to only those that could be KG nodes
+    kg_evidence_ids: list[str] = []
+    if evidence_ids:
+        kg_evidence_ids = [eid for eid in evidence_ids if _is_kg_node_id(eid)]
+
     if k <= 0:
         # Degenerate case: just the pair nodes, if they are of allowed types.
         for node_id in (subject, object):
@@ -361,13 +422,25 @@ def build_pair_subgraph(
             node_features=features,
         )
 
-    subject_ego = backend.ego(subject, k=k, direction=direction)
-    object_ego = backend.ego(object, k=k, direction=direction)
+    # Collect all center nodes to query: subject, object, and evidence
+    center_nodes = [subject, object] + kg_evidence_ids
+
+    # Fetch ego networks for all center nodes
+    ego_networks = []
+    for center in center_nodes:
+        try:
+            ego = backend.ego(center, k=k, direction=direction)
+            ego_networks.append(ego)
+        except Exception:
+            # Skip if node not found in KG
+            pass
 
     # Merge and filter nodes by coarse category.
-    for ego in (subject_ego, object_ego):
+    for ego in ego_networks:
         for node in ego.nodes:
-            category = node.category or _category_from_id(node.id)
+            # Normalize category to handle biolink: prefix from Monarch KG
+            raw_category = node.category or _category_from_id(node.id)
+            category = _normalize_category(raw_category)
             if category not in ALLOWED_NODE_CATEGORIES:
                 continue
             if node.id not in node_map:
@@ -378,19 +451,19 @@ def build_pair_subgraph(
                     properties=dict(node.properties),
                 )
 
-    # Ensure that the pair endpoints are present when they are of an
-    # allowed type, even if the backend returned an empty ego network.
-    for center in (subject, object):
+    # Ensure that the pair endpoints and evidence nodes are present when
+    # they are of an allowed type, even if the backend returned empty.
+    for center in center_nodes:
         if center not in node_map:
             category = _category_from_id(center)
             if category in ALLOWED_NODE_CATEGORIES:
                 node_map[center] = KGNode(id=center, category=category)
 
-    # Merge edges from both ego networks, restrict to allowed node ids
+    # Merge edges from all ego networks, restrict to allowed node ids
     # and allowed Day 3 edge types.
     edges: list[KGEdge] = []
     seen: set[tuple[str, str, str]] = set()
-    for ego in (subject_ego, object_ego):
+    for ego in ego_networks:
         for edge in ego.edges:
             if edge.subject not in node_map or edge.object not in node_map:
                 continue

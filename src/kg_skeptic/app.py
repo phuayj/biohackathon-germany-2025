@@ -446,6 +446,136 @@ def render_provenance(provenance: list[CitationProvenance]) -> None:
             st.caption(f"[Link]({record.url}) • source={record.source}")
 
 
+def render_structured_literature_panel(facts: Mapping[str, object] | None) -> None:
+    """Render a compact panel for structured literature support (SemMedDB/INDRA)."""
+    if not isinstance(facts, Mapping):
+        return
+
+    literature_raw = facts.get("literature")
+    literature = literature_raw if isinstance(literature_raw, Mapping) else {}
+    has_structured = bool(literature.get("has_structured_support"))
+    semmed_checked = bool(literature.get("semmed_checked"))
+    indra_checked = bool(literature.get("indra_checked"))
+
+    if not (semmed_checked or indra_checked):
+        return
+
+    st.subheader("Structured Literature Evidence (SemMedDB / INDRA)")
+    total_sources = int(literature.get("structured_source_count", 0))
+
+    if has_structured:
+        badge_color = "#1b5e20"
+        badge_icon = "✅"
+        status_text = "structured support found"
+    else:
+        badge_color = "#37474f"
+        badge_icon = "ℹ️"
+        status_text = "no matching structured triples"
+
+    st.markdown(
+        f'<div style="background-color: {badge_color}; color: white; padding: 4px 10px; '
+        f'border-radius: 6px; display: inline-block; font-size: 0.9em; margin-bottom: 6px;">'
+        f"{badge_icon} {status_text}</div>",
+        unsafe_allow_html=True,
+    )
+
+    st.caption(
+        f"SemMedDB triples: **{int(literature.get('semmed_triple_count', 0))}**, "
+        f"INDRA triples: **{int(literature.get('indra_triple_count', 0))}**, "
+        f"unique PMIDs: **{total_sources}**"
+    )
+
+    # Show a short list of example PMIDs when available
+    sources_any = literature.get("structured_sources") or literature.get("semmed_sources") or []
+    if isinstance(sources_any, list) and sources_any:
+        sample = [str(s) for s in sources_any[:5]]
+        st.caption("Example PMIDs: " + ", ".join(f"`{s}`" for s in sample))
+
+
+def render_text_nli_panel(facts: Mapping[str, object] | None) -> None:
+    """Render a panel summarizing text-level NLI evidence from abstracts."""
+    if not isinstance(facts, Mapping):
+        return
+
+    text_nli_raw = facts.get("text_nli")
+    text_nli = text_nli_raw if isinstance(text_nli_raw, Mapping) else {}
+
+    checked = bool(text_nli.get("checked"))
+    sentence_count_raw = text_nli.get("sentence_count", 0)
+    support_count_raw = text_nli.get("support_count", 0)
+    refute_count_raw = text_nli.get("refute_count", 0)
+    nei_count_raw = text_nli.get("nei_count", 0)
+
+    try:
+        sentence_count = int(sentence_count_raw)
+    except (TypeError, ValueError):
+        sentence_count = 0
+    try:
+        support_count = int(support_count_raw)
+    except (TypeError, ValueError):
+        support_count = 0
+    try:
+        refute_count = int(refute_count_raw)
+    except (TypeError, ValueError):
+        refute_count = 0
+    try:
+        nei_count = int(nei_count_raw)
+    except (TypeError, ValueError):
+        nei_count = 0
+
+    if not checked:
+        return
+
+    st.subheader("Text-level Evidence (NLI-style)")
+
+    if support_count == 0 and refute_count == 0 and nei_count == 0:
+        st.caption("Abstracts were checked, but no sentences mentioning both entities were found.")
+        return
+
+    # Summary badges
+    def _badge(label: str, count: int, color: str) -> str:
+        return (
+            f'<span style="background-color: {color}; color: white; padding: 2px 8px; '
+            f'border-radius: 12px; font-size: 0.85em; margin-right: 6px;">'
+            f"{label}: {count}</span>"
+        )
+
+    support_badge = _badge("SUPPORT", support_count, "#2e7d32")
+    refute_badge = _badge("REFUTE", refute_count, "#c62828")
+    nei_badge = _badge("NEI", nei_count, "#546e7a")
+
+    st.markdown(
+        support_badge + refute_badge + nei_badge,
+        unsafe_allow_html=True,
+    )
+    st.caption(f"Total sentences inspected from abstracts: **{sentence_count}**")
+
+    def _render_examples(label: str, key: str, color: str) -> None:
+        examples_raw = text_nli.get(key, [])
+        examples = examples_raw if isinstance(examples_raw, list) else []
+        if not examples:
+            return
+        with st.expander(f"{label} examples", expanded=(label == "REFUTE")):
+            for example in examples:
+                if not isinstance(example, Mapping):
+                    continue
+                citation = str(example.get("citation", ""))
+                sentence = str(example.get("sentence", ""))
+                if not sentence:
+                    continue
+                st.markdown(
+                    f'<div style="border-left: 3px solid {color}; padding-left: 8px; margin-bottom: 6px;">'
+                    f'<div style="font-size: 0.8em; opacity: 0.8; margin-bottom: 2px;">{citation}</div>'
+                    f'"{sentence}"'
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+    _render_examples("SUPPORT", "support_examples", "#2e7d32")
+    _render_examples("REFUTE", "refute_examples", "#c62828")
+    _render_examples("NEI", "nei_examples", "#546e7a")
+
+
 def _normalize_citation_identifier(identifier: str) -> str:
     """Normalize citation identifiers for matching across provenance and edges."""
     value = identifier.strip()
@@ -907,18 +1037,19 @@ def render_subgraph_visualization(
 
     # Build and render Pyvis network
     if edge_types:
-        net = build_pyvis_network(
-            subgraph=display_subgraph,
-            suspicion_scores=suspicion_scores,
-            edge_statuses=edge_statuses,
-            selected_edge_types=set(edge_types),
-            claim_subject=subject_id,
-            claim_object=object_id,
-            edge_origins=edge_origins,
-            selected_origins=selected_origins or set(),
-        )
+        with st.spinner("Rendering network visualization..."):
+            net = build_pyvis_network(
+                subgraph=display_subgraph,
+                suspicion_scores=suspicion_scores,
+                edge_statuses=edge_statuses,
+                selected_edge_types=set(edge_types),
+                claim_subject=subject_id,
+                claim_object=object_id,
+                edge_origins=edge_origins,
+                selected_origins=selected_origins or set(),
+            )
 
-        html = network_to_html(net)
+            html = network_to_html(net)
         components.html(html, height=650, scrolling=True)
     else:
         st.warning("Select at least one edge type to display the graph.")
@@ -1010,10 +1141,10 @@ def render_audit_card(result: AuditResult, allow_feedback: bool = False) -> None
             # Button 1: Agree
             with cols[1]:
                 if st.button(
-                    f"✅ Yes", key=f"btn_agree_{claim.id}", help=f"Confirm {verdict} verdict"
+                    "✅ Yes", key=f"btn_agree_{claim.id}", help=f"Confirm {verdict} verdict"
                 ):
                     try:
-                        rec_id = append_claim_to_dataset(
+                        append_claim_to_dataset(
                             claim.text,
                             claim.evidence,
                             cast(Literal["PASS", "WARN", "FAIL"], verdict),
@@ -1034,7 +1165,7 @@ def render_audit_card(result: AuditResult, allow_feedback: bool = False) -> None
                         help=f"Mark as {other}",
                     ):
                         try:
-                            rec_id = append_claim_to_dataset(
+                            append_claim_to_dataset(
                                 claim.text,
                                 claim.evidence,
                                 cast(Literal["PASS", "WARN", "FAIL"], other),
@@ -1065,6 +1196,12 @@ def render_audit_card(result: AuditResult, allow_feedback: bool = False) -> None
     # Evidence
     st.subheader("Evidence")
     render_provenance(result.provenance)
+
+    # Structured literature evidence (SemMedDB / INDRA), if available in facts
+    facts = result.facts if isinstance(result.facts, Mapping) else {}
+    render_structured_literature_panel(facts)
+    # Text-level NLI-style evidence from abstracts, if available
+    render_text_nli_panel(facts)
 
     # Rules fired
     st.subheader("Rules Fired")
@@ -1109,16 +1246,41 @@ def render_audit_card(result: AuditResult, allow_feedback: bool = False) -> None
 
     if subject_id and object_id:
         st.subheader("Interactive Subgraph")
-        with st.expander("Show 2-hop KG subgraph around this claim", expanded=True):
+
+        # Initialize subgraph hop setting in session state
+        if "subgraph_k_hops" not in st.session_state:
+            st.session_state.subgraph_k_hops = 1
+
+        # Hop count selector
+        col_hops, col_warning = st.columns([1, 3])
+        with col_hops:
+            k_hops = st.selectbox(
+                "Hops",
+                options=[1, 2],
+                index=st.session_state.subgraph_k_hops - 1,
+                help="Number of hops from claim entities. 2 hops can be slow for highly connected nodes.",
+                key="k_hops_selector",
+            )
+            st.session_state.subgraph_k_hops = k_hops
+        with col_warning:
+            if k_hops == 2:
+                st.caption("⚠️ 2-hop subgraphs can be very large and slow to load")
+
+        with st.expander(f"Show {k_hops}-hop KG subgraph around this claim", expanded=True):
             try:
                 backend = _get_subgraph_backend()
-                subgraph = build_pair_subgraph(
-                    backend,
-                    subject_id,
-                    object_id,
-                    k=2,
-                    rule_features=evaluation.features,
-                )
+                # Show loading indicator while fetching subgraph from KG
+                # Include evidence IDs (GO terms, Reactome, etc.) as additional nodes
+                evidence_ids = list(claim.evidence) if claim.evidence else []
+                with st.spinner(f"Loading {k_hops}-hop subgraph from knowledge graph..."):
+                    subgraph = build_pair_subgraph(
+                        backend,
+                        subject_id,
+                        object_id,
+                        k=k_hops,
+                        rule_features=evaluation.features,
+                        evidence_ids=evidence_ids,
+                    )
             except Exception as exc:  # pragma: no cover - UI surface
                 st.error("Could not build a subgraph for this claim.")
                 st.caption(f"Details: {exc}")

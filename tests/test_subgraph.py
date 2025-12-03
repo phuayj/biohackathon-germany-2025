@@ -12,6 +12,7 @@ from kg_skeptic.subgraph import (
     Subgraph,
     build_pair_subgraph,
     _compute_rule_feature_aggregates,
+    _normalize_category,
 )
 
 
@@ -453,3 +454,170 @@ def test_build_pair_subgraph_adds_path_length_to_pathway_feature() -> None:
         assert isinstance(value, (int, float))
         assert value >= 0.0
         assert value == pytest.approx(3.0)
+
+
+def test_normalize_category_handles_biolink_prefix() -> None:
+    """Category normalizer should handle Biolink-prefixed categories from Monarch KG."""
+    # Test Biolink-prefixed categories (as stored in Monarch KG)
+    assert _normalize_category("biolink:Gene") == "gene"
+    assert _normalize_category("biolink:Disease") == "disease"
+    assert _normalize_category("biolink:PhenotypicFeature") == "phenotype"
+    assert _normalize_category("biolink:BiologicalProcess") == "pathway"
+    assert _normalize_category("biolink:MolecularActivity") == "pathway"
+    assert _normalize_category("biolink:Pathway") == "pathway"
+    assert _normalize_category("biolink:CellularComponent") == "pathway"
+
+    # Test raw categories (as used in in-memory backends)
+    assert _normalize_category("gene") == "gene"
+    assert _normalize_category("disease") == "disease"
+    assert _normalize_category("phenotype") == "phenotype"
+    assert _normalize_category("pathway") == "pathway"
+
+    # Test case insensitivity
+    assert _normalize_category("BIOLINK:GENE") == "gene"
+    assert _normalize_category("Gene") == "gene"
+
+    # Test None and unknown categories
+    assert _normalize_category(None) == "unknown"
+    assert _normalize_category("") == "unknown"
+    assert _normalize_category("biolink:SomethingElse") == "somethingelse"
+
+
+def test_build_pair_subgraph_handles_biolink_prefixed_categories() -> None:
+    """Subgraph builder should accept nodes with Biolink-prefixed categories.
+
+    This test simulates what happens when querying Monarch KG via Neo4j,
+    where nodes have categories like 'biolink:Gene' rather than 'gene'.
+    """
+    backend = InMemoryBackend()
+
+    subject = "HGNC:5000"
+    obj = "MONDO:5000"
+    neighbor = "HGNC:5001"
+
+    # Add nodes with Biolink-prefixed categories (as stored in Monarch KG)
+    backend.add_node(
+        KGNode(
+            id=subject,
+            label="TEST_GENE1",
+            category="biolink:Gene",
+            properties={},
+        )
+    )
+    backend.add_node(
+        KGNode(
+            id=obj,
+            label="Test Disease",
+            category="biolink:Disease",
+            properties={},
+        )
+    )
+    backend.add_node(
+        KGNode(
+            id=neighbor,
+            label="TEST_GENE2",
+            category="biolink:Gene",
+            properties={},
+        )
+    )
+
+    # Add edges
+    backend.add_edge(
+        KGEdge(
+            subject=subject,
+            predicate="biolink:gene_associated_with_condition",
+            object=obj,
+            properties={},
+        )
+    )
+    backend.add_edge(
+        KGEdge(
+            subject=subject,
+            predicate="biolink:interacts_with",
+            object=neighbor,
+            properties={},
+        )
+    )
+
+    subgraph = build_pair_subgraph(backend, subject, obj, k=1)
+
+    # All three nodes should be included (categories normalized to allowed types)
+    node_ids = {n.id for n in subgraph.nodes}
+    assert subject in node_ids
+    assert obj in node_ids
+    assert neighbor in node_ids
+
+    # Categories should be normalized to simple form
+    for node in subgraph.nodes:
+        assert node.category in {"gene", "disease", "phenotype", "pathway"}
+
+    # Edges should be included
+    assert len(subgraph.edges) >= 2
+
+
+def test_build_pair_subgraph_includes_evidence_nodes() -> None:
+    """Subgraph builder should include evidence IDs as additional center nodes."""
+    backend = InMemoryBackend()
+
+    subject = "HGNC:6000"
+    obj = "MONDO:6000"
+    evidence_go = "GO:0006000"  # A pathway evidence
+
+    # Add nodes
+    backend.add_node(KGNode(id=subject, category="gene"))
+    backend.add_node(KGNode(id=obj, category="disease"))
+    backend.add_node(KGNode(id=evidence_go, category="pathway"))
+    backend.add_node(KGNode(id="HGNC:6001", category="gene"))
+
+    # Add edges: subject -> disease, evidence_go -> gene neighbor
+    backend.add_edge(
+        KGEdge(
+            subject=subject,
+            predicate="biolink:gene_associated_with_condition",
+            object=obj,
+            properties={},
+        )
+    )
+    # This edge connects the evidence GO term to another gene
+    backend.add_edge(
+        KGEdge(
+            subject="HGNC:6001",
+            predicate="biolink:participates_in",
+            object=evidence_go,
+            properties={},
+        )
+    )
+
+    # Build subgraph WITH evidence - should include GO term and its neighbor
+    subgraph_with_ev = build_pair_subgraph(
+        backend, subject, obj, k=1, evidence_ids=[evidence_go, "PMID:12345"]
+    )
+
+    node_ids_with = {n.id for n in subgraph_with_ev.nodes}
+    assert evidence_go in node_ids_with, "Evidence GO term should be included"
+    assert "HGNC:6001" in node_ids_with, "Neighbor of evidence should be included"
+
+    # Build subgraph WITHOUT evidence - should NOT include GO term
+    subgraph_without_ev = build_pair_subgraph(backend, subject, obj, k=1)
+
+    node_ids_without = {n.id for n in subgraph_without_ev.nodes}
+    # GO term won't be included because it's not connected to subject/object within 1 hop
+    assert subject in node_ids_without
+    assert obj in node_ids_without
+
+
+def test_is_kg_node_id_filters_pmids() -> None:
+    """_is_kg_node_id should filter out literature references."""
+    from kg_skeptic.subgraph import _is_kg_node_id
+
+    # Should return True for KG nodes
+    assert _is_kg_node_id("GO:0006915") is True
+    assert _is_kg_node_id("R-HSA-123456") is True
+    assert _is_kg_node_id("MONDO:0007254") is True
+    assert _is_kg_node_id("HP:0000001") is True
+    assert _is_kg_node_id("HGNC:1100") is True
+
+    # Should return False for literature references
+    assert _is_kg_node_id("PMID:12345678") is False
+    assert _is_kg_node_id("DOI:10.1234/abc") is False
+    assert _is_kg_node_id("PMC1234567") is False

@@ -223,6 +223,7 @@ class ProvenanceFetcher:
                 "doi": article.doi,
                 "journal": article.journal,
                 "pub_date": article.pub_date,
+                "abstract": article.abstract,
                 "authors": article.authors[:3],  # First 3 authors
                 "citation_count": article.citation_count,
             },

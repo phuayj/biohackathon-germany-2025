@@ -145,6 +145,16 @@ rules:
           value: false
     because: "because DisGeNET does not report a high-scoring association for this gene–disease pair"
 
+  - id: structured_literature_support
+    description: SemMedDB/INDRA report structured triples supporting the claim
+    weight: 0.4
+    when:
+      all:
+        - fact: literature.has_structured_support
+          op: equals
+          value: true
+    because: "because structured literature sources (SemMedDB/INDRA) contain matching subject–predicate–object triples for this claim"
+
   - id: tissue_mismatch
     description: Claimed tissue context does not match expected tissue for this pathway/process
     weight: -0.6

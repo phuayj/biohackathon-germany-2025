@@ -541,16 +541,31 @@ class Neo4jBackend(KGBackend):
             if isinstance(rec, dict):
                 results.append(rec)
             else:
-                # Fallback to attribute access used by the official driver.
+                # Neo4j Record objects: use .data() method or bracket notation
+                # to extract fields. The official driver's Record class has a
+                # .data() method that returns a dict.
                 mapping: dict[str, _object] = {}
-                for key in dir(rec):
-                    if key.startswith("_"):
-                        continue
-                    try:
-                        value = getattr(rec, key)
-                    except AttributeError:
-                        continue
-                    mapping[key] = value
+                if hasattr(rec, "data") and callable(getattr(rec, "data")):
+                    # Official neo4j driver Record
+                    mapping = dict(rec.data())
+                elif hasattr(rec, "keys") and callable(getattr(rec, "keys")):
+                    # Fallback for record-like objects with keys() method
+                    for key in rec.keys():
+                        try:
+                            mapping[key] = rec[key]
+                        except (KeyError, TypeError):
+                            pass
+                else:
+                    # Last resort: attribute access (for mock objects in tests)
+                    for key in dir(rec):
+                        if key.startswith("_"):
+                            continue
+                        try:
+                            value = getattr(rec, key)
+                            if not callable(value):
+                                mapping[key] = value
+                        except AttributeError:
+                            continue
                 results.append(mapping)
         return results
 
