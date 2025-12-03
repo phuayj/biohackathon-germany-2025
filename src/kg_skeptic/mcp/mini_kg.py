@@ -14,6 +14,7 @@ Each edge carries PMIDs/DOIs in the properties and sources for provenance.
 from __future__ import annotations
 
 from functools import lru_cache
+from hashlib import sha256
 from typing import Dict, Iterator, Optional, Sequence
 
 from .kg import InMemoryBackend, KGEdge
@@ -30,10 +31,11 @@ class _Entity:
 class _Citation:
     """Supporting publication identifiers for an edge."""
 
-    def __init__(self, pmid: str, doi: str, note: str) -> None:
+    def __init__(self, pmid: str, doi: str, note: str, year: int) -> None:
         self.pmid = pmid
         self.doi = doi
         self.note = note
+        self.year = year
 
 
 # Core entities used to generate the slice
@@ -135,20 +137,28 @@ _PATHWAYS: Sequence[_Entity] = [
 ]
 
 _CITATIONS: Sequence[_Citation] = [
-    _Citation("PMID:8618520", "10.1038/376357a0", "BRCA1 germline carriers"),
-    _Citation("PMID:22810696", "10.1038/nature11299", "TCGA pan-cancer driver analysis"),
-    _Citation("PMID:28622514", "10.1056/NEJMoa1709866", "MET exon 14 alterations in NSCLC"),
-    _Citation("PMID:19295593", "10.1038/ng.2411", "PIK3CA oncogenic activation"),
-    _Citation("PMID:21850046", "10.1056/NEJMoa1107039", "Vemurafenib in BRAF V600E melanoma"),
-    _Citation("PMID:28771400", "10.1038/s41586-020-03167-3", "Pan-ancestry GWAS meta-analysis"),
-    _Citation("PMID:23455423", "10.1093/nar/gkt1046", "Reactome pathway curation update"),
-    _Citation("PMID:19151714", "10.1016/j.cell.2008.12.023", "Pten and PI3K signaling dynamics"),
-    _Citation("PMID:23127807", "10.1126/science.1235122", "KRAS dependency in cancers"),
-    _Citation("PMID:21364572", "10.1056/NEJMoa1008864", "EGFR T790M resistance"),
-    _Citation("PMID:19587682", "10.1093/hmg/ddp263", "AKT/mTOR pathway in cardiomyopathy"),
-    _Citation("PMID:14597758", "10.1038/sj.onc.1206921", "MYC driven lymphoma models"),
-    _Citation("PMID:28343631", "10.1186/s13073-017-0420-1", "JAK-STAT alterations across tumors"),
-    _Citation("PMID:30455423", "10.1038/s41586-018-0817-2", "APOE and neurodegeneration risk"),
+    _Citation("PMID:8618520", "10.1038/376357a0", "BRCA1 germline carriers", 1995),
+    _Citation("PMID:22810696", "10.1038/nature11299", "TCGA pan-cancer driver analysis", 2012),
+    _Citation("PMID:28622514", "10.1056/NEJMoa1709866", "MET exon 14 alterations in NSCLC", 2017),
+    _Citation("PMID:19295593", "10.1038/ng.2411", "PIK3CA oncogenic activation", 2009),
+    _Citation("PMID:21850046", "10.1056/NEJMoa1107039", "Vemurafenib in BRAF V600E melanoma", 2011),
+    _Citation(
+        "PMID:28771400", "10.1038/s41586-020-03167-3", "Pan-ancestry GWAS meta-analysis", 2017
+    ),
+    _Citation("PMID:23455423", "10.1093/nar/gkt1046", "Reactome pathway curation update", 2013),
+    _Citation(
+        "PMID:19151714", "10.1016/j.cell.2008.12.023", "Pten and PI3K signaling dynamics", 2009
+    ),
+    _Citation("PMID:23127807", "10.1126/science.1235122", "KRAS dependency in cancers", 2013),
+    _Citation("PMID:21364572", "10.1056/NEJMoa1008864", "EGFR T790M resistance", 2011),
+    _Citation("PMID:19587682", "10.1093/hmg/ddp263", "AKT/mTOR pathway in cardiomyopathy", 2009),
+    _Citation("PMID:14597758", "10.1038/sj.onc.1206921", "MYC driven lymphoma models", 2003),
+    _Citation(
+        "PMID:28343631", "10.1186/s13073-017-0420-1", "JAK-STAT alterations across tumors", 2017
+    ),
+    _Citation(
+        "PMID:30455423", "10.1038/s41586-018-0817-2", "APOE and neurodegeneration risk", 2018
+    ),
 ]
 
 _CURATED_CONTEXT_EDGES: Sequence[KGEdge] = (
@@ -178,12 +188,18 @@ def _edge_properties(
     cohort: str,
 ) -> Dict[str, object]:
     """Build standard edge properties with supporting evidence."""
+    # Fixed reference year keeps evidence_age deterministic for tests and
+    # training while still encoding relative recency of supporting PMIDs.
+    reference_year = 2024
+    evidence_age = max(0.0, float(reference_year - citation.year))
+
     return {
         "edge_type": edge_type,
         "supporting_pmids": [citation.pmid],
         "supporting_dois": [citation.doi],
         "confidence": round(confidence, 3),
         "cohort": cohort,
+        "evidence_age": evidence_age,
     }
 
 
@@ -381,6 +397,39 @@ def mini_kg_edge_count() -> int:
     return sum(1 for _ in iter_mini_kg_edges())
 
 
+def _node2vec_embedding_for_id(node_id: str, dim: int = 64) -> list[float]:
+    """Deterministic pseudo-Node2Vec vector for a node id.
+
+    This keeps the mini KG fully offline and repeatable while still
+    providing dense continuous features that behave like Node2Vec-style
+    embeddings for downstream GNN experiments.
+    """
+    vec: list[float] = []
+    for i in range(dim):
+        data = f"{node_id}|{i}".encode("utf-8")
+        digest = sha256(data).digest()
+        # Map first 4 bytes into [0, 1) as a float.
+        value = int.from_bytes(digest[:4], byteorder="big", signed=False) / float(2**32)
+        vec.append(value)
+    return vec
+
+
+def _attach_node2vec_embeddings(backend: InMemoryBackend, dim: int = 64) -> None:
+    """Attach deterministic Node2Vec-like embeddings to all backend nodes.
+
+    Embeddings are stored under the ``node2vec`` key on node properties
+    so they are picked up by :mod:`kg_skeptic.subgraph` as additional
+    numeric node features.
+    """
+    for node in backend.nodes.values():
+        props = node.properties
+        # Do not overwrite existing embeddings if they were provided by
+        # an external pipeline.
+        if any(key in props for key in ("node2vec", "n2v", "embedding")):
+            continue
+        props["node2vec"] = _node2vec_embedding_for_id(node.id, dim=dim)
+
+
 def load_mini_kg_backend(max_edges: Optional[int] = None) -> InMemoryBackend:
     """
     Build an in-memory backend preloaded with the mini KG slice.
@@ -394,4 +443,5 @@ def load_mini_kg_backend(max_edges: Optional[int] = None) -> InMemoryBackend:
     backend = InMemoryBackend()
     for edge in iter_mini_kg_edges(max_edges):
         backend.add_edge(edge)
+    _attach_node2vec_embeddings(backend, dim=64)
     return backend

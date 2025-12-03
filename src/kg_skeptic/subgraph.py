@@ -137,6 +137,12 @@ def _compute_node_features(
     pair_dist = dist_from_subject.get(object)
 
     features: dict[str, dict[str, float]] = {}
+    # Recognized keys for upstream Node2Vec-style embeddings. Embeddings
+    # are expected to be attached as a list/tuple of floats on the node
+    # properties under one of these keys by a separate embedding step
+    # (e.g., Neo4j GDS node2vec).
+    embedding_keys = ("node2vec", "n2v", "embedding")
+
     for node_id in nodes:
         indeg = in_deg.get(node_id, 0)
         outdeg = out_deg.get(node_id, 0)
@@ -189,7 +195,81 @@ def _compute_node_features(
         features[node_id]["ppi_edge_count"] = float(ppi_edge_count.get(node_id, 0.0))
         features[node_id]["ppi_weight_sum"] = float(ppi_weight_sum.get(node_id, 0.0))
 
+        # Optional Node2Vec embeddings (d=64) from upstream KG. When present,
+        # these are exposed as additional numeric node features so downstream
+        # GNNs can consume them alongside structural statistics.
+        node = nodes.get(node_id)
+        raw_props = getattr(node, "properties", {}) if node is not None else {}
+        if isinstance(raw_props, Mapping):
+            embedding_values: List[float] = []
+            for key in embedding_keys:
+                raw_vec = raw_props.get(key)
+                if isinstance(raw_vec, (list, tuple)):
+                    for value in raw_vec:
+                        if isinstance(value, (int, float)):
+                            embedding_values.append(float(value))
+                    break
+
+            if embedding_values:
+                for idx, value in enumerate(embedding_values):
+                    features[node_id][f"node2vec_{idx}"] = value
+
     return features
+
+
+def _compute_path_length_to_pathway(
+    subject: str,
+    object: str,
+    edges: List[KGEdge],
+) -> float:
+    """Shortest subject–object path length that touches a pathway node.
+
+    The path is computed on the undirected version of the subgraph and
+    must include at least one intermediate node whose inferred category
+    is ``\"pathway\"``. If no such path exists, ``0.0`` is returned.
+    """
+    if not edges:
+        return 0.0
+
+    # Build an undirected adjacency list for the current subgraph.
+    adj: dict[str, set[str]] = defaultdict(set)
+    node_ids: set[str] = set()
+    for edge in edges:
+        adj[edge.subject].add(edge.object)
+        adj[edge.object].add(edge.subject)
+        node_ids.add(edge.subject)
+        node_ids.add(edge.object)
+
+    if subject not in adj or object not in adj:
+        return 0.0
+
+    node_ids.add(subject)
+    node_ids.add(object)
+    categories: dict[str, str] = {node_id: _category_from_id(node_id) for node_id in node_ids}
+
+    def is_pathway(node_id: str) -> bool:
+        return categories.get(node_id) == "pathway"
+
+    # BFS over (node, has_seen_pathway) state to ensure that the
+    # discovered path touches at least one pathway node.
+    start_has_pathway = is_pathway(subject)
+    queue: deque[tuple[str, bool, int]] = deque([(subject, start_has_pathway, 0)])
+    visited: set[tuple[str, bool]] = {(subject, start_has_pathway)}
+
+    while queue:
+        current, has_pathway, dist = queue.popleft()
+        if current == object and has_pathway:
+            return float(dist)
+
+        for neighbor in adj.get(current, ()):
+            next_has_pathway = has_pathway or is_pathway(neighbor)
+            state = (neighbor, next_has_pathway)
+            if state in visited:
+                continue
+            visited.add(state)
+            queue.append((neighbor, next_has_pathway, dist + 1))
+
+    return 0.0
 
 
 def _compute_rule_feature_aggregates(
@@ -321,6 +401,16 @@ def build_pair_subgraph(
                 continue
             seen.add(key)
             edges.append(edge)
+
+    # Path-based evidence feature: shortest subject–object path that
+    # touches a pathway node anywhere along the route. This is attached
+    # uniformly to all edges in the subgraph so edge-level models can
+    # condition on pathway proximity for the audited pair.
+    path_len_via_pathway = _compute_path_length_to_pathway(subject, object, edges)
+    if path_len_via_pathway < 0.0:
+        path_len_via_pathway = 0.0
+    for edge in edges:
+        edge.properties.setdefault("path_length_to_pathway", path_len_via_pathway)
 
     # Attach rule feature aggregates as edge attributes when available so
     # downstream GNNs can condition on both structural and rule-level

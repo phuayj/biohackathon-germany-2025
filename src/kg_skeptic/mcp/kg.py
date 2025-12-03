@@ -609,6 +609,7 @@ class Neo4jBackend(KGBackend):
             "RETURN DISTINCT "
             "n.id AS center_id, "
             "m.id AS node_id, "
+            "properties(m) AS node_props, "
             "startNode(rel).id AS subject_id, "
             "endNode(rel).id AS object_id, "
             "type(rel) AS predicate, "
@@ -627,6 +628,10 @@ class Neo4jBackend(KGBackend):
         for rec in records:
             node_id_val = rec.get("node_id")
             if isinstance(node_id_val, str):
+                raw_node_props = rec.get("node_props", {})
+                node_props: dict[str, _object] = {}
+                if isinstance(raw_node_props, dict):
+                    node_props = {k: v for k, v in raw_node_props.items()}
                 if node_id_val not in nodes:
                     nodes[node_id_val] = KGNode(
                         id=node_id_val,
@@ -640,6 +645,7 @@ class Neo4jBackend(KGBackend):
                             if isinstance(rec.get("node_category"), str)
                             else None
                         ),
+                        properties=node_props,
                     )
 
             rel_props = rec.get("rel_props", {})

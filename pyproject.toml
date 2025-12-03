@@ -34,6 +34,7 @@ target-version = "py313"
 python_version = "3.13"
 strict = true
 mypy_path = ["src"]
+exclude = ["^scripts/"]
 
 [tool.black]
 line-length = 100

@@ -22,6 +22,10 @@ def test_mini_kg_counts_and_types() -> None:
     sample = backend.edges[0]
     assert sample.properties["supporting_pmids"]
     assert sample.properties["supporting_dois"]
+    # Evidence age feature per GNN spec (§3.0) should be present and numeric.
+    assert "evidence_age" in sample.properties
+    assert isinstance(sample.properties["evidence_age"], (int, float))
+    assert sample.properties["evidence_age"] >= 0
     assert sample.sources
 
 
@@ -32,3 +36,16 @@ def test_mini_kg_limit_cap() -> None:
 
     counts = Counter(edge.properties["edge_type"] for edge in iter_mini_kg_edges(120))
     assert sum(counts.values()) == 120
+
+
+def test_mini_kg_nodes_have_node2vec_embeddings() -> None:
+    """All mini KG nodes should expose deterministic Node2Vec-style embeddings."""
+    backend = load_mini_kg_backend()
+    assert backend.nodes
+
+    sample_node = next(iter(backend.nodes.values()))
+    embedding = sample_node.properties.get("node2vec")
+
+    assert isinstance(embedding, list)
+    assert len(embedding) == 64
+    assert all(isinstance(v, float) for v in embedding)

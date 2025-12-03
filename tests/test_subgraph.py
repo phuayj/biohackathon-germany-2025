@@ -6,7 +6,7 @@ import math
 
 import pytest
 
-from kg_skeptic.mcp.kg import InMemoryBackend, KGEdge
+from kg_skeptic.mcp.kg import InMemoryBackend, KGEdge, KGNode
 from kg_skeptic.mcp.mini_kg import load_mini_kg_backend
 from kg_skeptic.subgraph import (
     Subgraph,
@@ -366,3 +366,90 @@ def test_build_pair_subgraph_without_rule_features_keeps_edge_properties_unchang
         # No rule_* keys or is_claim_edge_for_rule_features marker should be present.
         assert not any(key.startswith("rule_feature_") for key in props)
         assert "is_claim_edge_for_rule_features" not in props
+
+
+def test_build_pair_subgraph_includes_node2vec_embeddings_when_present() -> None:
+    """Node2Vec embeddings attached to nodes should surface as node features."""
+    backend = InMemoryBackend()
+
+    subject = "HGNC:5000"
+    obj = "MONDO:5000"
+    dim = 64
+    embedding = [0.1 * i for i in range(dim)]
+
+    # Attach a synthetic Node2Vec vector to the subject node via properties.
+    backend.add_node(
+        KGNode(
+            id=subject,
+            properties={"node2vec": embedding},
+        )
+    )
+    backend.add_node(KGNode(id=obj))
+
+    backend.add_edge(
+        KGEdge(
+            subject=subject,
+            predicate="biolink:contributes_to",
+            object=obj,
+            properties={},
+        )
+    )
+
+    subgraph = build_pair_subgraph(backend, subject, obj, k=1)
+    feats = subgraph.node_features.get(subject, {})
+
+    # All embedding dimensions should be exposed as numeric node features.
+    for idx, expected in enumerate(embedding):
+        key = f"node2vec_{idx}"
+        assert key in feats
+        assert feats[key] == pytest.approx(expected)
+
+
+def test_build_pair_subgraph_adds_path_length_to_pathway_feature() -> None:
+    """Subgraph builder should expose path_length_to_pathway per spec §3.0."""
+    backend = InMemoryBackend()
+
+    subject = "HGNC:4000"
+    bridge_gene = "HGNC:4001"
+    pathway = "GO:0000001"
+    obj = "MONDO:4000"
+
+    # Construct a small graph where the only subject–object path that
+    # touches a pathway node is:
+    # subject (gene) → pathway (pathway) → bridge_gene (gene) → obj (disease)
+    backend.add_edge(
+        KGEdge(
+            subject=subject,
+            predicate="biolink:participates_in",
+            object=pathway,
+            properties={},
+        )
+    )
+    backend.add_edge(
+        KGEdge(
+            subject=bridge_gene,
+            predicate="biolink:participates_in",
+            object=pathway,
+            properties={},
+        )
+    )
+    backend.add_edge(
+        KGEdge(
+            subject=bridge_gene,
+            predicate="biolink:contributes_to",
+            object=obj,
+            properties={},
+        )
+    )
+
+    subgraph = build_pair_subgraph(backend, subject, obj, k=2)
+    assert subgraph.edges
+
+    # All edges in the subgraph should carry a non-negative
+    # path_length_to_pathway feature, and in this toy graph the shortest
+    # path via a pathway node has exactly three hops.
+    for edge in subgraph.edges:
+        value = edge.properties.get("path_length_to_pathway")
+        assert isinstance(value, (int, float))
+        assert value >= 0.0
+        assert value == pytest.approx(3.0)

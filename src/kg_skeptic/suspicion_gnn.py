@@ -65,6 +65,8 @@ NUMERIC_EDGE_KEYS_DEFAULT: tuple[str, ...] = (
     "confidence",
     "n_sources",
     "n_pmids",
+    "evidence_age",
+    "path_length_to_pathway",
     "rule_feature_sum",
     "rule_feature_abs_sum",
     "rule_feature_positive_sum",

@@ -19,7 +19,7 @@ from collections.abc import Mapping
 from kg_skeptic.mcp.ids import IDNormalizerTool
 from kg_skeptic.mcp.pathways import PathwayTool
 from kg_skeptic.mcp.disgenet import DisGeNETTool
-from kg_skeptic.mcp.kg import InMemoryBackend, KGBackend, KGEdge, KGTool
+from kg_skeptic.mcp.kg import EdgeQueryResult, InMemoryBackend, KGBackend, KGEdge, KGTool
 from .models import Claim, EntityMention, Report
 from .mcp.mini_kg import load_mini_kg_backend
 from .provenance import CitationProvenance, ProvenanceFetcher
@@ -1873,22 +1873,26 @@ class SkepticPipeline:
         # Any retracted citation forces a FAIL verdict, regardless of score.
         if retracted_count > 0:
             verdict = "FAIL"
-            evaluation.trace.add(RuleTraceEntry(
-                rule_id="gate:retraction",
-                score=0.0,
-                because=f"because {retracted_count} citation(s) are retracted (hard gate override)",
-                description="Retraction gate: forces FAIL regardless of score",
-            ))
+            evaluation.trace.add(
+                RuleTraceEntry(
+                    rule_id="gate:retraction",
+                    score=0.0,
+                    because=f"because {retracted_count} citation(s) are retracted (hard gate override)",
+                    description="Retraction gate: forces FAIL regardless of score",
+                )
+            )
         # Expressions of concern downgrade PASS to WARN (but do not upgrade
         # existing WARN/FAIL verdicts).
         elif concern_count > 0 and verdict == "PASS":
             verdict = "WARN"
-            evaluation.trace.add(RuleTraceEntry(
-                rule_id="gate:expression_of_concern",
-                score=0.0,
-                because=f"because {concern_count} citation(s) have expressions of concern (downgrade PASS → WARN)",
-                description="Expression of concern gate: downgrades PASS to WARN",
-            ))
+            evaluation.trace.add(
+                RuleTraceEntry(
+                    rule_id="gate:expression_of_concern",
+                    score=0.0,
+                    because=f"because {concern_count} citation(s) have expressions of concern (downgrade PASS → WARN)",
+                    description="Expression of concern gate: downgrades PASS to WARN",
+                )
+            )
 
         # Gate PASS on positive evidence signals so structurally well-formed
         # but weakly supported claims are downgraded to WARN.
@@ -1898,45 +1902,53 @@ class SkepticPipeline:
             curated_dict = curated if isinstance(curated, Mapping) else {}
             monarch_checked = curated_dict.get("monarch_checked", False)
             disgenet_checked = curated_dict.get("disgenet_checked", False)
-            evaluation.trace.add(RuleTraceEntry(
-                rule_id="gate:positive_evidence_required",
-                score=0.0,
-                because=(
-                    "because PASS requires either multiple independent sources or curated KG support "
-                    f"(has_multiple_sources=False, monarch_checked={monarch_checked}, disgenet_checked={disgenet_checked})"
-                ),
-                description="Positive evidence gate: downgrades PASS to WARN without multi-source or curated KG",
-            ))
+            evaluation.trace.add(
+                RuleTraceEntry(
+                    rule_id="gate:positive_evidence_required",
+                    score=0.0,
+                    because=(
+                        "because PASS requires either multiple independent sources or curated KG support "
+                        f"(has_multiple_sources=False, monarch_checked={monarch_checked}, disgenet_checked={disgenet_checked})"
+                    ),
+                    description="Positive evidence gate: downgrades PASS to WARN without multi-source or curated KG",
+                )
+            )
 
         conflicts_raw = facts.get("conflicts")
         conflicts = conflicts_raw if isinstance(conflicts_raw, Mapping) else {}
         if conflicts.get("self_negation_conflict"):
             verdict = "FAIL"
-            evaluation.trace.add(RuleTraceEntry(
-                rule_id="gate:self_negation",
-                score=0.0,
-                because="because the claim contains self-negation (hard gate override)",
-                description="Self-negation gate: forces FAIL",
-            ))
+            evaluation.trace.add(
+                RuleTraceEntry(
+                    rule_id="gate:self_negation",
+                    score=0.0,
+                    because="because the claim contains self-negation (hard gate override)",
+                    description="Self-negation gate: forces FAIL",
+                )
+            )
         if conflicts.get("opposite_predicate_same_context"):
             verdict = "FAIL"
-            evaluation.trace.add(RuleTraceEntry(
-                rule_id="gate:opposite_predicate",
-                score=0.0,
-                because="because the predicate conflicts with known context (hard gate override)",
-                description="Opposite predicate gate: forces FAIL",
-            ))
+            evaluation.trace.add(
+                RuleTraceEntry(
+                    rule_id="gate:opposite_predicate",
+                    score=0.0,
+                    because="because the predicate conflicts with known context (hard gate override)",
+                    description="Opposite predicate gate: forces FAIL",
+                )
+            )
 
         extraction_raw = facts.get("extraction")
         extraction = extraction_raw if isinstance(extraction_raw, Mapping) else {}
         if extraction.get("is_low_confidence"):
             verdict = "FAIL"
-            evaluation.trace.add(RuleTraceEntry(
-                rule_id="gate:low_confidence",
-                score=0.0,
-                because="because the extraction has low confidence with hedging language (hard gate override)",
-                description="Low confidence gate: forces FAIL",
-            ))
+            evaluation.trace.add(
+                RuleTraceEntry(
+                    rule_id="gate:low_confidence",
+                    score=0.0,
+                    because="because the extraction has low confidence with hedging language (hard gate override)",
+                    description="Low confidence gate: forces FAIL",
+                )
+            )
 
         # Downgrade ontology sibling conflicts to WARN so sibling-like pairs
         # are surfaced even if other signals are strong.
@@ -1944,12 +1956,14 @@ class SkepticPipeline:
         ontology = ontology_raw if isinstance(ontology_raw, Mapping) else {}
         if verdict == "PASS" and ontology.get("is_sibling_conflict"):
             verdict = "WARN"
-            evaluation.trace.add(RuleTraceEntry(
-                rule_id="gate:sibling_conflict",
-                score=0.0,
-                because="because subject and object appear to be ontology siblings (downgrade PASS → WARN)",
-                description="Sibling conflict gate: downgrades PASS to WARN",
-            ))
+            evaluation.trace.add(
+                RuleTraceEntry(
+                    rule_id="gate:sibling_conflict",
+                    score=0.0,
+                    because="because subject and object appear to be ontology siblings (downgrade PASS → WARN)",
+                    description="Sibling conflict gate: downgrades PASS to WARN",
+                )
+            )
 
         # Optional Day 3 suspicion GNN overlay (does not affect verdict).
         suspicion: dict[str, object] = {}

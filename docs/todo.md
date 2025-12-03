@@ -106,9 +106,9 @@
 - [x] Add "singleton & weak" detection: flag edges with 1 source, 1 PMID, far from mechanistic context per spec §2B.
 
 #### GNN Spec Compliance (Phase 4 — Additional Features)
-- [ ] Add `evidence_age` feature (years since newest PMID) per spec §3.0.
-- [ ] Add `path_length_to_pathway` feature (shortest path to pathway touching both ends) per spec §3.0.
-- [ ] Add Node2Vec embeddings (d=64) from Neo4j GDS or separate embedding step per spec §3.0 (optional).
+- [x] Add `evidence_age` feature (years since newest PMID) per spec §3.0.
+- [x] Add `path_length_to_pathway` feature (shortest path to pathway touching both ends) per spec §3.0.
+- [x] Add Node2Vec embeddings (d=64) from Neo4j GDS or separate embedding step per spec §3.0 (optional).
 - [ ] Add self-supervised link prediction pretrain (GAE/GraphSAGE) per spec §D (optional).
 
 ### Live Graph & Evidence Overlay (NEW)
