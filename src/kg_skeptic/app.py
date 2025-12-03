@@ -296,7 +296,18 @@ def _get_pipeline(use_gliner: bool = False) -> SkepticPipeline:
         # section in the UI; this flag also feeds DisGeNET signals into the
         # rule engine.
         use_disgenet = bool(os.environ.get("DISGENET_API_KEY"))
-        config: dict[str, object] = {"use_disgenet": use_disgenet}
+        # Monarch KG-backed curated KG checks are enabled by default in the
+        # app but can be disabled via KG_SKEPTIC_USE_MONARCH_KG=0/false.
+        monarch_env = os.environ.get("KG_SKEPTIC_USE_MONARCH_KG")
+        if monarch_env is None:
+            use_monarch_kg = True
+        else:
+            use_monarch_kg = monarch_env.strip().lower() in {"1", "true", "yes", "on"}
+
+        config: dict[str, object] = {
+            "use_disgenet": use_disgenet,
+            "use_monarch_kg": use_monarch_kg,
+        }
         st.session_state[cache_key] = SkepticPipeline(config=config, normalizer=normalizer)
     return cast(SkepticPipeline, st.session_state[cache_key])
 

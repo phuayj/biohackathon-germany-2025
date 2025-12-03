@@ -79,7 +79,7 @@
 - [x] Compute node features: clustering, path counts, PPI weights (extend existing degree features).
 - [x] Add rule feature aggregates to edge attributes.
 - [ ] Add helper to convert subgraph edges (including rule feature aggregates) into PyG-ready tensors.
-- [ ] **Swap curated KG check to Monarch:** Once a Monarch KG-backed check is implemented, replace/augment the current curated KG evidence (e.g., DisGeNET) with a Monarch-based `curated_kg_match` for gene→disease edges. See [linkml-store Monarch KG](https://linkml.io/linkml-store/how-to/Query-the-Monarch-KG.html).
+- [x] **Swap curated KG check to Monarch:** Replace/augment the current curated KG evidence (e.g., DisGeNET) with a Monarch-backed `curated_kg_match` signal for gene→disease edges, wired into the curated KG facts and positive-evidence gate. See [linkml-store Monarch KG](https://linkml.io/linkml-store/how-to/Query-the-Monarch-KG.html).
 - [ ] Expand predicate polarity map (positive/negative verbs and biolink aliases) used by opposite-predicate checks.
 - [ ] Add fixtures covering mixed/ambiguous context polarity to validate detection paths.
 
@@ -141,6 +141,7 @@
 ### Integration Testing
 - [ ] Measure hallucination-reduction when auditor guards a small LLM QA/KG agent.
 - [ ] Integration tests with demo bio-agent via MCP.
+- [ ] Surface curated KG support in the UI: add an Audit Card snippet that shows whether Monarch and/or DisGeNET back the gene–disease edge (including edge counts and which sources fired), and add non-live + e2e tests to exercise this path.
 
 ---
 

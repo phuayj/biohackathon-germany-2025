@@ -42,6 +42,7 @@ class TestSkepticPipelineE2E:
     def test_pipeline_end_to_end_with_live_services(self, tmp_path: Path) -> None:
         """Run full pipeline with live ID/provenance lookups."""
         pipeline = SkepticPipeline(
+            config={"use_monarch_kg": True},
             provenance_fetcher=ProvenanceFetcher(cache_dir=tmp_path, use_live=True),
         )
         result = pipeline.run(
@@ -74,6 +75,29 @@ class TestSkepticPipelineE2E:
         # Provenance should include the supplied PMID
         assert result.provenance
         assert any(p.identifier == "PMID:7997877" for p in result.provenance)
+
+    def test_pipeline_curated_kg_match_with_monarch(self, tmp_path: Path) -> None:
+        """BRCA1–breast cancer should typically have Monarch curated KG support."""
+        pipeline = SkepticPipeline(
+            config={"use_monarch_kg": True},
+            provenance_fetcher=ProvenanceFetcher(cache_dir=tmp_path, use_live=True),
+        )
+        result = pipeline.run(
+            {
+                "text": "BRCA1 mutations increase breast cancer risk.",
+                "evidence": ["PMID:7997877"],
+            }
+        )
+
+        curated_raw = result.facts.get("curated_kg")
+        curated = curated_raw if isinstance(curated_raw, dict) else {}
+        # We do not hard-fail if Monarch is temporarily unavailable,
+        # but when the backend responds, we expect a supporting edge.
+        monarch_checked = bool(curated.get("monarch_checked"))
+        monarch_support = bool(curated.get("monarch_support"))
+        if monarch_checked:
+            assert monarch_support is True
+            assert curated.get("curated_kg_match") is True
 
     @pytest.mark.parametrize(
         "example",

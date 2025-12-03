@@ -123,17 +123,14 @@ rules:
     because: "because no PMIDs/DOIs were supplied"
 
   - id: disgenet_support_bonus
-    description: DisGeNET supports the gene–disease association
+    description: Curated KG (Monarch/DisGeNET) supports the gene–disease association
     weight: 0.5
     when:
       all:
-        - fact: curated_kg.disgenet_checked
+        - fact: curated_kg.curated_kg_match
           op: equals
           value: true
-        - fact: curated_kg.disgenet_support
-          op: equals
-          value: true
-    because: "because DisGeNET reports a high-scoring association for this gene–disease pair (UMLS {curated_kg.disgenet_cui})"
+    because: "because a curated knowledge graph (e.g., Monarch or DisGeNET) reports a supporting association for this gene–disease pair"
 
   - id: disgenet_missing_support_penalty
     description: Penalize lack of DisGeNET support when checked

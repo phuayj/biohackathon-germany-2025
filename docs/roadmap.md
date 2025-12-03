@@ -79,6 +79,7 @@
 - [x] Edges: G–G, G–Phe, G–Dis, G–Path.
 - [x] Compute features: degree, clustering, path counts, PPI weights.
 - [x] Add rule feature aggregates to edge attributes.
+- [x] Swap curated KG check to Monarch-backed `curated_kg_match` for gene–disease edges and feed it into the evidence gate.
 
 ### Suspicion GNN (PyG)
 - [ ] Model: 2-layer R-GCN with 16–32 hidden dims.

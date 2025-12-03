@@ -5,7 +5,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from kg_skeptic.pipeline import ClaimNormalizer, SkepticPipeline
+from kg_skeptic.pipeline import (
+    ClaimNormalizer,
+    NormalizedEntity,
+    NormalizedTriple,
+    SkepticPipeline,
+)
 from kg_skeptic.provenance import ProvenanceFetcher
 from kg_skeptic.mcp.ids import NormalizedID, IDType
 from kg_skeptic.mcp.pathways import PathwayRecord
@@ -140,6 +145,46 @@ class TestSkepticPipeline:
         assert _Pipeline._has_positive_evidence(facts_multi) is True
         assert _Pipeline._has_positive_evidence(facts_curated) is True
         assert _Pipeline._has_positive_evidence(facts_none) is False
+
+    @patch("kg_skeptic.pipeline.KGTool")
+    def test_curated_kg_facts_use_monarch_backend(self, mock_kg_tool_cls: MagicMock) -> None:
+        """Curated KG facts should incorporate Monarch-backed KG support when enabled."""
+        # Arrange a Monarch-backed KGTool that reports a supporting edge
+        mock_kg_tool = MagicMock()
+        mock_edge_result = MagicMock()
+        mock_edge_result.exists = True
+        mock_edge_result.edges = [MagicMock(), MagicMock()]
+        mock_kg_tool.query_edge.return_value = mock_edge_result
+        mock_kg_tool_cls.return_value = mock_kg_tool
+
+        pipeline = SkepticPipeline(config={"use_monarch_kg": True, "use_disgenet": False})
+
+        subject = NormalizedEntity(
+            id="HGNC:1100",
+            label="BRCA1",
+            category="gene",
+            ancestors=[],
+            metadata={"ncbi_gene_id": "1100"},
+        )
+        obj = NormalizedEntity(
+            id="MONDO:0007254",
+            label="breast cancer",
+            category="disease",
+            ancestors=[],
+            metadata={"umls_ids": ["UMLS:C0000001"]},
+        )
+        triple = NormalizedTriple(
+            subject=subject,
+            predicate="biolink:gene_associated_with_condition",
+            object=obj,
+        )
+
+        facts = pipeline._build_curated_kg_facts(triple)
+
+        assert facts["monarch_checked"] is True
+        assert facts["monarch_support"] is True
+        assert facts["monarch_edge_count"] == 2
+        assert facts["curated_kg_match"] is True
 
 
 class TestClaimNormalizerGLiNER:

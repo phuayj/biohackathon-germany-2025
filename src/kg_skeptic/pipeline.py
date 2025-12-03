@@ -19,9 +19,9 @@ from collections.abc import Mapping
 from kg_skeptic.mcp.ids import IDNormalizerTool
 from kg_skeptic.mcp.pathways import PathwayTool
 from kg_skeptic.mcp.disgenet import DisGeNETTool
+from kg_skeptic.mcp.kg import InMemoryBackend, KGBackend, KGEdge, KGTool
 from .models import Claim, EntityMention, Report
 from .mcp.mini_kg import load_mini_kg_backend
-from .mcp.kg import InMemoryBackend, KGBackend, KGEdge
 from .provenance import CitationProvenance, ProvenanceFetcher
 from .rules import RuleEngine, RuleEvaluation
 from .ner import GLiNER2Extractor, ExtractedEntity
@@ -1274,8 +1274,11 @@ class SkepticPipeline:
             RuleEngine.from_yaml(path=rules_path) if rules_path else RuleEngine.from_yaml()
         )
         self._disgenet_tool: DisGeNETTool | None = None
+        self._monarch_kg_tool: KGTool | None = None
         use_disgenet_raw = self.config.get("use_disgenet", False)
         self._use_disgenet = bool(use_disgenet_raw)
+        use_monarch_raw = self.config.get("use_monarch_kg", False)
+        self._use_monarch_kg = bool(use_monarch_raw)
 
     def _verdict_for_score(self, score: float) -> str:
         if score >= self.PASS_THRESHOLD:
@@ -1302,7 +1305,13 @@ class SkepticPipeline:
         curated = curated_raw if isinstance(curated_raw, Mapping) else {}
 
         has_multi_source = bool(evidence.get("has_multiple_sources"))
-        has_curated_support = bool(curated.get("disgenet_support"))
+        curated_match = curated.get("curated_kg_match")
+        if isinstance(curated_match, bool):
+            has_curated_support = curated_match
+        else:
+            has_curated_support = bool(
+                curated.get("disgenet_support") or curated.get("monarch_support")
+            )
 
         return has_multi_source or has_curated_support
 
@@ -1326,10 +1335,33 @@ class SkepticPipeline:
             self._disgenet_tool = None
         return self._disgenet_tool
 
-    def _build_curated_kg_facts(self, triple: NormalizedTriple) -> dict[str, object]:
-        """Best-effort curated KG facts (currently DisGeNET gene–disease support).
+    def _get_monarch_kg_tool(self) -> KGTool | None:
+        """Lazily initialize Monarch-backed KG tool if enabled in config.
 
-        This compares the normalized gene/disease pair against DisGeNET when:
+        Monarch integration is optional and controlled via the
+        ``use_monarch_kg`` config flag. Network errors are treated as
+        absence of curated Monarch evidence.
+        """
+        if not self._use_monarch_kg:
+            return None
+
+        if self._monarch_kg_tool is not None:
+            return self._monarch_kg_tool
+
+        try:
+            self._monarch_kg_tool = KGTool()
+        except Exception:
+            self._monarch_kg_tool = None
+        return self._monarch_kg_tool
+
+    def _build_curated_kg_facts(self, triple: NormalizedTriple) -> dict[str, object]:
+        """Best-effort curated KG facts for gene–disease support.
+
+        This currently combines:
+        - DisGeNET gene–disease associations (when enabled via ``use_disgenet``)
+        - Monarch Initiative KG associations (when enabled via ``use_monarch_kg``)
+
+        Both sources are consulted for normalized gene–disease pairs when:
         - The subject is a gene and the object is a disease.
         - The gene has an ``ncbi_gene_id`` in its metadata.
         - The disease has one or more UMLS CUIs in ``umls_ids`` metadata.
@@ -1337,6 +1369,10 @@ class SkepticPipeline:
         facts: dict[str, object] = {
             "disgenet_checked": False,
             "disgenet_support": False,
+            "monarch_checked": False,
+            "monarch_support": False,
+            "monarch_edge_count": 0,
+            "curated_kg_match": False,
         }
 
         if triple.subject.category != "gene" or triple.object.category != "disease":
@@ -1356,10 +1392,54 @@ class SkepticPipeline:
             umls_ids = [str(v) for v in umls_ids_raw]
 
         if not ncbi_gene_id or not umls_ids:
+            # Even when DisGeNET cannot be queried due to missing NCBI/UMLS
+            # metadata, we may still be able to query Monarch using the
+            # normalized CURIEs on the triple itself.
+            monarch_tool = self._get_monarch_kg_tool()
+            if monarch_tool is not None:
+                try:
+                    monarch_result = monarch_tool.query_edge(
+                        triple.subject.id,
+                        triple.object.id,
+                        predicate="biolink:gene_associated_with_condition",
+                    )
+                except Exception:
+                    monarch_result = None
+
+                if monarch_result is not None:
+                    facts["monarch_checked"] = True
+                    facts["monarch_support"] = bool(monarch_result.exists)
+                    facts["monarch_edge_count"] = len(monarch_result.edges)
+
+            # Aggregate a curated_kg_match flag for downstream rules.
+            facts["curated_kg_match"] = bool(
+                facts.get("disgenet_support") or facts.get("monarch_support")
+            )
             return facts
 
         tool = self._get_disgenet_tool()
         if tool is None:
+            # DisGeNET disabled or unavailable; Monarch may still provide
+            # curated KG evidence when configured.
+            monarch_tool = self._get_monarch_kg_tool()
+            if monarch_tool is not None:
+                try:
+                    monarch_result = monarch_tool.query_edge(
+                        triple.subject.id,
+                        triple.object.id,
+                        predicate="biolink:gene_associated_with_condition",
+                    )
+                except Exception:
+                    monarch_result = None
+
+                if monarch_result is not None:
+                    facts["monarch_checked"] = True
+                    facts["monarch_support"] = bool(monarch_result.exists)
+                    facts["monarch_edge_count"] = len(monarch_result.edges)
+
+            facts["curated_kg_match"] = bool(
+                facts.get("disgenet_support") or facts.get("monarch_support")
+            )
             return facts
 
         facts["disgenet_checked"] = True
@@ -1383,6 +1463,28 @@ class SkepticPipeline:
                     break
             except Exception:
                 continue
+
+        # Monarch KG-backed curated support (optional, complements DisGeNET).
+        monarch_tool = self._get_monarch_kg_tool()
+        if monarch_tool is not None:
+            try:
+                monarch_result = monarch_tool.query_edge(
+                    triple.subject.id,
+                    triple.object.id,
+                    predicate="biolink:gene_associated_with_condition",
+                )
+            except Exception:
+                monarch_result = None
+
+            if monarch_result is not None:
+                facts["monarch_checked"] = True
+                facts["monarch_support"] = bool(monarch_result.exists)
+                facts["monarch_edge_count"] = len(monarch_result.edges)
+
+        # Aggregate a curated_kg_match flag for downstream rules and gating.
+        facts["curated_kg_match"] = bool(
+            facts.get("disgenet_support") or facts.get("monarch_support")
+        )
 
         return facts
 
