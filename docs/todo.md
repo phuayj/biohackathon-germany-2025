@@ -29,6 +29,7 @@
 
 ### MCP Adapter Extensions
 - [x] Extend MCP adapters: GO/Reactome pathways, DisGeNET, BioCypher/Neo4j local KG adapter.
+- [ ] **Literature Triples:** Build MCP adapters for SemMedDB (SQL/API) and INDRA (Python API).
 
 ### Claim Pipeline
 - [x] Implement claim ingest/normalization pipeline that turns agent transcripts into atomic claims with entity IDs and provenance.
@@ -70,6 +71,8 @@
 - [x] **Gate PASS on evidence signals:** Require at least one positive evidence signal (multi-source support or curated KG match such as DisGeNET) so weaker claims can't PASS on structure alone.
 - [x] **Retraction/concern check enforcement:** Wire retraction rule so retracted PMID forces **FAIL** and "expression of concern" triggers **WARN**. Ensure integration with CrossRef retraction API.
 - [x] **Variant-level qualifier (stretch):** When text mentions "mutations," store variant/allelic qualifier or boolean `has_variant_context=true` under `GeneToDiseaseAssociation` subclass. See [Biolink GeneToDiseaseAssociation](https://biolink.github.io/biolink-model/GeneToDiseaseAssociation/).
+- [ ] **Structured literature checks:** Query SemMedDB/INDRA for subject-predicate-object matches and feed into rule engine.
+- [ ] **Text-level verification (NLI):** Implement pipeline step to fetch abstracts, split sentences, and run NLI (SciFact-style) for SUPPORT/REFUTE/NEI labels.
 
 ---
 

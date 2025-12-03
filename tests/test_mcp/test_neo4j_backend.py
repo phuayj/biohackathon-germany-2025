@@ -31,12 +31,13 @@ class TestNeo4jBackend:
                 {
                     "subject": "HGNC:1100",
                     "object": "MONDO:0007254",
-                    "predicate": "biolink:gene_associated_with_condition",
+                    "rel_type": "RELATION",
+                    "predicate_prop": "biolink:gene_associated_with_condition",
                     "subject_label": "BRCA1",
                     "object_label": "breast cancer",
                     "rel": {
                         "predicate": "biolink:gene_associated_with_condition",
-                        "evidence": ["PMID:12345678"],
+                        "publications": ["PMID:12345678"],
                     },
                 }
             ]
@@ -49,7 +50,9 @@ class TestNeo4jBackend:
         assert "MATCH (s)-[r]->(o)" in session.last_query
         assert "s.id = $subject" in session.last_query
         assert "o.id = $object" in session.last_query
-        assert "type(r) AS predicate" in session.last_query
+        # Check for both rel_type and predicate_prop in query
+        assert "type(r) AS rel_type" in session.last_query
+        assert "r.predicate AS predicate_prop" in session.last_query
         assert session.last_params == {
             "subject": "HGNC:1100",
             "object": "MONDO:0007254",
@@ -63,7 +66,32 @@ class TestNeo4jBackend:
         assert edge.predicate == "biolink:gene_associated_with_condition"
         assert edge.subject_label == "BRCA1"
         assert edge.object_label == "breast cancer"
-        assert edge.properties.get("evidence") == ["PMID:12345678"]
+        # Publications are now extracted as sources
+        assert "PMID:12345678" in edge.sources
+
+    def test_query_edge_legacy_schema(self) -> None:
+        """Query works with legacy schema (predicate as rel type)."""
+        session = DummySession(
+            records=[
+                {
+                    "subject": "HGNC:1100",
+                    "object": "MONDO:0007254",
+                    "rel_type": "biolink:gene_associated_with_condition",
+                    "predicate_prop": None,  # No predicate property
+                    "subject_label": "BRCA1",
+                    "object_label": "breast cancer",
+                    "rel": {},
+                }
+            ]
+        )
+        backend = Neo4jBackend(session)
+
+        result = backend.query_edge("HGNC:1100", "MONDO:0007254")
+
+        assert result.exists is True
+        edge = result.edges[0]
+        # Falls back to rel_type when predicate_prop is None
+        assert edge.predicate == "biolink:gene_associated_with_condition"
 
     def test_ego_network(self) -> None:
         """Ego network returns nodes and edges."""
@@ -74,12 +102,17 @@ class TestNeo4jBackend:
                     "node_id": "MONDO:0007254",
                     "node_label": "breast cancer",
                     "node_category": "biolink:Disease",
+                    "node_props": {"name": "breast cancer"},
                     "subject_id": "HGNC:1100",
                     "object_id": "MONDO:0007254",
-                    "predicate": "biolink:gene_associated_with_condition",
+                    "rel_type": "RELATION",
+                    "predicate_prop": "biolink:gene_associated_with_condition",
                     "subject_label": "BRCA1",
                     "object_label": "breast cancer",
-                    "rel_props": {"predicate": "biolink:gene_associated_with_condition"},
+                    "rel_props": {
+                        "predicate": "biolink:gene_associated_with_condition",
+                        "publications": ["PMID:12345678"],
+                    },
                 }
             ]
         )
@@ -90,7 +123,9 @@ class TestNeo4jBackend:
         assert session.last_query is not None
         assert "MATCH (n)-[r*1..1]-(m)" in session.last_query
         assert "WHERE n.id = $center" in session.last_query
-        assert "type(rel) AS predicate" in session.last_query
+        # Check for both rel_type and predicate_prop in query
+        assert "type(rel) AS rel_type" in session.last_query
+        assert "rel.predicate AS predicate_prop" in session.last_query
         assert session.last_params == {
             "center": "HGNC:1100",
         }
@@ -103,4 +138,35 @@ class TestNeo4jBackend:
         edge = result.edges[0]
         assert edge.subject == "HGNC:1100"
         assert edge.object == "MONDO:0007254"
+        assert edge.predicate == "biolink:gene_associated_with_condition"
+        # Check sources extracted from publications
+        assert "PMID:12345678" in edge.sources
+
+    def test_ego_network_legacy_schema(self) -> None:
+        """Ego network works with legacy schema (predicate as rel type)."""
+        session = DummySession(
+            records=[
+                {
+                    "center_id": "HGNC:1100",
+                    "node_id": "MONDO:0007254",
+                    "node_label": "breast cancer",
+                    "node_category": "biolink:Disease",
+                    "node_props": {},
+                    "subject_id": "HGNC:1100",
+                    "object_id": "MONDO:0007254",
+                    "rel_type": "biolink:gene_associated_with_condition",
+                    "predicate_prop": None,  # No predicate property
+                    "subject_label": "BRCA1",
+                    "object_label": "breast cancer",
+                    "rel_props": {},
+                }
+            ]
+        )
+        backend = Neo4jBackend(session)
+
+        result = backend.ego("HGNC:1100", k=1, direction=EdgeDirection.BOTH)
+
+        assert len(result.edges) == 1
+        edge = result.edges[0]
+        # Falls back to rel_type when predicate_prop is None
         assert edge.predicate == "biolink:gene_associated_with_condition"

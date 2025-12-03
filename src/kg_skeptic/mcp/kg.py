@@ -562,18 +562,27 @@ class Neo4jBackend(KGBackend):
     ) -> EdgeQueryResult:
         """Query for edges between subject and object in Neo4j.
 
-        Nodes are matched by their ``id`` property (CURIE) and predicates
-        are derived from the relationship type.
+        Nodes are matched by their ``id`` property (CURIE). Predicates
+        are derived from either:
+        - The relationship type (legacy schema)
+        - The ``predicate`` property on RELATION type edges (Monarch KG schema)
         """
-        where_predicate = " AND type(r) = $predicate" if predicate else ""
+        # Build predicate filter - check both rel type and predicate property
+        if predicate:
+            where_predicate = " AND (type(r) = $predicate OR r.predicate = $predicate)"
+        else:
+            where_predicate = ""
 
         query = (
             "MATCH (s)-[r]->(o) "
             "WHERE s.id = $subject AND o.id = $object"
             f"{where_predicate} "
             "RETURN s.id AS subject, "
+            "s.name AS subject_label, "
             "o.id AS object, "
-            "type(r) AS predicate, "
+            "o.name AS object_label, "
+            "type(r) AS rel_type, "
+            "r.predicate AS predicate_prop, "
             "r AS rel"
         )
 
@@ -591,12 +600,22 @@ class Neo4jBackend(KGBackend):
         for rec in records:
             rel = rec.get("rel", {})
             props: dict[str, _object] = {}
+            sources: list[str] = []
             if isinstance(rel, dict):
                 props = {k: v for k, v in rel.items() if k not in {"predicate"}}
+                # Extract publications as sources
+                pubs = rel.get("publications")
+                if isinstance(pubs, list):
+                    sources = [str(p) for p in pubs if p]
+
+            # Use predicate property if available, else fall back to rel type
+            rel_type = rec.get("rel_type", "")
+            pred_prop = rec.get("predicate_prop")
+            actual_predicate = pred_prop if pred_prop else rel_type
 
             edge = KGEdge(
                 subject=str(rec.get("subject", subject)),
-                predicate=str(rec.get("predicate", "")),
+                predicate=str(actual_predicate),
                 object=str(rec.get("object", object)),
                 subject_label=(
                     str(rec["subject_label"]) if isinstance(rec.get("subject_label"), str) else None
@@ -605,7 +624,7 @@ class Neo4jBackend(KGBackend):
                     str(rec["object_label"]) if isinstance(rec.get("object_label"), str) else None
                 ),
                 properties=props,
-                sources=[],
+                sources=sources,
                 provenance=provenance,
             )
             edges.append(edge)
@@ -659,10 +678,15 @@ class Neo4jBackend(KGBackend):
             "RETURN DISTINCT "
             "n.id AS center_id, "
             "m.id AS node_id, "
+            "m.name AS node_label, "
+            "m.category AS node_category, "
             "properties(m) AS node_props, "
             "startNode(rel).id AS subject_id, "
+            "startNode(rel).name AS subject_label, "
             "endNode(rel).id AS object_id, "
-            "type(rel) AS predicate, "
+            "endNode(rel).name AS object_label, "
+            "type(rel) AS rel_type, "
+            "rel.predicate AS predicate_prop, "
             "rel AS rel_props"
         )
 
@@ -701,15 +725,25 @@ class Neo4jBackend(KGBackend):
 
             rel_props = rec.get("rel_props", {})
             props: dict[str, _object] = {}
+            sources: list[str] = []
             if isinstance(rel_props, dict):
                 props = {k: v for k, v in rel_props.items() if k not in {"predicate"}}
+                # Extract publications as sources
+                pubs = rel_props.get("publications")
+                if isinstance(pubs, list):
+                    sources = [str(p) for p in pubs if p]
 
             subj_id = str(rec.get("subject_id"))
             obj_id = str(rec.get("object_id"))
 
+            # Use predicate property if available, else fall back to rel type
+            rel_type = rec.get("rel_type", "")
+            pred_prop = rec.get("predicate_prop")
+            actual_predicate = pred_prop if pred_prop else rel_type
+
             edge = KGEdge(
                 subject=subj_id,
-                predicate=str(rec.get("predicate", "")),
+                predicate=str(actual_predicate),
                 object=obj_id,
                 subject_label=(
                     str(rec["subject_label"]) if isinstance(rec.get("subject_label"), str) else None
@@ -718,7 +752,7 @@ class Neo4jBackend(KGBackend):
                     str(rec["object_label"]) if isinstance(rec.get("object_label"), str) else None
                 ),
                 properties=props,
-                sources=[],
+                sources=sources,
                 provenance=provenance,
             )
             edges.append(edge)
