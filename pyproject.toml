@@ -37,6 +37,10 @@ strict = true
 mypy_path = ["src"]
 exclude = ["^scripts/"]
 
+[[tool.mypy.overrides]]
+module = "pyvis.*"
+ignore_missing_imports = true
+
 [tool.black]
 line-length = 100
 target-version = ['py313']

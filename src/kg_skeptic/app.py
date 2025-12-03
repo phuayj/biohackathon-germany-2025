@@ -709,10 +709,10 @@ def render_subgraph_visualization(
     # Edge Inspector
     if st.session_state.selected_edge_key:
         subj, pred, obj = st.session_state.selected_edge_key
-        edge = find_edge_by_key(subgraph, subj, pred, obj)
-        if edge:
+        selected_edge = find_edge_by_key(subgraph, subj, pred, obj)
+        if selected_edge:
             render_edge_inspector(
-                edge=edge,
+                edge=selected_edge,
                 subgraph=subgraph,
                 evaluation=evaluation,
                 suspicion_scores=suspicion_scores,

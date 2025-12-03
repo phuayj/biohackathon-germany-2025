@@ -70,6 +70,21 @@ _GENES: Sequence[_Entity] = [
     _Entity("HGNC:7881", "NOTCH1"),
     _Entity("HGNC:12362", "TSC1"),
     _Entity("HGNC:12687", "VHL"),
+    # Genes from demo claims (e2e_claim_fixtures.jsonl)
+    _Entity("HGNC:12680", "VEGFA"),
+    _Entity("HGNC:11892", "TNF"),
+    _Entity("HGNC:1884", "CFTR"),
+    _Entity("HGNC:13557", "ACE2"),
+    _Entity("HGNC:3603", "FBN1"),
+    _Entity("HGNC:10012", "RHO"),
+    _Entity("HGNC:4284", "GJB2"),
+    _Entity("HGNC:14064", "HDAC6"),
+    _Entity("HGNC:4910", "HIF1A"),
+    _Entity("HGNC:11362", "STAT1"),
+    _Entity("HGNC:620", "APP"),
+    _Entity("HGNC:6018", "IL6"),
+    _Entity("HGNC:6081", "INS"),
+    _Entity("HGNC:613", "APOE"),
 ]
 
 _DISEASES: Sequence[_Entity] = [
@@ -96,13 +111,19 @@ _DISEASES: Sequence[_Entity] = [
     _Entity("MONDO:0002367", "hepatocellular carcinoma"),
     _Entity("MONDO:0005115", "acute lymphoblastic leukemia"),
     _Entity("MONDO:0005149", "gastric carcinoma"),
-    _Entity("MONDO:0009061", "esophageal carcinoma"),
     _Entity("MONDO:0005590", "sarcoma"),
     _Entity("MONDO:0007685", "renal cell carcinoma"),
     _Entity("MONDO:0007251", "cervical cancer"),
     _Entity("MONDO:0019395", "endometrial carcinoma"),
     _Entity("MONDO:0005143", "glioma"),
     _Entity("MONDO:0003670", "multiple sclerosis"),
+    # Diseases from demo claims (e2e_claim_fixtures.jsonl)
+    _Entity("MONDO:0009061", "cystic fibrosis"),
+    _Entity("MONDO:0004975", "Alzheimer's disease"),
+    _Entity("MONDO:0008383", "rheumatoid arthritis"),
+    _Entity("MONDO:0009536", "Marfan syndrome"),
+    _Entity("MONDO:0009076", "autosomal recessive nonsyndromic hearing loss 1A"),
+    _Entity("MONDO:0005439", "familial hypercholesterolemia"),
 ]
 
 _PHENOTYPES: Sequence[_Entity] = [
@@ -116,11 +137,18 @@ _PHENOTYPES: Sequence[_Entity] = [
     _Entity("HP:0001644", "Cardiomyopathy"),
     _Entity("HP:0000707", "Autism"),
     _Entity("HP:0000716", "Anxiety"),
-    _Entity("HP:0001658", "Hypertension"),
+    _Entity("HP:0001658", "Myocardial infarction"),
     _Entity("HP:0001324", "Tremor"),
     _Entity("HP:0002376", "Cognitive impairment"),
     _Entity("HP:0002013", "Diarrhea"),
     _Entity("HP:0002099", "Dyspnea"),
+    # Phenotypes from demo claims (e2e_claim_fixtures.jsonl)
+    _Entity("HP:0000822", "Hypertension"),
+    _Entity("HP:0002615", "Hypotension"),
+    _Entity("HP:0003077", "Hyperlipidemia"),
+    _Entity("HP:0003146", "Hypocholesterolemia"),
+    _Entity("HP:0003074", "Hyperglycemia"),
+    _Entity("HP:0001943", "Hypoglycemia"),
 ]
 
 _PATHWAYS: Sequence[_Entity] = [
@@ -134,6 +162,24 @@ _PATHWAYS: Sequence[_Entity] = [
     _Entity("GO:0006468", "Protein phosphorylation"),
     _Entity("GO:0035556", "Intracellular signal transduction"),
     _Entity("GO:0005975", "Carbohydrate metabolic process"),
+    # Pathways/processes from demo claims (e2e_claim_fixtures.jsonl)
+    _Entity("GO:0001525", "angiogenesis"),
+    _Entity("GO:0000165", "MAPK cascade"),
+    _Entity("GO:0014065", "phosphatidylinositol 3-kinase signaling"),
+    _Entity("GO:0046718", "viral entry into host cell"),
+    _Entity("GO:0043123", "positive regulation of canonical NF-κB signal transduction"),
+    _Entity("GO:0019221", "cytokine-mediated signaling pathway"),
+    _Entity("GO:0030073", "insulin secretion"),
+    _Entity("GO:0034097", "response to cytokine"),
+    _Entity("GO:0038127", "ERBB signaling pathway"),
+    _Entity("GO:0000724", "double-strand break repair via homologous recombination"),
+    _Entity("GO:0008283", "cell population proliferation"),
+    _Entity("GO:0060333", "interferon-gamma-mediated signaling pathway"),
+    _Entity("GO:0071456", "cellular response to hypoxia"),
+    _Entity("GO:0005254", "chloride channel activity"),
+    # Reactome pathway from demo claims
+    _Entity("R-HSA-2514856", "The phototransduction cascade"),
+    _Entity("R-HSA-5678863", "CFTR chloride channel regulation"),
 ]
 
 _CITATIONS: Sequence[_Citation] = [
