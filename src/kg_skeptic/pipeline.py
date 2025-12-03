@@ -776,7 +776,7 @@ class ClaimNormalizer:
             if isinstance(qualifiers_raw, Mapping):
                 provided_qualifiers = {str(k): v for k, v in qualifiers_raw.items()}
 
-        # Also extract qualifiers and predicate from Claim metadata (for demo fixtures)
+        # Also extract qualifiers, predicate, and pre-populated entities from Claim (for demo fixtures)
         if isinstance(payload, Claim):
             claim_meta = claim.metadata if isinstance(claim.metadata, Mapping) else {}
             meta_qualifiers = claim_meta.get("qualifiers")
@@ -790,6 +790,24 @@ class ClaimNormalizer:
             ):
                 predicate = meta_predicate
                 predicate_provided = True
+
+            # Use pre-populated entities with role metadata if available
+            if claim.entities and not subject_raw and not object_raw:
+                for ent in claim.entities:
+                    ent_meta = ent.metadata if isinstance(ent.metadata, dict) else {}
+                    role = ent_meta.get("role")
+                    if role == "subject" and not subject_raw:
+                        subject_raw = {
+                            "curie": ent.norm_id,
+                            "label": ent.norm_label or ent.mention,
+                            "mention": ent.mention,
+                        }
+                    elif role == "object" and not object_raw:
+                        object_raw = {
+                            "curie": ent.norm_id,
+                            "label": ent.norm_label or ent.mention,
+                            "mention": ent.mention,
+                        }
 
         # Pull citations from text/support spans
         citations.extend(self._extract_citations(claim.text))
@@ -1266,8 +1284,9 @@ def build_rule_facts(
 
     if is_pure_regulatory:
         # For pure regulatory predicates with gene/pathway object,
-        # subject must also be gene or pathway (not disease)
-        domain_valid = subject_category in {"gene", "pathway"}
+        # subject must be a gene (the agent doing the regulation).
+        # Pathways/processes cannot "activate" or "regulate" - only genes can.
+        domain_valid = subject_category in {"gene"}
         range_valid = object_category in {"gene", "pathway"}
     else:
         # For association predicates or regulatory predicates with disease/phenotype object
@@ -1736,6 +1755,34 @@ class SkepticPipeline:
 
         scores = probs.detach().cpu().tolist()
 
+        # Compute error type predictions if model has the head
+        error_type_predictions: dict[tuple[str, str, str], tuple[str, float]] = {}
+        if model.has_error_type_head():
+            try:
+                from kg_skeptic.suspicion_gnn import INDEX_TO_ERROR_TYPE
+
+                with torch.no_grad():
+                    error_type_logits = model.forward_error_types(
+                        x, edge_index, edge_type, edge_attr=edge_attr_dev
+                    )
+                    if error_type_logits is not None:
+                        error_type_probs = torch.softmax(error_type_logits, dim=1)
+                        pred_classes = torch.argmax(error_type_probs, dim=1)
+                        pred_confidences = error_type_probs.max(dim=1).values
+
+                        for i, (subj, pred_str, obj) in enumerate(tensors.edge_triples):
+                            pred_class = int(pred_classes[i].item())
+                            pred_conf = float(pred_confidences[i].item())
+                            error_type = INDEX_TO_ERROR_TYPE.get(pred_class)
+                            if error_type is not None:
+                                error_type_predictions[(subj, pred_str, obj)] = (
+                                    error_type.value,
+                                    pred_conf,
+                                )
+            except Exception:
+                # Error type prediction is optional; swallow exceptions
+                pass
+
         # Map scores back to edge triples and flag claim-edge hops.
         edge_by_triple: dict[tuple[str, str, str], KGEdge] = {}
         for kg_edge in subgraph.edges:
@@ -1774,12 +1821,21 @@ class SkepticPipeline:
         rows_sorted = sorted(rows, key=lambda r: r["score"], reverse=True)
         top_edges = rows_sorted[:10]
 
-        return {
+        result: dict[str, object] = {
             "subject_id": triple.subject.id,
             "object_id": triple.object.id,
             "model_path": (str(self._suspicion_model_path) if self._suspicion_model_path else None),
             "top_edges": top_edges,
         }
+
+        # Serialize error type predictions with string keys for JSON compatibility
+        if error_type_predictions:
+            result["error_type_predictions"] = {
+                f"{subj}|{pred}|{obj}": (et_str, conf)
+                for (subj, pred, obj), (et_str, conf) in error_type_predictions.items()
+            }
+
+        return result
 
     def _query_monarch_gene_disease(
         self,
@@ -2074,6 +2130,24 @@ class SkepticPipeline:
                     score=0.0,
                     because="because the extraction has low confidence with hedging language (hard gate override)",
                     description="Low confidence gate: forces FAIL",
+                )
+            )
+
+        # Type domain/range violations force FAIL - semantically invalid claims.
+        type_raw = facts.get("type")
+        type_info = type_raw if isinstance(type_raw, Mapping) else {}
+        domain_valid = type_info.get("domain_valid", True)
+        range_valid = type_info.get("range_valid", True)
+        if not domain_valid or not range_valid:
+            verdict = "FAIL"
+            domain_cat = type_info.get("domain_category", "unknown")
+            range_cat = type_info.get("range_category", "unknown")
+            evaluation.trace.add(
+                RuleTraceEntry(
+                    rule_id="gate:type_violation",
+                    score=0.0,
+                    because=f"because the subject/object categories ({domain_cat} → {range_cat}) are incompatible for this predicate (hard gate override)",
+                    description="Type violation gate: forces FAIL",
                 )
             )
 

@@ -28,6 +28,30 @@ EDGE_STATUS_COLORS: dict[str, str] = {
     "unknown": "#757575",  # Gray
 }
 
+# Error type colors for class-incremental error learning (Day 3)
+ERROR_TYPE_COLORS: dict[str, str] = {
+    "TypeViolation": "#9C27B0",  # Purple - domain/range mismatch
+    "RetractedSupport": "#B71C1C",  # Dark red - retracted citations
+    "WeakEvidence": "#FF9800",  # Orange - insufficient evidence
+    "OntologyMismatch": "#3F51B5",  # Indigo - ontology hierarchy conflicts
+}
+
+# Error type display labels (human-readable)
+ERROR_TYPE_LABELS: dict[str, str] = {
+    "TypeViolation": "Type Violation",
+    "RetractedSupport": "Retracted Support",
+    "WeakEvidence": "Weak Evidence",
+    "OntologyMismatch": "Ontology Mismatch",
+}
+
+# Error type descriptions for tooltips/help text
+ERROR_TYPE_DESCRIPTIONS: dict[str, str] = {
+    "TypeViolation": "Domain/range mismatch or predicate incompatibility",
+    "RetractedSupport": "Evidence includes retracted citations",
+    "WeakEvidence": "Insufficient or low-confidence supporting evidence",
+    "OntologyMismatch": "Ontology hierarchy conflicts (sibling vs parent/child)",
+}
+
 
 def suspicion_to_color(score: float) -> str:
     """Map suspicion score [0,1] to color gradient (green -> yellow -> red).

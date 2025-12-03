@@ -52,6 +52,15 @@ class PatchSuggestion:
 
 
 @dataclass
+class ErrorTypePrediction:
+    """Error type prediction for an edge."""
+
+    error_type: str  # e.g., "TypeViolation", "WeakEvidence"
+    confidence: float  # Probability/confidence score
+    description: str  # Human-readable description
+
+
+@dataclass
 class EdgeInspectorData:
     """Data bundle for edge inspector panel."""
 
@@ -61,6 +70,7 @@ class EdgeInspectorData:
     rule_footprint: list[RuleResult] = field(default_factory=list)
     patch_suggestions: list[PatchSuggestion] = field(default_factory=list)
     suspicion_score: float | None = None
+    error_type_prediction: ErrorTypePrediction | None = None
 
 
 def _classify_source_type(identifier: str) -> str:
@@ -235,6 +245,7 @@ def extract_edge_inspector_data(
     evaluation: RuleEvaluation,
     suspicion_scores: dict[tuple[str, str, str], float] | None = None,
     provenance: list[CitationProvenance] | None = None,
+    error_type_predictions: dict[tuple[str, str, str], tuple[str, float]] | None = None,
 ) -> EdgeInspectorData:
     """Extract all data needed for the edge inspector panel.
 
@@ -244,12 +255,15 @@ def extract_edge_inspector_data(
         evaluation: Rule evaluation results
         suspicion_scores: Optional GNN suspicion scores
         provenance: Optional citation provenance data
+        error_type_predictions: Optional mapping from edge triples to
+            (error_type, confidence) tuples from the GNN or prototype classifier
 
     Returns:
         EdgeInspectorData ready for UI rendering
     """
     suspicion_scores = suspicion_scores or {}
     provenance = provenance or []
+    error_type_predictions = error_type_predictions or {}
 
     # Build source references
     sources = build_source_references(edge, provenance)
@@ -306,6 +320,21 @@ def extract_edge_inspector_data(
     edge_key = (edge.subject, edge.predicate, edge.object)
     suspicion_score = suspicion_scores.get(edge_key)
 
+    # Get error type prediction
+    error_type_prediction: ErrorTypePrediction | None = None
+    error_pred = error_type_predictions.get(edge_key)
+    if error_pred is not None:
+        error_type_str, confidence = error_pred
+        # Import descriptions here to avoid circular imports
+        from kg_skeptic.visualization.color_schemes import ERROR_TYPE_DESCRIPTIONS
+
+        description = ERROR_TYPE_DESCRIPTIONS.get(error_type_str, "Unknown error type")
+        error_type_prediction = ErrorTypePrediction(
+            error_type=error_type_str,
+            confidence=confidence,
+            description=description,
+        )
+
     return EdgeInspectorData(
         edge=edge,
         sources=sources,
@@ -313,4 +342,5 @@ def extract_edge_inspector_data(
         rule_footprint=rule_footprint,
         patch_suggestions=patch_suggestions,
         suspicion_score=suspicion_score,
+        error_type_prediction=error_type_prediction,
     )

@@ -45,12 +45,15 @@ try:
 except ImportError:
     HAS_SKLEARN = False
 
+from kg_skeptic.error_types import ErrorType
 from kg_skeptic.mcp.mini_kg import iter_mini_kg_edges, load_mini_kg_backend
 from kg_skeptic.mcp.kg import KGEdge, KGNode
 from kg_skeptic.pipeline import _category_from_id
 from kg_skeptic import subgraph as subgraph_module
 from kg_skeptic.subgraph import Subgraph, build_pair_subgraph
 from kg_skeptic.suspicion_gnn import (
+    ERROR_TYPE_TO_INDEX,
+    NUM_ERROR_TYPES,
     RGCNSuspicionModel,
     SubgraphTensors,
     subgraph_to_tensors,
@@ -411,7 +414,10 @@ class GraphSample:
     """Single training sample: a subgraph and per-edge labels."""
 
     tensors: SubgraphTensors
-    edge_labels: Tensor  # shape: [num_edges]
+    edge_labels: Tensor  # shape: [num_edges], suspicion labels (0=clean, 1=suspicious)
+    error_type_labels: Tensor | None = (
+        None  # shape: [num_edges], error type indices (-1=none/clean)
+    )
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -751,20 +757,77 @@ def _edge_is_suspicious(edge: KGEdge) -> bool:
     return False
 
 
-def _label_edges_in_subgraph(subgraph: Subgraph) -> Dict[Tuple[str, str, str], float]:
-    """Return per-edge labels keyed by (subject, predicate, object)."""
-    labels: Dict[Tuple[str, str, str], float] = {}
+def _infer_error_type_from_edge(edge: KGEdge) -> ErrorType | None:
+    """Infer error type from edge properties and perturbation type.
+
+    Returns None for clean edges or edges without a clear error type.
+    """
+    props = edge.properties
+    perturbation_type = str(props.get("perturbation_type", "")).lower()
+
+    # Retracted support -> RetractedSupport
+    if perturbation_type == "retracted_support" or _edge_has_retracted_support(edge):
+        return ErrorType.RETRACTED_SUPPORT
+
+    # Type violations -> TypeViolation
+    if perturbation_type == "predicate_swap":
+        return ErrorType.TYPE_VIOLATION
+    if not _edge_is_domain_range_compatible(edge):
+        return ErrorType.TYPE_VIOLATION
+
+    # Ontology-based perturbations -> OntologyMismatch
+    if perturbation_type in {"sibling_phenotype", "direction_flip"}:
+        return ErrorType.ONTOLOGY_MISMATCH
+
+    # Weak evidence -> WeakEvidence
+    if perturbation_type in {"evidence_ablation", "ppi_noise"}:
+        return ErrorType.WEAK_EVIDENCE
+    if _edge_is_singleton_and_weak(edge):
+        return ErrorType.WEAK_EVIDENCE
+
+    return None
+
+
+def _label_edges_in_subgraph(
+    subgraph: Subgraph,
+) -> Tuple[Dict[Tuple[str, str, str], float], Dict[Tuple[str, str, str], int]]:
+    """Return per-edge suspicion and error type labels.
+
+    Returns:
+        Tuple of (suspicion_labels, error_type_labels) where:
+        - suspicion_labels: edge triple -> 0.0 (clean) or 1.0 (suspicious)
+        - error_type_labels: edge triple -> error type index (-1 for clean edges)
+    """
+    suspicion_labels: Dict[Tuple[str, str, str], float] = {}
+    error_type_labels: Dict[Tuple[str, str, str], int] = {}
+
     for edge in subgraph.edges:
         triple = (edge.subject, edge.predicate, edge.object)
         if _edge_is_suspicious(edge):
-            labels[triple] = 1.0
+            suspicion_labels[triple] = 1.0
+            error_type = _infer_error_type_from_edge(edge)
+            if error_type is not None:
+                error_type_labels[triple] = ERROR_TYPE_TO_INDEX[error_type]
+            else:
+                # Default to WeakEvidence for suspicious edges without clear type
+                error_type_labels[triple] = ERROR_TYPE_TO_INDEX[ErrorType.WEAK_EVIDENCE]
         else:
             # Only treat edges as "clean" negatives when they satisfy the
             # stricter clean-edge criteria; otherwise, fall back to a
             # conservative suspicious label so the model learns from clearer
             # positives vs negatives.
-            labels[triple] = 0.0 if _edge_is_clean(edge) else 1.0
-    return labels
+            if _edge_is_clean(edge):
+                suspicion_labels[triple] = 0.0
+                error_type_labels[triple] = -1  # No error type for clean edges
+            else:
+                suspicion_labels[triple] = 1.0
+                error_type = _infer_error_type_from_edge(edge)
+                if error_type is not None:
+                    error_type_labels[triple] = ERROR_TYPE_TO_INDEX[error_type]
+                else:
+                    error_type_labels[triple] = ERROR_TYPE_TO_INDEX[ErrorType.WEAK_EVIDENCE]
+
+    return suspicion_labels, error_type_labels
 
 
 def _build_perturbed_subgraph(
@@ -1123,6 +1186,50 @@ def _synthesize_retracted_support_overrides(
     return overrides
 
 
+def _process_subgraph_to_sample(
+    subgraph: Subgraph,
+    all_predicates: set[str],
+    metadata: Dict[str, Any],
+) -> Tuple[GraphSample | None, int, int]:
+    """Convert a subgraph to a GraphSample with suspicion and error type labels.
+
+    Returns:
+        Tuple of (sample_or_None, positive_count, negative_count).
+    """
+    tensors = subgraph_to_tensors(subgraph)
+    if tensors.edge_index.numel() == 0:
+        return None, 0, 0
+
+    suspicion_labels, error_type_labels = _label_edges_in_subgraph(subgraph)
+
+    y_values: list[float] = []
+    et_values: list[int] = []
+    pos_count = 0
+    neg_count = 0
+
+    for s, p, o in tensors.edge_triples:
+        y = suspicion_labels.get((s, p, o), 0.0)
+        et = error_type_labels.get((s, p, o), -1)
+        y_values.append(y)
+        et_values.append(et)
+        all_predicates.add(p)
+        if y > 0.5:
+            pos_count += 1
+        else:
+            neg_count += 1
+
+    edge_labels = torch.tensor(y_values, dtype=torch.float32)
+    error_type_tensor = torch.tensor(et_values, dtype=torch.long)
+
+    sample = GraphSample(
+        tensors=tensors,
+        edge_labels=edge_labels,
+        error_type_labels=error_type_tensor,
+        metadata=metadata,
+    )
+    return sample, pos_count, neg_count
+
+
 def build_dataset(
     num_subgraphs: int,
     *,
@@ -1162,29 +1269,15 @@ def build_dataset(
             continue
 
         # Always include a clean sample.
-        clean_label_map = _label_edges_in_subgraph(base_subgraph)
-        clean_tensors = subgraph_to_tensors(base_subgraph)
-        if clean_tensors.edge_index.numel() == 0:
-            continue
-
-        clean_y_values: list[float] = []
-        for s, p, o in clean_tensors.edge_triples:
-            y = clean_label_map.get((s, p, o), 0.0)
-            clean_y_values.append(y)
-            all_predicates.add(p)
-            if y > 0.5:
-                total_pos += 1
-            else:
-                total_neg += 1
-
-        clean_edge_labels = torch.tensor(clean_y_values, dtype=torch.float32)
-        samples.append(
-            GraphSample(
-                tensors=clean_tensors,
-                edge_labels=clean_edge_labels,
-                metadata={"kind": "clean", "subject": subject, "object": obj},
-            )
+        sample, pos, neg = _process_subgraph_to_sample(
+            base_subgraph,
+            all_predicates,
+            {"kind": "clean", "subject": subject, "object": obj},
         )
+        if sample is not None:
+            samples.append(sample)
+            total_pos += pos
+            total_neg += neg
 
         # Direction-flipped perturbation.
         flipped_edges = _synthesize_direction_flip_edges(base_subgraph, rng)
@@ -1193,30 +1286,15 @@ def build_dataset(
                 base_subgraph,
                 extra_edges=flipped_edges,
             )
-            dir_label_map = _label_edges_in_subgraph(dir_subgraph)
-            dir_tensors = subgraph_to_tensors(dir_subgraph)
-            if dir_tensors.edge_index.numel() > 0:
-                dir_y_values: list[float] = []
-                for s, p, o in dir_tensors.edge_triples:
-                    y = dir_label_map.get((s, p, o), 0.0)
-                    dir_y_values.append(y)
-                    all_predicates.add(p)
-                    if y > 0.5:
-                        total_pos += 1
-                    else:
-                        total_neg += 1
-                dir_edge_labels = torch.tensor(dir_y_values, dtype=torch.float32)
-                samples.append(
-                    GraphSample(
-                        tensors=dir_tensors,
-                        edge_labels=dir_edge_labels,
-                        metadata={
-                            "kind": "perturbed_direction_flip",
-                            "subject": subject,
-                            "object": obj,
-                        },
-                    )
-                )
+            sample, pos, neg = _process_subgraph_to_sample(
+                dir_subgraph,
+                all_predicates,
+                {"kind": "perturbed_direction_flip", "subject": subject, "object": obj},
+            )
+            if sample is not None:
+                samples.append(sample)
+                total_pos += pos
+                total_neg += neg
 
         # Sibling-phenotype swap perturbation.
         sibling_edges = _synthesize_sibling_phenotype_swaps(
@@ -1232,30 +1310,15 @@ def build_dataset(
                 base_subgraph,
                 extra_edges=sibling_edges,
             )
-            sib_label_map = _label_edges_in_subgraph(sib_subgraph)
-            sib_tensors = subgraph_to_tensors(sib_subgraph)
-            if sib_tensors.edge_index.numel() > 0:
-                sib_y_values: list[float] = []
-                for s, p, o in sib_tensors.edge_triples:
-                    y = sib_label_map.get((s, p, o), 0.0)
-                    sib_y_values.append(y)
-                    all_predicates.add(p)
-                    if y > 0.5:
-                        total_pos += 1
-                    else:
-                        total_neg += 1
-                sib_edge_labels = torch.tensor(sib_y_values, dtype=torch.float32)
-                samples.append(
-                    GraphSample(
-                        tensors=sib_tensors,
-                        edge_labels=sib_edge_labels,
-                        metadata={
-                            "kind": "perturbed_sibling_phenotype",
-                            "subject": subject,
-                            "object": obj,
-                        },
-                    )
-                )
+            sample, pos, neg = _process_subgraph_to_sample(
+                sib_subgraph,
+                all_predicates,
+                {"kind": "perturbed_sibling_phenotype", "subject": subject, "object": obj},
+            )
+            if sample is not None:
+                samples.append(sample)
+                total_pos += pos
+                total_neg += neg
 
         # Synthetic retracted-support annotations on a subset of edges.
         retracted_overrides = _synthesize_retracted_support_overrides(base_subgraph, rng)
@@ -1264,33 +1327,15 @@ def build_dataset(
                 base_subgraph,
                 edge_overrides=retracted_overrides,
             )
-            retract_label_map = _label_edges_in_subgraph(retract_subgraph)
-            retract_tensors = subgraph_to_tensors(retract_subgraph)
-            if retract_tensors.edge_index.numel() > 0:
-                retract_y_values: list[float] = []
-                for s, p, o in retract_tensors.edge_triples:
-                    y = retract_label_map.get((s, p, o), 0.0)
-                    retract_y_values.append(y)
-                    all_predicates.add(p)
-                    if y > 0.5:
-                        total_pos += 1
-                    else:
-                        total_neg += 1
-                retract_edge_labels = torch.tensor(
-                    retract_y_values,
-                    dtype=torch.float32,
-                )
-                samples.append(
-                    GraphSample(
-                        tensors=retract_tensors,
-                        edge_labels=retract_edge_labels,
-                        metadata={
-                            "kind": "perturbed_retracted_support",
-                            "subject": subject,
-                            "object": obj,
-                        },
-                    )
-                )
+            sample, pos, neg = _process_subgraph_to_sample(
+                retract_subgraph,
+                all_predicates,
+                {"kind": "perturbed_retracted_support", "subject": subject, "object": obj},
+            )
+            if sample is not None:
+                samples.append(sample)
+                total_pos += pos
+                total_neg += neg
 
         # Predicate swap perturbation
         pred_swap_edges = _synthesize_predicate_swap(base_subgraph, rng)
@@ -1299,30 +1344,15 @@ def build_dataset(
                 base_subgraph,
                 extra_edges=pred_swap_edges,
             )
-            pswap_label_map = _label_edges_in_subgraph(pswap_subgraph)
-            pswap_tensors = subgraph_to_tensors(pswap_subgraph)
-            if pswap_tensors.edge_index.numel() > 0:
-                pswap_y_values: list[float] = []
-                for s, p, o in pswap_tensors.edge_triples:
-                    y = pswap_label_map.get((s, p, o), 0.0)
-                    pswap_y_values.append(y)
-                    all_predicates.add(p)
-                    if y > 0.5:
-                        total_pos += 1
-                    else:
-                        total_neg += 1
-                pswap_edge_labels = torch.tensor(pswap_y_values, dtype=torch.float32)
-                samples.append(
-                    GraphSample(
-                        tensors=pswap_tensors,
-                        edge_labels=pswap_edge_labels,
-                        metadata={
-                            "kind": "perturbed_predicate_swap",
-                            "subject": subject,
-                            "object": obj,
-                        },
-                    )
-                )
+            sample, pos, neg = _process_subgraph_to_sample(
+                pswap_subgraph,
+                all_predicates,
+                {"kind": "perturbed_predicate_swap", "subject": subject, "object": obj},
+            )
+            if sample is not None:
+                samples.append(sample)
+                total_pos += pos
+                total_neg += neg
 
         # PPI Noise perturbation
         ppi_noise_edges = _synthesize_ppi_noise(base_subgraph, rng)
@@ -1331,30 +1361,15 @@ def build_dataset(
                 base_subgraph,
                 extra_edges=ppi_noise_edges,
             )
-            noise_label_map = _label_edges_in_subgraph(noise_subgraph)
-            noise_tensors = subgraph_to_tensors(noise_subgraph)
-            if noise_tensors.edge_index.numel() > 0:
-                noise_y_values: list[float] = []
-                for s, p, o in noise_tensors.edge_triples:
-                    y = noise_label_map.get((s, p, o), 0.0)
-                    noise_y_values.append(y)
-                    all_predicates.add(p)
-                    if y > 0.5:
-                        total_pos += 1
-                    else:
-                        total_neg += 1
-                noise_edge_labels = torch.tensor(noise_y_values, dtype=torch.float32)
-                samples.append(
-                    GraphSample(
-                        tensors=noise_tensors,
-                        edge_labels=noise_edge_labels,
-                        metadata={
-                            "kind": "perturbed_ppi_noise",
-                            "subject": subject,
-                            "object": obj,
-                        },
-                    )
-                )
+            sample, pos, neg = _process_subgraph_to_sample(
+                noise_subgraph,
+                all_predicates,
+                {"kind": "perturbed_ppi_noise", "subject": subject, "object": obj},
+            )
+            if sample is not None:
+                samples.append(sample)
+                total_pos += pos
+                total_neg += neg
 
         # Evidence Ablation perturbation
         ablation_overrides = _synthesize_evidence_ablation(base_subgraph, rng)
@@ -1363,33 +1378,15 @@ def build_dataset(
                 base_subgraph,
                 edge_overrides=ablation_overrides,
             )
-            ablation_label_map = _label_edges_in_subgraph(ablation_subgraph)
-            ablation_tensors = subgraph_to_tensors(ablation_subgraph)
-            if ablation_tensors.edge_index.numel() > 0:
-                ablation_y_values: list[float] = []
-                for s, p, o in ablation_tensors.edge_triples:
-                    y = ablation_label_map.get((s, p, o), 0.0)
-                    ablation_y_values.append(y)
-                    all_predicates.add(p)
-                    if y > 0.5:
-                        total_pos += 1
-                    else:
-                        total_neg += 1
-                ablation_edge_labels = torch.tensor(
-                    ablation_y_values,
-                    dtype=torch.float32,
-                )
-                samples.append(
-                    GraphSample(
-                        tensors=ablation_tensors,
-                        edge_labels=ablation_edge_labels,
-                        metadata={
-                            "kind": "perturbed_evidence_ablation",
-                            "subject": subject,
-                            "object": obj,
-                        },
-                    )
-                )
+            sample, pos, neg = _process_subgraph_to_sample(
+                ablation_subgraph,
+                all_predicates,
+                {"kind": "perturbed_evidence_ablation", "subject": subject, "object": obj},
+            )
+            if sample is not None:
+                samples.append(sample)
+                total_pos += pos
+                total_neg += neg
 
     if not samples:
         raise RuntimeError("Failed to build any training samples.")
@@ -1510,6 +1507,8 @@ def train_suspicion_gnn(
     device: str = "cpu",
     early_stopping_patience: int = 0,
     dropout: float = 0.3,
+    train_error_types: bool = True,
+    error_type_loss_weight: float = 0.5,
 ) -> RGCNSuspicionModel:
     """Train the R-GCN suspicion model on the provided samples.
 
@@ -1524,6 +1523,9 @@ def train_suspicion_gnn(
         early_stopping_patience: Stop training if validation AUROC does not
             improve for this many epochs. Set to 0 to disable early stopping.
         dropout: Dropout probability for regularization (spec recommends 0.2-0.5).
+        train_error_types: Whether to train the error type classification head.
+        error_type_loss_weight: Weight for the error type classification loss
+            relative to the suspicion loss (default: 0.5).
 
     Returns:
         Trained RGCNSuspicionModel (best checkpoint if early stopping is used).
@@ -1544,12 +1546,19 @@ def train_suspicion_gnn(
         example.tensors.edge_attr.shape[1] if example.tensors.edge_attr is not None else 0
     )
 
+    # Check if error type labels are available in samples
+    has_error_type_labels = any(s.error_type_labels is not None for s in samples)
+    num_error_types_for_model = (
+        NUM_ERROR_TYPES if (train_error_types and has_error_type_labels) else 0
+    )
+
     model = RGCNSuspicionModel(
         in_channels=in_channels,
         num_relations=num_relations,
         hidden_channels=32,
         edge_in_channels=edge_in_channels,
         dropout=dropout,
+        num_error_types=num_error_types_for_model,
     )
 
     torch_device = torch.device(device)
@@ -1567,9 +1576,12 @@ def train_suspicion_gnn(
     print(
         f"Class balance: {total_pos} pos, {total_neg} neg. Using pos_weight={pos_weight.item():.2f}"
     )
+    if model.has_error_type_head():
+        print(f"Training with error type classification head ({NUM_ERROR_TYPES} classes).")
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    error_type_loss_fn = nn.CrossEntropyLoss(ignore_index=-1)  # Ignore clean edges
 
     @dataclass
     class EpochMetrics:
@@ -1583,6 +1595,10 @@ def train_suspicion_gnn(
         hits_5: float
         auroc: float
         auprc: float
+        error_type_accuracy: float = (
+            0.0  # Accuracy on error type classification (suspicious edges only)
+        )
+        error_type_loss: float = 0.0
 
     def _run_epoch(batch: Sequence[GraphSample], *, train: bool) -> EpochMetrics:
         if train:
@@ -1605,6 +1621,11 @@ def train_suspicion_gnn(
         all_probs: List[float] = []
         all_labels: List[float] = []
 
+        # Error type classification accumulators
+        error_type_loss_total = 0.0
+        error_type_correct = 0
+        error_type_total = 0
+
         with torch.set_grad_enabled(train):
             for sample in batch:
                 tensors = sample.tensors
@@ -1619,21 +1640,51 @@ def train_suspicion_gnn(
                 )
                 y = sample.edge_labels.to(torch_device)
 
+                # Error type labels (optional)
+                et_labels = None
+                if sample.error_type_labels is not None and model.has_error_type_head():
+                    et_labels = sample.error_type_labels.to(torch_device)
+
                 if train:
                     optimizer.zero_grad()
 
-                logits = model(x, edge_index, edge_type, edge_attr=edge_attr)
+                # Use forward_both for efficiency when we have error type head
+                if model.has_error_type_head() and et_labels is not None:
+                    logits, et_logits = model.forward_both(
+                        x, edge_index, edge_type, edge_attr=edge_attr
+                    )
+                else:
+                    logits = model(x, edge_index, edge_type, edge_attr=edge_attr)
+                    et_logits = None
+
                 if logits.shape != y.shape:
                     raise RuntimeError(
                         f"Shape mismatch between logits {tuple(logits.shape)} and labels {tuple(y.shape)}"
                     )
 
-                loss = loss_fn(logits, y)
+                # Suspicion loss
+                suspicion_loss = loss_fn(logits, y)
+
+                # Error type classification loss (only for edges with valid labels)
+                combined_loss = suspicion_loss
+                if et_logits is not None and et_labels is not None:
+                    # Only compute loss on suspicious edges (et_labels >= 0)
+                    valid_mask = et_labels >= 0
+                    if valid_mask.sum() > 0:
+                        et_loss = error_type_loss_fn(et_logits[valid_mask], et_labels[valid_mask])
+                        combined_loss = suspicion_loss + error_type_loss_weight * et_loss
+                        error_type_loss_total += float(et_loss.item()) * valid_mask.sum().item()
+
+                        # Error type accuracy
+                        et_preds = torch.argmax(et_logits[valid_mask], dim=-1)
+                        error_type_correct += int((et_preds == et_labels[valid_mask]).sum().item())
+                        error_type_total += int(valid_mask.sum().item())
+
                 if train:
-                    loss.backward()
+                    combined_loss.backward()
                     optimizer.step()
 
-                total_loss += float(loss.item()) * y.numel()
+                total_loss += float(suspicion_loss.item()) * y.numel()
                 total_edges += y.numel()
 
                 probs = torch.sigmoid(logits)
@@ -1692,6 +1743,10 @@ def train_suspicion_gnn(
                 # Can happen if only one class is present in this batch
                 pass
 
+        # Compute error type metrics
+        et_accuracy = error_type_correct / max(1, error_type_total)
+        et_loss = error_type_loss_total / max(1.0, error_type_total)
+
         return EpochMetrics(
             loss=avg_loss,
             accuracy=accuracy,
@@ -1701,6 +1756,8 @@ def train_suspicion_gnn(
             hits_5=h5,
             auroc=auroc,
             auprc=auprc,
+            error_type_accuracy=et_accuracy,
+            error_type_loss=et_loss,
         )
 
     print(
@@ -1735,13 +1792,22 @@ def train_suspicion_gnn(
             epochs_without_improvement += 1
             improvement_marker = ""
 
-        print(
-            f"[Epoch {epoch:02d}] "
-            f"train: loss={train_m.loss:.4f} acc={train_m.accuracy:.3f} "
-            f"AUROC={train_m.auroc:.3f} AUPRC={train_m.auprc:.3f} H@1={train_m.hits_1:.2f} | "
-            f"val: loss={val_m.loss:.4f} acc={val_m.accuracy:.3f} "
-            f"AUROC={val_m.auroc:.3f} AUPRC={val_m.auprc:.3f} H@1={val_m.hits_1:.2f}{improvement_marker}"
+        # Build log line with optional error type metrics
+        log_parts = [
+            f"[Epoch {epoch:02d}] ",
+            f"train: loss={train_m.loss:.4f} acc={train_m.accuracy:.3f} ",
+            f"AUROC={train_m.auroc:.3f} AUPRC={train_m.auprc:.3f} H@1={train_m.hits_1:.2f}",
+        ]
+        if model.has_error_type_head():
+            log_parts.append(f" ET_acc={train_m.error_type_accuracy:.3f}")
+        log_parts.append(
+            f" | val: loss={val_m.loss:.4f} acc={val_m.accuracy:.3f} "
+            f"AUROC={val_m.auroc:.3f} AUPRC={val_m.auprc:.3f} H@1={val_m.hits_1:.2f}"
         )
+        if model.has_error_type_head():
+            log_parts.append(f" ET_acc={val_m.error_type_accuracy:.3f}")
+        log_parts.append(improvement_marker)
+        print("".join(log_parts))
 
         # Early stopping check
         if early_stopping_patience > 0 and epochs_without_improvement >= early_stopping_patience:

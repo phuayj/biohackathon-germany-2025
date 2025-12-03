@@ -6,12 +6,16 @@ from kg_skeptic.visualization.color_schemes import (
     CATEGORY_COLORS,
     CATEGORY_SHAPES,
     EDGE_STATUS_COLORS,
+    ERROR_TYPE_COLORS,
+    ERROR_TYPE_DESCRIPTIONS,
+    ERROR_TYPE_LABELS,
     evidence_count_to_width,
     suspicion_to_color,
 )
 from kg_skeptic.visualization.edge_inspector import (
     DbProvenance,
     EdgeInspectorData,
+    ErrorTypePrediction,
     PatchSuggestion,
     RuleResult,
     SourceReference,
@@ -30,6 +34,9 @@ __all__ = [
     "CATEGORY_COLORS",
     "CATEGORY_SHAPES",
     "EDGE_STATUS_COLORS",
+    "ERROR_TYPE_COLORS",
+    "ERROR_TYPE_DESCRIPTIONS",
+    "ERROR_TYPE_LABELS",
     "evidence_count_to_width",
     "suspicion_to_color",
     # Graph builder
@@ -41,6 +48,7 @@ __all__ = [
     # Edge inspector
     "DbProvenance",
     "EdgeInspectorData",
+    "ErrorTypePrediction",
     "PatchSuggestion",
     "RuleResult",
     "SourceReference",

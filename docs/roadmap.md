@@ -88,9 +88,11 @@
 - [x] Training data: Synthesize perturbed claims (flip direction, replace with sibling phenotype, inject retracted support); mix with clean subgraphs.
 - [x] Output: Per-edge scores; highlight top-k edges in UI subgraph.
 
-### Class-Incremental Error Learning
-- [ ] Maintain error-type prototypes: `TypeViolation`, `RetractedSupport`, `WeakEvidence`, `OntologyMismatch`.
-- [ ] New error type → compute feature centroid; update linear head with rehearsal on 30–50 example buffer.
+### Class-Incremental Error Learning (Done)
+- [x] Maintain error-type prototypes: `TypeViolation`, `RetractedSupport`, `WeakEvidence`, `OntologyMismatch`.
+- [x] New error type → compute feature centroid; update linear head with rehearsal on 30–50 example buffer.
+- [x] Integrate error types into suspicion GNN as multi-task learning (suspicion + error type classification).
+- [x] Training script synthesizes error type labels from perturbation types.
 
 ### UI v2
 - [x] Subgraph viz with heat coloring by suspicion score.

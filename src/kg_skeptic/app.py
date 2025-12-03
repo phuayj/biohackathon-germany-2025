@@ -28,6 +28,9 @@ from kg_skeptic.subgraph import Subgraph, build_pair_subgraph
 from kg_skeptic.visualization import (
     CATEGORY_COLORS,
     EDGE_STATUS_COLORS,
+    ERROR_TYPE_COLORS,
+    ERROR_TYPE_DESCRIPTIONS,
+    ERROR_TYPE_LABELS,
     build_pyvis_network,
     extract_edge_inspector_data,
     find_edge_by_key,
@@ -489,6 +492,7 @@ def render_edge_inspector(
     evaluation: RuleEvaluation,
     suspicion_scores: dict[tuple[str, str, str], float],
     provenance: list[CitationProvenance],
+    error_type_predictions: dict[tuple[str, str, str], tuple[str, float]] | None = None,
 ) -> None:
     """Render edge inspector as inline expander."""
     inspector_data = extract_edge_inspector_data(
@@ -497,6 +501,7 @@ def render_edge_inspector(
         evaluation=evaluation,
         suspicion_scores=suspicion_scores,
         provenance=provenance,
+        error_type_predictions=error_type_predictions or {},
     )
 
     pred = edge.predicate
@@ -570,6 +575,20 @@ def render_edge_inspector(
             st.markdown(f"**Suspicion Score**: {score:.2f} ({level})")
             st.progress(score)
 
+        # Error type prediction
+        if inspector_data.error_type_prediction is not None:
+            et_pred = inspector_data.error_type_prediction
+            et_color = ERROR_TYPE_COLORS.get(et_pred.error_type, "#757575")
+            et_label = ERROR_TYPE_LABELS.get(et_pred.error_type, et_pred.error_type)
+            st.markdown("**Predicted Error Type**")
+            st.markdown(
+                f'<span style="background-color: {et_color}; color: white; '
+                f'padding: 4px 8px; border-radius: 6px;">{et_label}</span> '
+                f'<span style="opacity: 0.8;">({et_pred.confidence:.0%} confidence)</span>',
+                unsafe_allow_html=True,
+            )
+            st.caption(et_pred.description)
+
         # Patch suggestions
         if inspector_data.patch_suggestions:
             st.markdown("**Patch Suggestions**")
@@ -580,8 +599,11 @@ def render_edge_inspector(
 def render_why_flagged_drawer(
     evaluation: RuleEvaluation,
     suspicion: dict[str, object],
+    error_type_predictions: dict[tuple[str, str, str], tuple[str, float]] | None = None,
 ) -> None:
     """Render the 'Why Flagged?' drawer with top rules and suspicious edges."""
+    error_type_predictions = error_type_predictions or {}
+
     with st.expander("Why Flagged?", expanded=False):
         # Top fired rules
         st.markdown("### Top Rules Fired")
@@ -623,10 +645,46 @@ def render_why_flagged_drawer(
                 is_claim = edge_data.get("is_claim_edge", False)
                 claim_badge = " **[CLAIM]**" if is_claim else ""
 
+                # Check for error type prediction for this edge
+                edge_key = (
+                    str(edge_data.get("subject", "")),
+                    str(edge_data.get("predicate", "")),
+                    str(edge_data.get("object", "")),
+                )
+                error_type_badge = ""
+                if edge_key in error_type_predictions:
+                    et_str, et_conf = error_type_predictions[edge_key]
+                    et_color = ERROR_TYPE_COLORS.get(et_str, "#757575")
+                    et_label = ERROR_TYPE_LABELS.get(et_str, et_str)
+                    error_type_badge = (
+                        f' <span style="background-color: {et_color}; color: white; '
+                        f'padding: 1px 4px; border-radius: 3px; font-size: 0.85em;">'
+                        f"{et_label}</span>"
+                    )
+
                 st.markdown(
                     f'<span style="background-color: {color}; color: white; '
                     f'padding: 2px 6px; border-radius: 4px;">{score:.2f}</span> '
-                    f'{edge_data.get("subject", "?")} -> {edge_data.get("object", "?")}{claim_badge}',
+                    f'{edge_data.get("subject", "?")} -> {edge_data.get("object", "?")}'
+                    f"{claim_badge}{error_type_badge}",
+                    unsafe_allow_html=True,
+                )
+
+        # Summary of error types if predictions available
+        if error_type_predictions:
+            st.markdown("### Error Type Summary")
+            # Count error types
+            type_counts: dict[str, int] = {}
+            for et_str, _ in error_type_predictions.values():
+                type_counts[et_str] = type_counts.get(et_str, 0) + 1
+
+            for et_str, count in sorted(type_counts.items(), key=lambda x: -x[1]):
+                et_color = ERROR_TYPE_COLORS.get(et_str, "#757575")
+                et_label = ERROR_TYPE_LABELS.get(et_str, et_str)
+                st.markdown(
+                    f'<span style="background-color: {et_color}; color: white; '
+                    f'padding: 2px 6px; border-radius: 4px;">{et_label}</span> '
+                    f"× {count}",
                     unsafe_allow_html=True,
                 )
 
@@ -638,11 +696,13 @@ def render_subgraph_visualization(
     provenance: list[CitationProvenance],
     subject_id: str,
     object_id: str,
+    error_type_predictions: dict[tuple[str, str, str], tuple[str, float]] | None = None,
 ) -> None:
     """Render interactive subgraph with edge inspector.
 
     This replaces the old DataFrame-based display with Pyvis visualization.
     """
+    error_type_predictions = error_type_predictions or {}
     # Initialize session state for filters
     if "edge_type_filter" not in st.session_state:
         st.session_state.edge_type_filter = ["G-G", "G-Dis", "G-Phe", "G-Path", "Other"]
@@ -832,6 +892,18 @@ def render_subgraph_visualization(
                 unsafe_allow_html=True,
             )
 
+        # Error type legend
+        st.markdown("**Error Types (GNN Classification)**")
+        for error_type, color in ERROR_TYPE_COLORS.items():
+            label = ERROR_TYPE_LABELS.get(error_type, error_type)
+            desc = ERROR_TYPE_DESCRIPTIONS.get(error_type, "")
+            st.markdown(
+                f'<span style="background-color: {color}; color: white; '
+                f'padding: 2px 8px; border-radius: 4px;">{label}</span> '
+                f'<span style="font-size: 0.85em; opacity: 0.8;">{desc}</span>',
+                unsafe_allow_html=True,
+            )
+
     # Build and render Pyvis network
     if edge_types:
         net = build_pyvis_network(
@@ -879,12 +951,13 @@ def render_subgraph_visualization(
                 evaluation=evaluation,
                 suspicion_scores=suspicion_scores,
                 provenance=provenance,
+                error_type_predictions=error_type_predictions,
             )
     else:
         st.info("Select an edge from the dropdown to view detailed inspection.")
 
     # Why Flagged drawer
-    render_why_flagged_drawer(evaluation, suspicion)
+    render_why_flagged_drawer(evaluation, suspicion, error_type_predictions)
 
 
 def render_audit_card(result: AuditResult) -> None:
@@ -952,6 +1025,19 @@ def render_audit_card(result: AuditResult) -> None:
     if not isinstance(suspicion, dict):
         suspicion = {}
 
+    # Extract error type predictions from suspicion dict
+    error_type_predictions: dict[tuple[str, str, str], tuple[str, float]] = {}
+    raw_preds = suspicion.get("error_type_predictions", {})
+    if isinstance(raw_preds, dict):
+        for key_str, value in raw_preds.items():
+            if isinstance(key_str, str) and "|" in key_str:
+                parts = key_str.split("|", 2)
+                if len(parts) == 3 and isinstance(value, (list, tuple)) and len(value) == 2:
+                    subj, pred_str, obj = parts
+                    et_str, conf = value
+                    if isinstance(et_str, str) and isinstance(conf, (int, float)):
+                        error_type_predictions[(subj, pred_str, obj)] = (et_str, float(conf))
+
     # Local KG subgraph with interactive visualization
     metadata = claim.metadata if isinstance(claim.metadata, Mapping) else {}
     triple_meta = metadata.get("normalized_triple")
@@ -995,6 +1081,7 @@ def render_audit_card(result: AuditResult) -> None:
                         provenance=result.provenance,
                         subject_id=subject_id,
                         object_id=object_id,
+                        error_type_predictions=error_type_predictions,
                     )
 
 

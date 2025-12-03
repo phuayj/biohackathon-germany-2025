@@ -144,10 +144,13 @@
 - [ ] **Simulate retraction toggle:** Temporarily mark a PMID as retracted → watch edge turn red, score drop, PASS→FAIL.
 - [ ] **Ontology strictness slider:** Strict (descendant HPO only) vs Lenient (allow siblings) → edges appear/disappear.
 
-### Class-Incremental Error Types
-- [ ] Add class-incremental error prototype store: `TypeViolation`, `RetractedSupport`, `WeakEvidence`, `OntologyMismatch`.
-- [ ] Feature centroid computation for new error types.
-- [ ] Lightweight rehearsal on 30–50 example buffer (no full retrain).
+### Class-Incremental Error Types (Done)
+- [x] Add class-incremental error prototype store: `TypeViolation`, `RetractedSupport`, `WeakEvidence`, `OntologyMismatch`.
+- [x] Feature centroid computation for new error types.
+- [x] Lightweight rehearsal on 30–50 example buffer (no full retrain).
+- [x] Integrate error types into suspicion GNN (multi-task learning with error type classification head).
+- [x] Wire error type labeling into training data synthesis (infer from perturbation types).
+- [x] Add `predict_error_types` and `rank_suspicion_with_error_types` functions.
 
 ### UI v2 (Done)
 - [x] Subgraph visualization with heat coloring by suspicion score.
