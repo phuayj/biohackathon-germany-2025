@@ -250,6 +250,7 @@ class RGCNSuspicionModel(nn.Module):
         *,
         hidden_channels: int = 32,
         edge_in_channels: int = 0,
+        dropout: float = 0.3,
     ) -> None:
         super().__init__()
         if num_relations <= 0:
@@ -259,6 +260,7 @@ class RGCNSuspicionModel(nn.Module):
         self.hidden_channels = hidden_channels
         self.num_relations = num_relations
         self.edge_in_channels = edge_in_channels
+        self.dropout = dropout
 
         # Relation‑specific weights for two stacked R‑GCN‑style layers.
         self.rel_weights1 = nn.Parameter(torch.empty(num_relations, in_channels, hidden_channels))
@@ -268,16 +270,22 @@ class RGCNSuspicionModel(nn.Module):
         self.self_loop1 = nn.Linear(in_channels, hidden_channels, bias=True)
         self.self_loop2 = nn.Linear(hidden_channels, hidden_channels, bias=True)
 
+        # Dropout for regularization between R-GCN layers (spec recommends 0.2-0.5).
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+
         # Embedding for edge types to feed into the edge scoring head.
         # We use a small dimension (e.g., hidden_channels // 2) to keep it compact.
         self.edge_type_dim = max(4, hidden_channels // 2)
         self.edge_type_emb = nn.Embedding(num_relations, self.edge_type_dim)
 
         # Edge suspicion head: operates on concatenated [h_src, h_dst, edge_type, edge_attr?].
+        # Includes dropout after ReLU for regularization per spec §3.2.
         mlp_in = 2 * hidden_channels + self.edge_type_dim + edge_in_channels
         self.edge_mlp = nn.Sequential(
             nn.Linear(mlp_in, hidden_channels),
             nn.ReLU(),
+            nn.Dropout(dropout),
             nn.Linear(hidden_channels, 1),
         )
 
@@ -334,7 +342,9 @@ class RGCNSuspicionModel(nn.Module):
             return torch.empty((0,), dtype=torch.float32, device=x.device)
 
         h = self._rgcn_layer(x, edge_index, edge_type, self.rel_weights1, self.self_loop1)
+        h = self.dropout1(h)
         h = self._rgcn_layer(h, edge_index, edge_type, self.rel_weights2, self.self_loop2)
+        h = self.dropout2(h)
 
         src, dst = edge_index
         src_h = h[src]

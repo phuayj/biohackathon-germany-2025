@@ -32,11 +32,18 @@ import random
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Sequence, Tuple, cast
+from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 import torch
 from torch import Tensor
 from torch import nn
+
+try:
+    from sklearn.metrics import roc_auc_score, average_precision_score  # type: ignore[import-untyped]
+
+    HAS_SKLEARN = True
+except ImportError:
+    HAS_SKLEARN = False
 
 from kg_skeptic.mcp.mini_kg import iter_mini_kg_edges, load_mini_kg_backend
 from kg_skeptic.mcp.kg import KGEdge, KGNode
@@ -174,7 +181,8 @@ def _build_perturbed_subgraph(
         extra_edges: Additional synthetic edges to append.
         edge_overrides: Optional mapping from ``(s, p, o)`` triple to a
             property override mapping. When provided, the properties of
-            matching edges are shallow-copied and updated.
+            matching edges are shallow-copied and updated. The special key
+            ``"sources"`` will override the ``KGEdge.sources`` field directly.
     """
     nodes_by_id: Dict[str, KGNode] = {
         node.id: KGNode(
@@ -196,9 +204,11 @@ def _build_perturbed_subgraph(
 
         if key in overrides:
             ov = overrides[key]
-            props.update(ov)
+            # Handle sources field override separately (it's on KGEdge, not in properties).
             if "sources" in ov:
-                sources = cast(list[str], ov["sources"])
+                sources = list(ov["sources"]) if ov["sources"] else []
+            # Update properties with remaining overrides (excluding sources).
+            props.update({k: v for k, v in ov.items() if k != "sources"})
 
         edges.append(
             KGEdge(
@@ -453,7 +463,11 @@ def _synthesize_evidence_ablation(
     *,
     fraction: float = 0.15,
 ) -> Dict[Tuple[str, str, str], Dict[str, Any]]:
-    """Remove sources from a subset of edges to simulate weak/unsupported claims."""
+    """Remove sources from a subset of edges to simulate weak/unsupported claims.
+
+    This simulates edges that have lost their supporting evidence, which should
+    be flagged as suspicious per spec §2C (evidence ablation perturbation).
+    """
     overrides: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
     for edge in subgraph.edges:
         if rng.random() > fraction:
@@ -464,19 +478,7 @@ def _synthesize_evidence_ablation(
 
         key = (edge.subject, edge.predicate, edge.object)
         overrides[key] = {
-            "sources": [],  # Clear sources (this needs handling in _build_perturbed_subgraph to actually apply to the KGEdge field, not just properties)
-            # Actually _build_perturbed_subgraph updates properties.
-            # We need to ensure we handle 'sources' field update in _build_perturbed_subgraph or
-            # treat sources as a property for the purpose of the override if we modify _build_perturbed_subgraph.
-            # Currently KGEdge.sources is separate.
-            # Let's set a property that indicates ablation, and we might need to update _build_perturbed_subgraph to respect it
-            # or just rely on 'is_perturbed_edge' flag and the fact that we set n_sources=0 via properties update if we calculate it there.
-            # But subgraph_to_tensors calculates n_sources from edge.sources.
-            # So strictly speaking we need to modify edge.sources.
-            # Since _build_perturbed_subgraph uses:
-            # edges.append(KGEdge(..., sources=list(edge.sources)))
-            # It doesn't look at overrides for 'sources' field.
-            # I will need to update _build_perturbed_subgraph to handle this.
+            "sources": [],  # Clear sources (applied to KGEdge.sources by _build_perturbed_subgraph)
             "perturbation_type": "evidence_ablation",
             "is_perturbed_edge": 1.0,
         }
@@ -883,8 +885,26 @@ def train_suspicion_gnn(
     weight_decay: float = 1e-4,
     val_fraction: float = 0.2,
     device: str = "cpu",
+    early_stopping_patience: int = 0,
+    dropout: float = 0.3,
 ) -> RGCNSuspicionModel:
-    """Train the R-GCN suspicion model on the provided samples."""
+    """Train the R-GCN suspicion model on the provided samples.
+
+    Args:
+        samples: List of GraphSample instances (tensors + edge labels).
+        predicate_to_index: Mapping from predicate strings to relation indices.
+        epochs: Maximum number of training epochs.
+        lr: Learning rate for Adam optimizer.
+        weight_decay: L2 regularization strength.
+        val_fraction: Fraction of samples to use for validation.
+        device: Torch device (e.g., 'cpu' or 'cuda').
+        early_stopping_patience: Stop training if validation AUROC does not
+            improve for this many epochs. Set to 0 to disable early stopping.
+        dropout: Dropout probability for regularization (spec recommends 0.2-0.5).
+
+    Returns:
+        Trained RGCNSuspicionModel (best checkpoint if early stopping is used).
+    """
     if not samples:
         raise ValueError("At least one GraphSample is required for training.")
 
@@ -906,6 +926,7 @@ def train_suspicion_gnn(
         num_relations=num_relations,
         hidden_channels=32,
         edge_in_channels=edge_in_channels,
+        dropout=dropout,
     )
 
     torch_device = torch.device(device)
@@ -927,9 +948,20 @@ def train_suspicion_gnn(
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-    def _run_epoch(
-        batch: Sequence[GraphSample], *, train: bool
-    ) -> tuple[float, float, float, float, float, float]:
+    @dataclass
+    class EpochMetrics:
+        """Metrics collected during a training/validation epoch."""
+
+        loss: float
+        accuracy: float
+        pos_fraction: float
+        hits_1: float
+        hits_3: float
+        hits_5: float
+        auroc: float
+        auprc: float
+
+    def _run_epoch(batch: Sequence[GraphSample], *, train: bool) -> EpochMetrics:
         if train:
             model.train()
         else:
@@ -945,6 +977,10 @@ def train_suspicion_gnn(
         hits_3_count = 0
         hits_5_count = 0
         total_graphs_with_pos = 0
+
+        # Collect all predictions and labels for AUROC/AUPRC computation
+        all_probs: List[float] = []
+        all_labels: List[float] = []
 
         with torch.set_grad_enabled(train):
             for sample in batch:
@@ -982,6 +1018,10 @@ def train_suspicion_gnn(
                 correct += int((preds == y).sum().item())
                 pos_count += int(y.sum().item())
 
+                # Collect for AUROC/AUPRC
+                all_probs.extend(probs.detach().cpu().tolist())
+                all_labels.extend(y.detach().cpu().tolist())
+
                 # Compute Hits@k for this graph
                 # Only relevant if there are positive (suspicious) edges to find
                 if y.sum() > 0:
@@ -999,7 +1039,16 @@ def train_suspicion_gnn(
                         hits_5_count += 1
 
         if total_edges == 0:
-            return math.nan, 0.0, 0.0, 0.0, 0.0, 0.0
+            return EpochMetrics(
+                loss=math.nan,
+                accuracy=0.0,
+                pos_fraction=0.0,
+                hits_1=0.0,
+                hits_3=0.0,
+                hits_5=0.0,
+                auroc=0.0,
+                auprc=0.0,
+            )
 
         avg_loss = total_loss / float(total_edges)
         accuracy = correct / float(total_edges)
@@ -1009,22 +1058,80 @@ def train_suspicion_gnn(
         h3 = hits_3_count / max(1, total_graphs_with_pos)
         h5 = hits_5_count / max(1, total_graphs_with_pos)
 
-        return avg_loss, accuracy, pos_fraction, h1, h3, h5
+        # Compute AUROC and AUPRC (requires sklearn and both classes present)
+        auroc = 0.0
+        auprc = 0.0
+        if HAS_SKLEARN and len(set(all_labels)) > 1:
+            try:
+                auroc = roc_auc_score(all_labels, all_probs)
+                auprc = average_precision_score(all_labels, all_probs)
+            except ValueError:
+                # Can happen if only one class is present in this batch
+                pass
+
+        return EpochMetrics(
+            loss=avg_loss,
+            accuracy=accuracy,
+            pos_fraction=pos_fraction,
+            hits_1=h1,
+            hits_3=h3,
+            hits_5=h5,
+            auroc=auroc,
+            auprc=auprc,
+        )
 
     print(
         f"Training RGCNSuspicionModel on {len(train_samples)} train subgraphs "
         f"and {len(val_samples)} validation subgraphs "
         f"({len(predicate_to_index)} relation types, device={torch_device.type})."
     )
+    if not HAS_SKLEARN:
+        print("Warning: sklearn not available, AUROC/AUPRC metrics will not be computed.")
+    if early_stopping_patience > 0:
+        print(f"Early stopping enabled with patience={early_stopping_patience} epochs.")
+
+    # Early stopping state
+    best_val_auroc = -1.0
+    best_model_state: Dict[str, Any] | None = None
+    epochs_without_improvement = 0
 
     for epoch in range(1, epochs + 1):
-        train_loss, train_acc, train_pos, t_h1, t_h3, t_h5 = _run_epoch(train_samples, train=True)
-        val_loss, val_acc, val_pos, v_h1, v_h3, v_h5 = _run_epoch(val_samples, train=False)
+        train_m = _run_epoch(train_samples, train=True)
+        val_m = _run_epoch(val_samples, train=False)
+
+        # Check for improvement (use AUROC, or accuracy if AUROC not available)
+        current_metric = val_m.auroc if HAS_SKLEARN and val_m.auroc > 0 else val_m.accuracy
+        improved = current_metric > best_val_auroc
+
+        if improved:
+            best_val_auroc = current_metric
+            best_model_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            epochs_without_improvement = 0
+            improvement_marker = " *"
+        else:
+            epochs_without_improvement += 1
+            improvement_marker = ""
+
         print(
             f"[Epoch {epoch:02d}] "
-            f"train: loss={train_loss:.4f} acc={train_acc:.3f} H@1={t_h1:.2f} H@3={t_h3:.2f} | "
-            f"val: loss={val_loss:.4f} acc={val_acc:.3f} H@1={v_h1:.2f} H@3={v_h3:.2f}"
+            f"train: loss={train_m.loss:.4f} acc={train_m.accuracy:.3f} "
+            f"AUROC={train_m.auroc:.3f} AUPRC={train_m.auprc:.3f} H@1={train_m.hits_1:.2f} | "
+            f"val: loss={val_m.loss:.4f} acc={val_m.accuracy:.3f} "
+            f"AUROC={val_m.auroc:.3f} AUPRC={val_m.auprc:.3f} H@1={val_m.hits_1:.2f}{improvement_marker}"
         )
+
+        # Early stopping check
+        if early_stopping_patience > 0 and epochs_without_improvement >= early_stopping_patience:
+            print(
+                f"Early stopping triggered after {epoch} epochs "
+                f"(no improvement for {early_stopping_patience} epochs)."
+            )
+            break
+
+    # Restore best model if early stopping was used and we found an improvement
+    if early_stopping_patience > 0 and best_model_state is not None:
+        model.load_state_dict(best_model_state)
+        print(f"Restored best model (val AUROC/acc = {best_val_auroc:.4f}).")
 
     return model
 
@@ -1096,6 +1203,21 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "(e.g., data/suspicion_gnn/model.pt)."
         ),
     )
+    parser.add_argument(
+        "--early-stopping-patience",
+        type=int,
+        default=0,
+        help=(
+            "Stop training if validation AUROC does not improve for this many epochs. "
+            "Set to 0 to disable early stopping (default: 0)."
+        ),
+    )
+    parser.add_argument(
+        "--dropout",
+        type=float,
+        default=0.3,
+        help="Dropout probability for regularization (spec recommends 0.2-0.5, default: 0.3).",
+    )
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
@@ -1145,6 +1267,7 @@ def _save_model(
         "hidden_channels": int(model.hidden_channels),
         "edge_in_channels": int(model.edge_in_channels),
         "num_relations": int(model.num_relations),
+        "dropout": float(model.dropout),
     }
     torch.save(payload, path)
     print(f"Saved suspicion GNN model checkpoint to {path}")
@@ -1181,6 +1304,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         weight_decay=args.weight_decay,
         val_fraction=args.val_fraction,
         device=args.device,
+        early_stopping_patience=args.early_stopping_patience,
+        dropout=args.dropout,
     )
 
     if args.save_model:

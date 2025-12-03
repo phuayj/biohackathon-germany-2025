@@ -92,6 +92,25 @@
 - [x] Extend `scripts/train_suspicion_gnn.py` with richer perturbations (sibling phenotype swaps, retracted-support injections) and optionally save the synthetic dataset for reuse.
 - [x] Highlight top-k suspicious edges in UI subgraph.
 
+#### GNN Spec Compliance (Phase 1 — Core Fixes, Done)
+- [x] Add dropout regularization (0.2–0.5) to R-GCN layers and edge MLP per spec §3.2.
+- [x] Fix evidence ablation to properly clear `KGEdge.sources` field.
+- [x] Add AUROC/AUPRC metrics to training per spec §3.4.
+- [x] Add early stopping on validation AUROC per spec §3.2.
+
+#### GNN Spec Compliance (Phase 2 — Labeling Improvements)
+- [ ] Implement proper "clean" edge criteria per spec §2A: multi-source (≥2 sources or PMIDs), no retractions, biolink domain/range compatible, short plausible route.
+- [ ] Add type/ontology violation detection for suspicious edge labeling per spec §2B (disallowed predicates, phenotype not in ancestor closure).
+- [ ] Use HPO ontology for proper sibling phenotype swaps (same parent term) instead of random sampling per spec §2C.
+- [ ] Add label leakage prevention: ensure sibling swaps don't connect to subject elsewhere in global graph per spec §8.
+- [ ] Add "singleton & weak" detection: flag edges with 1 source, 1 PMID, far from mechanistic context per spec §2B.
+
+#### GNN Spec Compliance (Phase 4 — Additional Features)
+- [ ] Add `evidence_age` feature (years since newest PMID) per spec §3.0.
+- [ ] Add `path_length_to_pathway` feature (shortest path to pathway touching both ends) per spec §3.0.
+- [ ] Add Node2Vec embeddings (d=64) from Neo4j GDS or separate embedding step per spec §3.0 (optional).
+- [ ] Add self-supervised link prediction pretrain (GAE/GraphSAGE) per spec §D (optional).
+
 ### Class-Incremental Error Types
 - [ ] Add class-incremental error prototype store: `TypeViolation`, `RetractedSupport`, `WeakEvidence`, `OntologyMismatch`.
 - [ ] Feature centroid computation for new error types.
@@ -125,6 +144,13 @@
 - [ ] Isotonic/Platt scaling for probabilistic confidence (optional).
 - [ ] Ablation: no GNN vs with GNN.
 - [ ] Ablation: no retraction gate vs with.
+
+#### GNN Spec Compliance (Phase 3 — Calibration & Losses)
+- [ ] Add temperature scaling for suspicion score calibration per spec §3.3.
+- [ ] Add focal loss as alternative to BCE for class imbalance per spec §3.2.
+- [ ] Add margin ranking loss option (suspicious > clean pairs) per spec §3.2.
+- [ ] Add baseline model (LogReg/XGBoost on edge features) for comparison per spec §4.
+- [ ] Add knowledge distillation from baseline to GNN per spec §4 (optional).
 
 ### Patch Suggestions
 - [ ] **OntologyMismatch:** Suggest nearest child/parent HPO term with evidence.
