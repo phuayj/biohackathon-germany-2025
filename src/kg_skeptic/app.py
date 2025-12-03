@@ -314,6 +314,23 @@ def _get_pipeline(use_gliner: bool = False) -> SkepticPipeline:
             "use_disgenet": use_disgenet,
             "use_monarch_kg": use_monarch_kg,
         }
+
+        # Optional Day 3 suspicion GNN: load a pre-trained model when available.
+        suspicion_model_env = os.environ.get("KG_SKEPTIC_SUSPICION_MODEL")
+        suspicion_model_path: str | None = None
+        if suspicion_model_env:
+            suspicion_model_path = suspicion_model_env
+        else:
+            default_model = (
+                Path(__file__).parent.parent.parent / "data" / "suspicion_gnn" / "model.pt"
+            )
+            if default_model.exists():
+                suspicion_model_path = str(default_model)
+
+        if suspicion_model_path:
+            config["use_suspicion_gnn"] = True
+            config["suspicion_gnn_model_path"] = suspicion_model_path
+
         st.session_state[cache_key] = SkepticPipeline(config=config, normalizer=normalizer)
     return cast(SkepticPipeline, st.session_state[cache_key])
 
@@ -467,6 +484,33 @@ def render_audit_card(result: AuditResult) -> None:
     # Rules fired
     st.subheader("Rules Fired")
     render_rule_trace(evaluation)
+
+    # Optional suspicion GNN overlay (top edges).
+    suspicion = result.suspicion or result.report.stats.get("suspicion", {})
+    if isinstance(suspicion, Mapping):
+        top_edges_raw = suspicion.get("top_edges")
+        if isinstance(top_edges_raw, list) and top_edges_raw:
+            rows: list[dict[str, object]] = []
+            for item in top_edges_raw[:10]:
+                if not isinstance(item, Mapping):
+                    continue
+                try:
+                    score = float(item.get("score", 0.0))
+                except (TypeError, ValueError):
+                    score = 0.0
+                rows.append(
+                    {
+                        "subject": item.get("subject"),
+                        "predicate": item.get("predicate"),
+                        "object": item.get("object"),
+                        "suspicion": round(score, 3),
+                        "is_claim_edge": bool(item.get("is_claim_edge")),
+                    }
+                )
+
+            if rows:
+                st.subheader("Suspicion GNN (Top edges)")
+                st.dataframe(rows, use_container_width=True)
 
     # Local KG subgraph (Day 3 preview)
     metadata = claim.metadata if isinstance(claim.metadata, Mapping) else {}

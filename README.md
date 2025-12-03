@@ -126,6 +126,17 @@ before launching Streamlit. When configured, the skeptic will use DisGeNET as an
 - **Patch suggestions**: Propose minimal fixes (alternate citations, corrected ontology terms).
 - **Docker packaging**: One-command deployment via `docker compose up`.
 
+## Training the Suspicion GNN
+
+A small synthetic dataset and training loop live in `scripts/train_suspicion_gnn.py`:
+- Quick smoke test (auto-saves dataset + model): `uv run python scripts/train_suspicion_gnn.py --quick`
+- By default it writes:
+  - dataset → `data/suspicion_gnn/synthetic_dataset.pt`
+  - model checkpoint → `data/suspicion_gnn/model.pt`
+  (override via `--save-dataset` / `--save-model` if needed)
+
+The script builds 2-hop subgraphs from the mini KG, adds perturbed variants (direction flips, phenotype swaps, synthetic retracted support), and trains a tiny R-GCN to produce per-edge suspicion scores. The main pipeline and Streamlit UI will automatically pick up `data/suspicion_gnn/model.pt` when present.
+
 ## Contributing
 - See `docs/roadmap.md` for current progress and open tasks.
 - Keep changes small and testable; prefer stubs with clear TODOs over speculative plumbing.

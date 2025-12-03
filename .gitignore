@@ -23,4 +23,4 @@ dist/
 .DS_Store
 .python-version
 
-data/cache/*
+data/*

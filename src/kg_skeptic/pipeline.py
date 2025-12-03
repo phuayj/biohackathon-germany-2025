@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence, TypedDict
 from collections.abc import Mapping
 
 from kg_skeptic.mcp.ids import IDNormalizerTool
@@ -26,9 +26,22 @@ from .provenance import CitationProvenance, ProvenanceFetcher
 from .rules import RuleEngine, RuleEvaluation
 from .ner import GLiNER2Extractor, ExtractedEntity
 
+if TYPE_CHECKING:
+    from kg_skeptic.suspicion_gnn import RGCNSuspicionModel
+
 Config = Mapping[str, object]
 AuditPayload = Mapping[str, object] | str | Claim
 JSONValue = object
+
+
+class SuspicionRow(TypedDict):
+    subject: str
+    predicate: str
+    object: str
+    score: float
+    is_claim_edge: bool
+
+
 ONTOLOGY_ROOT_TERMS: dict[str, set[str]] = {
     # HPO: Phenotypic abnormality (root) and All
     "HP": {"HP:0000118", "HP:0000001"},
@@ -1251,6 +1264,7 @@ class AuditResult:
     verdict: str
     facts: dict[str, object]
     provenance: list[CitationProvenance]
+    suspicion: dict[str, object] = field(default_factory=dict)
 
 
 class SkepticPipeline:
@@ -1279,6 +1293,35 @@ class SkepticPipeline:
         self._use_disgenet = bool(use_disgenet_raw)
         use_monarch_raw = self.config.get("use_monarch_kg", False)
         self._use_monarch_kg = bool(use_monarch_raw)
+
+        # Optional Day 3 suspicion GNN configuration.
+        suspicion_model_path_raw = self.config.get("suspicion_gnn_model_path")
+        if suspicion_model_path_raw is None:
+            # Environment override for suspicion GNN model path.
+            suspicion_env = os.environ.get("KG_SKEPTIC_SUSPICION_MODEL")
+            suspicion_model_path_raw = suspicion_env
+
+        if suspicion_model_path_raw is None:
+            # Default: look for a checkpoint under data/suspicion_gnn/model.pt
+            project_root = Path(__file__).parent.parent.parent
+            default_model = project_root / "data" / "suspicion_gnn" / "model.pt"
+            if default_model.exists():
+                suspicion_model_path_raw = str(default_model)
+
+        self._suspicion_model_path: Path | None = None
+        if isinstance(suspicion_model_path_raw, str) and suspicion_model_path_raw.strip():
+            self._suspicion_model_path = Path(suspicion_model_path_raw).expanduser()
+
+        use_suspicion_raw = self.config.get("use_suspicion_gnn")
+        if use_suspicion_raw is None:
+            self._use_suspicion_gnn = self._suspicion_model_path is not None
+        else:
+            self._use_suspicion_gnn = bool(use_suspicion_raw) and (
+                self._suspicion_model_path is not None
+            )
+
+        self._suspicion_model: RGCNSuspicionModel | None = None
+        self._suspicion_meta: dict[str, object] | None = None
 
     def _verdict_for_score(self, score: float) -> str:
         if score >= self.PASS_THRESHOLD:
@@ -1353,6 +1396,263 @@ class SkepticPipeline:
         except Exception:
             self._monarch_kg_tool = None
         return self._monarch_kg_tool
+
+    def _get_suspicion_model(self) -> tuple[RGCNSuspicionModel, dict[str, object]] | None:
+        """Lazily load the Day 3 suspicion GNN model, if configured.
+
+        The model checkpoint is optional and only loaded when a
+        ``suspicion_gnn_model_path`` is provided in the config or via
+        the ``KG_SKEPTIC_SUSPICION_MODEL`` environment variable.
+        """
+        if not getattr(self, "_use_suspicion_gnn", False):
+            return None
+
+        if self._suspicion_model is not None and self._suspicion_meta is not None:
+            return self._suspicion_model, self._suspicion_meta
+
+        if self._suspicion_model_path is None or not self._suspicion_model_path.exists():
+            return None
+
+        try:
+            import torch
+            from kg_skeptic.suspicion_gnn import RGCNSuspicionModel
+        except Exception:
+            # Torch or the suspicion module is not available in this environment.
+            return None
+
+        try:
+            checkpoint = torch.load(self._suspicion_model_path, map_location="cpu")
+        except Exception:
+            return None
+
+        state_dict = checkpoint.get("state_dict")
+        if not isinstance(state_dict, dict):
+            return None
+
+        node_feature_names = list(checkpoint.get("node_feature_names") or [])
+        edge_feature_names = list(checkpoint.get("edge_feature_names") or [])
+
+        predicate_to_index_raw = checkpoint.get("predicate_to_index") or {}
+        predicate_to_index: dict[str, int] = {}
+        if isinstance(predicate_to_index_raw, dict):
+            for key, value in predicate_to_index_raw.items():
+                if isinstance(key, str) and isinstance(value, int):
+                    predicate_to_index[key] = value
+
+        in_channels = int(checkpoint.get("in_channels", len(node_feature_names)))
+        hidden_channels = int(checkpoint.get("hidden_channels", 32))
+        num_relations = int(checkpoint.get("num_relations", max(1, len(predicate_to_index) or 1)))
+        edge_in_channels = int(checkpoint.get("edge_in_channels", len(edge_feature_names)))
+
+        try:
+            model = RGCNSuspicionModel(
+                in_channels=in_channels,
+                num_relations=num_relations,
+                hidden_channels=hidden_channels,
+                edge_in_channels=edge_in_channels,
+            )
+        except Exception:
+            return None
+
+        try:
+            model.load_state_dict(state_dict)
+        except Exception:
+            return None
+
+        model.eval()
+
+        meta: dict[str, object] = {
+            "node_feature_names": node_feature_names,
+            "edge_feature_names": edge_feature_names,
+            "predicate_to_index": predicate_to_index,
+        }
+
+        self._suspicion_model = model
+        self._suspicion_meta = meta
+        return model, meta
+
+    def _compute_suspicion_gnn_scores(
+        self,
+        triple: NormalizedTriple,
+        evaluation: RuleEvaluation,
+    ) -> dict[str, object]:
+        """Run the suspicion GNN over a 2-hop subgraph, if available.
+
+        This is an optional Day 3 module; errors are swallowed so that
+        core auditing remains robust even when GNN components are absent.
+        """
+        if not getattr(self, "_use_suspicion_gnn", False):
+            return {}
+
+        backend = getattr(self.normalizer, "backend", None)
+        if backend is None or not isinstance(backend, KGBackend):
+            return {}
+
+        # The Day 3 prototype is trained on the mini KG slice; for now we
+        # restrict inference to the in-memory backend used there.
+        if not isinstance(backend, InMemoryBackend):
+            return {}
+
+        bundle = self._get_suspicion_model()
+        if bundle is None:
+            return {}
+        model, meta = bundle
+
+        predicate_to_index = meta.get("predicate_to_index")
+        node_feature_names = meta.get("node_feature_names")
+        edge_feature_names = meta.get("edge_feature_names")
+        if not isinstance(predicate_to_index, dict):
+            return {}
+
+        try:
+            import torch
+            from kg_skeptic.subgraph import build_pair_subgraph
+            from kg_skeptic.suspicion_gnn import subgraph_to_tensors
+        except Exception:
+            return {}
+
+        try:
+            subgraph = build_pair_subgraph(
+                backend,
+                triple.subject.id,
+                triple.object.id,
+                k=2,
+                rule_features=evaluation.features,
+            )
+        except Exception:
+            return {}
+
+        if not subgraph.edges:
+            return {}
+
+        tensors = subgraph_to_tensors(subgraph)
+        num_edges = tensors.edge_index.shape[1]
+        if num_edges == 0:
+            return {}
+
+        # Align node features to the training schema.
+        trained_node_names = (
+            list(node_feature_names) if isinstance(node_feature_names, list) else []
+        )
+        if not trained_node_names:
+            trained_node_names = list(tensors.node_feature_names)
+
+        if list(tensors.node_feature_names) == trained_node_names:
+            x = tensors.x.clone()
+        else:
+            x = torch.zeros((tensors.x.shape[0], len(trained_node_names)), dtype=torch.float32)
+            name_to_index = {name: i for i, name in enumerate(tensors.node_feature_names)}
+            for j, name in enumerate(trained_node_names):
+                idx = name_to_index.get(name)
+                if idx is not None:
+                    x[:, j] = tensors.x[:, idx]
+
+        # Align edge features to the training schema.
+        trained_edge_names = (
+            list(edge_feature_names) if isinstance(edge_feature_names, list) else []
+        )
+        if not trained_edge_names:
+            trained_edge_names = list(tensors.edge_feature_names)
+
+        edge_attr: torch.Tensor | None
+        if trained_edge_names:
+            if tensors.edge_attr is None or not tensors.edge_feature_names:
+                edge_attr = torch.zeros(
+                    (num_edges, len(trained_edge_names)),
+                    dtype=torch.float32,
+                )
+            elif list(tensors.edge_feature_names) == trained_edge_names and tensors.edge_attr.shape[
+                1
+            ] == len(trained_edge_names):
+                edge_attr = tensors.edge_attr.clone()
+            else:
+                current_index = {name: i for i, name in enumerate(tensors.edge_feature_names)}
+                edge_attr = torch.zeros(
+                    (num_edges, len(trained_edge_names)),
+                    dtype=torch.float32,
+                )
+                for j, name in enumerate(trained_edge_names):
+                    idx = current_index.get(name)
+                    if idx is not None:
+                        edge_attr[:, j] = tensors.edge_attr[:, idx]
+        else:
+            edge_attr = None
+
+        # Re-map predicates to the global relation index used during training.
+        rel_map = predicate_to_index if isinstance(predicate_to_index, dict) else {}
+        edge_type_ids: list[int] = []
+        for _, predicate, _ in tensors.edge_triples:
+            rel_id = rel_map.get(predicate)
+            if not isinstance(rel_id, int):
+                rel_id = 0
+            edge_type_ids.append(rel_id)
+        edge_type = torch.tensor(edge_type_ids, dtype=torch.long)
+
+        # Guard against obvious dimension mismatches.
+        in_channels = getattr(model, "in_channels", x.shape[1])
+        if x.shape[1] != in_channels:
+            return {}
+        edge_in_channels = getattr(model, "edge_in_channels", 0)
+        if edge_attr is not None and edge_attr.shape[1] != edge_in_channels:
+            return {}
+
+        device = next(model.parameters()).device
+        x = x.to(device)
+        edge_index = tensors.edge_index.to(device)
+        edge_type = edge_type.to(device)
+        edge_attr_dev = edge_attr.to(device) if edge_attr is not None else None
+
+        model.eval()
+        with torch.no_grad():
+            logits = model(x, edge_index, edge_type, edge_attr=edge_attr_dev)
+            probs = torch.sigmoid(logits)
+
+        scores = probs.detach().cpu().tolist()
+
+        # Map scores back to edge triples and flag claim-edge hops.
+        edge_by_triple: dict[tuple[str, str, str], KGEdge] = {}
+        for kg_edge in subgraph.edges:
+            key = (kg_edge.subject, kg_edge.predicate, kg_edge.object)
+            edge_by_triple[key] = kg_edge
+
+        rows: list[SuspicionRow] = []
+        claim_pair = {triple.subject.id, triple.object.id}
+        for (subj, pred, obj), score in zip(tensors.edge_triples, scores):
+            edge = edge_by_triple.get((subj, pred, obj))
+            is_claim_edge = False
+            if edge is not None:
+                props = edge.properties
+                if isinstance(props, dict):
+                    flag = props.get("is_claim_edge_for_rule_features")
+                    if isinstance(flag, (int, float, str)):
+                        is_claim_edge = float(flag) > 0.5
+                    else:
+                        is_claim_edge = {edge.subject, edge.object} == claim_pair
+            else:
+                is_claim_edge = {subj, obj} == claim_pair
+
+            rows.append(
+                {
+                    "subject": subj,
+                    "predicate": pred,
+                    "object": obj,
+                    "score": float(score),
+                    "is_claim_edge": bool(is_claim_edge),
+                }
+            )
+
+        if not rows:
+            return {}
+
+        rows_sorted = sorted(rows, key=lambda r: r["score"], reverse=True)
+        top_edges = rows_sorted[:10]
+
+        return {
+            "subject_id": triple.subject.id,
+            "object_id": triple.object.id,
+            "model_path": (str(self._suspicion_model_path) if self._suspicion_model_path else None),
+            "top_edges": top_edges,
+        }
 
     def _build_curated_kg_facts(self, triple: NormalizedTriple) -> dict[str, object]:
         """Best-effort curated KG facts for gene–disease support.
@@ -1559,6 +1859,13 @@ class SkepticPipeline:
         if verdict == "PASS" and ontology.get("is_sibling_conflict"):
             verdict = "WARN"
 
+        # Optional Day 3 suspicion GNN overlay (does not affect verdict).
+        suspicion: dict[str, object] = {}
+        try:
+            suspicion = self._compute_suspicion_gnn_scores(normalization.triple, evaluation)
+        except Exception:
+            suspicion = {}
+
         # Build a report with key stats embedded
         task_id = (
             audit_payload.get("task_id")
@@ -1583,6 +1890,7 @@ class SkepticPipeline:
                 "score": score,
                 "rule_features": evaluation.features,
                 "citations": [p.to_dict() for p in provenance],
+                **({"suspicion": suspicion} if suspicion else {}),
             },
         )
 
@@ -1593,4 +1901,5 @@ class SkepticPipeline:
             verdict=verdict,
             facts=facts,
             provenance=list(provenance),
+            suspicion=suspicion,
         )

@@ -4,7 +4,7 @@
 
 **Goals:** Shared schema, working MCP tools, tiny KG, skeleton audit.
 
-### Schema & Scaffolding
+### Schema & Scaffolding (Done)
 - [x] Lock Python version (>=3.11) and dependencies; add lint/format/test tooling (ruff, mypy, pytest).
 - [x] Define Skeptic report schema (claims, findings, suggested fixes) and example fixtures.
 - [x] Define claim schema in `agent/schemas.py` with subject/predicate/object/qualifiers/provenance.
@@ -82,10 +82,10 @@
 - [x] Swap curated KG check to Monarch-backed `curated_kg_match` for gene–disease edges and feed it into the evidence gate.
 
 ### Suspicion GNN (PyG)
-- [ ] Model: 2-layer R-GCN with 16–32 hidden dims.
-- [ ] Task: Edge suspicion (binary/score) — "How likely is this edge problematic?"
-- [ ] Training data: Synthesize perturbed claims (flip direction, replace with sibling phenotype, inject retracted support); mix with clean subgraphs.
-- [ ] Output: Per-edge scores; highlight top-k edges in UI subgraph.
+- [x] Model: 2-layer R-GCN with 16–32 hidden dims.
+- [x] Task: Edge suspicion (binary/score) — "How likely is this edge problematic?"
+- [x] Training data: Synthesize perturbed claims (flip direction, replace with sibling phenotype, inject retracted support); mix with clean subgraphs.
+- [x] Output: Per-edge scores; highlight top-k edges in UI subgraph.
 
 ### Class-Incremental Error Learning
 - [ ] Maintain error-type prototypes: `TypeViolation`, `RetractedSupport`, `WeakEvidence`, `OntologyMismatch`.

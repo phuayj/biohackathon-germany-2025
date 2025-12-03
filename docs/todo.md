@@ -41,7 +41,7 @@
 - [x] Disk cache all responses to `data/cache/*.json`.
 - [x] Graceful fallback when APIs are down (show WARN, don't auto-PASS).
 
-### Core Rule Set Implementation
+### Core Rule Set Implementation (Done)
 - [x] **type_domain_range:** Biolink-valid domain/range validation.
 - [x] **retraction_gate:** `trust=0` + FAIL if any citation retracted.
 - [x] **expression_of_concern:** −0.5 score + WARN.
@@ -78,18 +78,19 @@
 - [x] Fetch 2–3 hop ego-net given (subject, object).
 - [x] Compute node features: clustering, path counts, PPI weights (extend existing degree features).
 - [x] Add rule feature aggregates to edge attributes.
-- [ ] Add helper to convert subgraph edges (including rule feature aggregates) into PyG-ready tensors.
+- [x] Add helper to convert subgraph edges (including rule feature aggregates) into PyG-ready tensors.
 - [x] **Swap curated KG check to Monarch:** Replace/augment the current curated KG evidence (e.g., DisGeNET) with a Monarch-backed `curated_kg_match` signal for gene→disease edges, wired into the curated KG facts and positive-evidence gate. See [linkml-store Monarch KG](https://linkml.io/linkml-store/how-to/Query-the-Monarch-KG.html).
 - [ ] Define and document the concrete Neo4j/BioCypher schema for KG-Skeptic (node `id` as Monarch-style CURIE, relationship type as Biolink predicate) and add a loading script/notes for importing a Monarch-derived KG slice.
 - [ ] Expand predicate polarity map (positive/negative verbs and biolink aliases) used by opposite-predicate checks.
 - [ ] Add fixtures covering mixed/ambiguous context polarity to validate detection paths.
 
 ### Suspicion GNN (R-GCN)
-- [ ] Prototype suspicion GNN (2-layer R-GCN/GAT) over 2–3 hop subgraphs.
-- [ ] 16–32 hidden dims; edge suspicion binary/score output.
-- [ ] Synthesize training data: perturbed claims (flip direction, sibling phenotype replacement, inject retracted support).
-- [ ] Output per-edge suspicion scores.
-- [ ] Highlight top-k suspicious edges in UI subgraph.
+- [x] Prototype suspicion GNN (2-layer R-GCN/GAT) over 2–3 hop subgraphs.
+- [x] 16–32 hidden dims; edge suspicion binary/score output.
+- [x] Synthesize training data: perturbed claims (flip direction, sibling phenotype replacement, inject retracted support).
+- [x] Output per-edge suspicion scores.
+- [x] Extend `scripts/train_suspicion_gnn.py` with richer perturbations (sibling phenotype swaps, retracted-support injections) and optionally save the synthetic dataset for reuse.
+- [x] Highlight top-k suspicious edges in UI subgraph.
 
 ### Class-Incremental Error Types
 - [ ] Add class-incremental error prototype store: `TypeViolation`, `RetractedSupport`, `WeakEvidence`, `OntologyMismatch`.
