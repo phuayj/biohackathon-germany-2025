@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, Mapping
 
 from kg_skeptic.mcp.kg import (
     EdgeDirection,
@@ -192,6 +192,44 @@ def _compute_node_features(
     return features
 
 
+def _compute_rule_feature_aggregates(
+    rule_features: Mapping[str, object] | None,
+) -> dict[str, float]:
+    """Summarize per-rule feature weights into a compact aggregate vector.
+
+    The rule engine exposes a dense feature vector keyed by rule id. For
+    graph-level models we only need coarse aggregates. This helper computes
+    a small, stable set of statistics that can be attached to edge
+    attributes.
+    """
+    if not rule_features:
+        return {}
+
+    values: list[float] = []
+    for value in rule_features.values():
+        if isinstance(value, (int, float)):
+            values.append(float(value))
+
+    if not values:
+        return {}
+
+    total = sum(values)
+    abs_total = sum(abs(v) for v in values)
+    positive_total = sum(v for v in values if v > 0.0)
+    negative_total = sum(v for v in values if v < 0.0)
+    nonzero_count = sum(1 for v in values if v != 0.0)
+
+    return {
+        "rule_feature_sum": float(total),
+        "rule_feature_abs_sum": float(abs_total),
+        "rule_feature_positive_sum": float(positive_total),
+        "rule_feature_negative_sum": float(negative_total),
+        "rule_feature_nonzero_count": float(nonzero_count),
+        "rule_feature_max": float(max(values)),
+        "rule_feature_min": float(min(values)),
+    }
+
+
 def build_pair_subgraph(
     backend: KGBackend,
     subject: str,
@@ -199,6 +237,7 @@ def build_pair_subgraph(
     *,
     k: int = 2,
     direction: EdgeDirection = EdgeDirection.BOTH,
+    rule_features: dict[str, float] | None = None,
 ) -> Subgraph:
     """Build a heterogeneous subgraph around a (subject, object) pair.
 
@@ -209,6 +248,7 @@ def build_pair_subgraph(
       {gene, disease, phenotype, pathway}
     - keeps only G–G, G–Disease, G–Phenotype, and G–Pathway edges
     - computes basic degree features per node
+    - optionally attaches aggregated rule features to edge attributes
 
     Args:
         backend: Knowledge graph backend to query.
@@ -216,6 +256,10 @@ def build_pair_subgraph(
         object: Object node identifier (e.g., ``MONDO:0007254``).
         k: Number of hops for each ego network (default: 2).
         direction: Edge traversal direction (default: both).
+        rule_features: Optional mapping of rule ids to weights from the
+            Day 2 rule engine. When provided, compact aggregates are
+            attached to each edge under ``rule_*`` keys for downstream
+            GNNs.
 
     Returns:
         Subgraph capturing the merged ego networks and simple node features.
@@ -277,6 +321,18 @@ def build_pair_subgraph(
                 continue
             seen.add(key)
             edges.append(edge)
+
+    # Attach rule feature aggregates as edge attributes when available so
+    # downstream GNNs can condition on both structural and rule-level
+    # signals for this audited pair.
+    aggregates = _compute_rule_feature_aggregates(rule_features)
+    if aggregates:
+        for edge in edges:
+            props = edge.properties
+            for name, value in aggregates.items():
+                props[name] = value
+            is_claim_edge = {edge.subject, edge.object} == {subject, object}
+            props["is_claim_edge_for_rule_features"] = 1.0 if is_claim_edge else 0.0
 
     node_features = _compute_node_features(node_map, edges, subject, object)
 

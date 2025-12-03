@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import math
 
+import pytest
+
 from kg_skeptic.mcp.kg import InMemoryBackend, KGEdge
 from kg_skeptic.mcp.mini_kg import load_mini_kg_backend
 from kg_skeptic.subgraph import (
     Subgraph,
     build_pair_subgraph,
+    _compute_rule_feature_aggregates,
 )
 
 
@@ -246,3 +249,120 @@ def test_build_pair_subgraph_structural_metrics_on_toy_graph() -> None:
     assert obj_feats["paths_on_shortest_subject_object"] > 0.0
     # The off-path middle gene should not.
     assert middle_feats["paths_on_shortest_subject_object"] == 0.0
+
+
+def test_build_pair_subgraph_attaches_rule_feature_aggregates_to_edges() -> None:
+    """Rule feature aggregates should be exposed on edge attributes."""
+    backend = InMemoryBackend()
+
+    subject = "HGNC:2000"
+    obj = "MONDO:2000"
+    neighbor = "HGNC:2001"
+
+    edge_subject_object = KGEdge(
+        subject=subject,
+        predicate="biolink:contributes_to",
+        object=obj,
+        properties={},
+    )
+    edge_subject_neighbor = KGEdge(
+        subject=subject,
+        predicate="biolink:interacts_with",
+        object=neighbor,
+        properties={},
+    )
+
+    backend.add_edge(edge_subject_object)
+    backend.add_edge(edge_subject_neighbor)
+
+    rule_features = {
+        "rule_positive": 1.0,
+        "rule_negative": -0.5,
+        "rule_zero": 0.0,
+    }
+
+    subgraph = build_pair_subgraph(
+        backend,
+        subject,
+        obj,
+        k=1,
+        rule_features=rule_features,
+    )
+
+    assert subgraph.edges
+
+    expected_aggregates = {
+        "rule_feature_sum": 0.5,
+        "rule_feature_abs_sum": 1.5,
+        "rule_feature_positive_sum": 1.0,
+        "rule_feature_negative_sum": -0.5,
+        "rule_feature_nonzero_count": 2.0,
+        "rule_feature_max": 1.0,
+        "rule_feature_min": -0.5,
+    }
+
+    for edge in subgraph.edges:
+        props = edge.properties
+        # All edges in the subgraph should expose the aggregate vector.
+        for key, value in expected_aggregates.items():
+            assert key in props
+            assert props[key] == pytest.approx(value)
+
+        assert "is_claim_edge_for_rule_features" in props
+        if {edge.subject, edge.object} == {subject, obj}:
+            assert props["is_claim_edge_for_rule_features"] == pytest.approx(1.0)
+        else:
+            assert props["is_claim_edge_for_rule_features"] == pytest.approx(0.0)
+
+
+def test_compute_rule_feature_aggregates_empty_or_none() -> None:
+    """Aggregator should return an empty mapping for empty inputs."""
+    assert _compute_rule_feature_aggregates(None) == {}
+    assert _compute_rule_feature_aggregates({}) == {}
+
+
+def test_compute_rule_feature_aggregates_ignores_non_numeric() -> None:
+    """Non-numeric rule feature values should be ignored."""
+    aggregates = _compute_rule_feature_aggregates(
+        {
+            "numeric_one": 1.0,
+            "numeric_two": 2,
+            "non_numeric_str": "x",
+            "non_numeric_obj": object(),
+        }
+    )
+
+    # Only the numeric entries (1.0 and 2) contribute.
+    assert aggregates["rule_feature_sum"] == pytest.approx(3.0)
+    assert aggregates["rule_feature_abs_sum"] == pytest.approx(3.0)
+    assert aggregates["rule_feature_positive_sum"] == pytest.approx(3.0)
+    assert aggregates["rule_feature_negative_sum"] == pytest.approx(0.0)
+    assert aggregates["rule_feature_nonzero_count"] == pytest.approx(2.0)
+    assert aggregates["rule_feature_max"] == pytest.approx(2.0)
+    assert aggregates["rule_feature_min"] == pytest.approx(1.0)
+
+
+def test_build_pair_subgraph_without_rule_features_keeps_edge_properties_unchanged() -> None:
+    """When rule features are not provided, edges should not gain rule_* properties."""
+    backend = InMemoryBackend()
+
+    subject = "HGNC:3000"
+    obj = "MONDO:3000"
+    edge = KGEdge(
+        subject=subject,
+        predicate="biolink:contributes_to",
+        object=obj,
+        properties={"edge_type": "gene-disease"},
+    )
+    backend.add_edge(edge)
+
+    subgraph = build_pair_subgraph(backend, subject, obj, k=1)
+
+    assert subgraph.edges
+    for e in subgraph.edges:
+        props = e.properties
+        # Original property should be preserved.
+        assert props.get("edge_type") == "gene-disease"
+        # No rule_* keys or is_claim_edge_for_rule_features marker should be present.
+        assert not any(key.startswith("rule_feature_") for key in props)
+        assert "is_claim_edge_for_rule_features" not in props

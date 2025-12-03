@@ -77,7 +77,8 @@
 ### Subgraph Builder
 - [x] Fetch 2–3 hop ego-net given (subject, object).
 - [x] Compute node features: clustering, path counts, PPI weights (extend existing degree features).
-- [ ] Add rule feature aggregates to edge attributes.
+- [x] Add rule feature aggregates to edge attributes.
+- [ ] Add helper to convert subgraph edges (including rule feature aggregates) into PyG-ready tensors.
 - [ ] **Swap curated KG check to Monarch:** Once a Monarch KG-backed check is implemented, replace/augment the current curated KG evidence (e.g., DisGeNET) with a Monarch-based `curated_kg_match` for gene→disease edges. See [linkml-store Monarch KG](https://linkml.io/linkml-store/how-to/Query-the-Monarch-KG.html).
 - [ ] Expand predicate polarity map (positive/negative verbs and biolink aliases) used by opposite-predicate checks.
 - [ ] Add fixtures covering mixed/ambiguous context polarity to validate detection paths.
@@ -100,6 +101,7 @@
 - [ ] UI controls to filter subgraph edges by type (G–G, G–Dis, G–Phe, G–Path).
 - [ ] "Why flagged?" drawer: top rules + top suspicious edges.
 - [ ] One-click patch suggestions.
+- [ ] Surface per-edge rule feature aggregates in the subgraph edge table (e.g., show `rule_feature_sum` and `is_claim_edge_for_rule_features`).
 
 ---
 

@@ -473,7 +473,13 @@ def render_audit_card(result: AuditResult) -> None:
         with st.expander("Show 2-hop KG subgraph around this claim", expanded=False):
             try:
                 backend = _get_subgraph_backend()
-                subgraph = build_pair_subgraph(backend, subject_id, object_id, k=2)
+                subgraph = build_pair_subgraph(
+                    backend,
+                    subject_id,
+                    object_id,
+                    k=2,
+                    rule_features=evaluation.features,
+                )
             except Exception as exc:  # pragma: no cover - UI surface
                 st.error("Could not build a subgraph for this claim.")
                 st.caption(f"Details: {exc}")

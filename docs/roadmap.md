@@ -78,6 +78,7 @@
 - [x] Given (subject, object), fetch 2–3 hop ego-net with nodes {gene, disease, phenotype, pathway}.
 - [x] Edges: G–G, G–Phe, G–Dis, G–Path.
 - [x] Compute features: degree, clustering, path counts, PPI weights.
+- [x] Add rule feature aggregates to edge attributes.
 
 ### Suspicion GNN (PyG)
 - [ ] Model: 2-layer R-GCN with 16–32 hidden dims.
