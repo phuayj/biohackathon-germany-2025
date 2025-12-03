@@ -1055,6 +1055,11 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
+        st.divider()
+        st.markdown(
+            "[![GitHub](https://img.shields.io/badge/GitHub-Repository-blue?logo=github)](https://github.com/phuayj/biohackathon-germany-2025)"
+        )
+
     # Claim input section
     st.subheader("Enter Claim")
 

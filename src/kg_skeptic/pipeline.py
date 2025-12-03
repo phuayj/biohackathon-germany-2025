@@ -471,45 +471,45 @@ class ClaimNormalizer:
     def _pick_entities_from_text_gliner(
         self, text: str
     ) -> tuple[NormalizedEntity | None, NormalizedEntity | None]:
-        """Entity detection using GLiNER2 model."""
+        """Entity detection using GLiNER2 model.
+
+        Returns entities in text order (subject first, object second) to preserve
+        the semantic structure of the claim. GLiNER returns entities sorted by
+        their start position in the text.
+        """
         extractor = self._get_gliner_extractor()
         entities = extractor.extract(text)
 
-        gene: NormalizedEntity | None = None
-        target: NormalizedEntity | None = None
         normalized_entities: list[NormalizedEntity] = []
-
         for entity in entities:
             normalized = self._gliner_to_normalized(entity)
             normalized_entities.append(normalized)
-            if normalized.category == "gene" and gene is None:
-                gene = normalized
-            elif target is None:
-                target = normalized
-            if gene and target:
-                break
 
-        # If no gene was found but we have multiple entities, treat the first
-        # as subject and second as object to support non-gene relations (e.g., HPO siblings).
-        if not gene and len(normalized_entities) >= 2:
-            gene = normalized_entities[0]
-            target = normalized_entities[1]
-        elif gene and not target and len(normalized_entities) >= 2:
-            # If we found a gene but not a target, pick the next available entity.
-            target = normalized_entities[1]
+        # Return entities in text order: first entity is subject, second is object.
+        # This preserves the claim structure (e.g., "Disease activates Gene"
+        # should have Disease as subject, not Gene).
+        if len(normalized_entities) >= 2:
+            return normalized_entities[0], normalized_entities[1]
+        elif len(normalized_entities) == 1:
+            return normalized_entities[0], None
 
-        return gene, target
+        return None, None
 
     def _pick_entities_from_text_dict(
         self, text: str
     ) -> tuple[NormalizedEntity | None, NormalizedEntity | None]:
-        """Heuristic entity detection using dictionary matching."""
+        """Heuristic entity detection using dictionary matching.
+
+        Returns entities in text order (subject first, object second) to preserve
+        the semantic structure of the claim.
+        """
         text_lower = text.lower()
-        gene: NormalizedEntity | None = None
-        target: NormalizedEntity | None = None
+        # Collect all matches with their positions in the text
+        matches: list[tuple[int, NormalizedEntity]] = []
 
         for label, (ent_id, category) in self.label_index.items():
-            if label in text_lower:
+            pos = text_lower.find(label)
+            if pos >= 0:
                 entity = NormalizedEntity(
                     id=ent_id,
                     label=label,
@@ -518,13 +518,18 @@ class ClaimNormalizer:
                     mention=label,
                     source="mini_kg",
                 )
-                if category == "gene" and gene is None:
-                    gene = entity
-                elif target is None:
-                    target = entity
-            if gene and target:
-                break
-        return gene, target
+                matches.append((pos, entity))
+
+        # Sort by position in text to respect claim structure
+        matches.sort(key=lambda x: x[0])
+
+        # Return first two entities in text order
+        if len(matches) >= 2:
+            return matches[0][1], matches[1][1]
+        elif len(matches) == 1:
+            return matches[0][1], None
+
+        return None, None
 
     def _pick_entities_from_text(
         self, text: str
@@ -1222,10 +1227,54 @@ def build_rule_facts(
     subject_category = triple.subject.category
     object_category = triple.object.category
 
+    # Check text_predicate from qualifiers for more precise validation
+    qualifiers_map_early = triple.qualifiers if isinstance(triple.qualifiers, Mapping) else {}
+    text_predicate = qualifiers_map_early.get("text_predicate")
+    predicate_for_validation = (
+        text_predicate if isinstance(text_predicate, str) else predicate
+    ).lower()
+
     # Allow ontology peer relations (e.g., sibling_of) between like-typed entities.
-    is_peer_relation = predicate.lower() in {"sibling_of"}
-    domain_valid = subject_category in {"gene"}
-    range_valid = object_category in {"disease", "phenotype", "pathway", "gene"}
+    is_peer_relation = predicate_for_validation in {"sibling_of"}
+
+    # Predicate-aware domain/range validation
+    # Pure regulatory predicates (activates, inhibits, etc.) where both subject and
+    # object should be gene/pathway (e.g., "STAT3 activates JAK2", "insulin inhibits glucagon")
+    pure_regulatory_predicates = {
+        "activates",
+        "activate",
+        "inhibits",
+        "inhibit",
+        "upregulates",
+        "upregulate",
+        "downregulates",
+        "downregulate",
+        "positively_regulates",
+        "negatively_regulates",
+        "stimulates",
+        "stimulate",
+        "blocks",
+        "block",
+    }
+
+    # Check if this is a pure regulatory context (gene/pathway → gene/pathway)
+    # vs an association context (gene → disease/phenotype)
+    is_pure_regulatory = (
+        predicate_for_validation in pure_regulatory_predicates
+        and object_category in {"gene", "pathway"}
+    )
+
+    if is_pure_regulatory:
+        # For pure regulatory predicates with gene/pathway object,
+        # subject must also be gene or pathway (not disease)
+        domain_valid = subject_category in {"gene", "pathway"}
+        range_valid = object_category in {"gene", "pathway"}
+    else:
+        # For association predicates or regulatory predicates with disease/phenotype object
+        # (e.g., "BRCA1 increases breast cancer risk"), gene->disease is valid
+        domain_valid = subject_category in {"gene"}
+        range_valid = object_category in {"disease", "phenotype", "pathway", "gene"}
+
     if is_peer_relation and subject_category == object_category and subject_category != "unknown":
         domain_valid = True
         range_valid = True
