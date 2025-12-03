@@ -111,6 +111,38 @@
 - [ ] Add Node2Vec embeddings (d=64) from Neo4j GDS or separate embedding step per spec §3.0 (optional).
 - [ ] Add self-supervised link prediction pretrain (GAE/GraphSAGE) per spec §D (optional).
 
+### Live Graph & Evidence Overlay (NEW)
+> Transforms the graph from a static cache into a **live view** over curated sources.
+
+#### MCP Provenance Metadata
+- [ ] Add provenance metadata to MCP tool returns: `source_db`, `db_version`, `retrieved_at`, `cache_ttl` fields.
+- [ ] Standardize provenance schema across all MCP adapters (EuropePMC, CrossRef, IDs, Pathways, DisGeNET, KG).
+- [ ] Wire `live_edges_for_gene(gene_id)` wrapper that fans out to Reactome/GO/IntAct and returns edges with raw evidence.
+
+#### Neo4j Provenance Schema
+- [ ] Define Neo4j edge properties for provenance: `source_db`, `db_version`, `retrieved_at`, `cache_ttl`, record hash.
+- [ ] Add Neo4j merge patterns that capture versioning and timestamps on edges.
+- [ ] Add "Rebuild from sources" functionality to refetch a single edge live.
+
+#### Evidence Overlays
+- [ ] **Freshness overlay:** Gray gradient by age of newest PMID (darker = older).
+- [ ] **Multiplicity overlay:** Edge thickness proportional to number of independent sources.
+- [ ] Add `overlay_evidence(edge)` function that enriches edges with freshest_year, has_retraction, source_count.
+
+#### Evidence-Driven Subgraph Construction
+- [ ] Build subgraphs **from evidence outward**: PMIDs → extract entities → link to IDs → pull curated edges.
+- [ ] Tag edges by origin: `origin: 'paper' | 'curated' | 'agent'`.
+- [ ] UI toggle to filter subgraph by origin (show only paper-derived, curated, or all).
+
+#### Live vs Frozen Mode
+- [ ] Expose `use_live` flag in Streamlit sidebar as "Frozen graph" / "Live graph" toggle.
+- [ ] Show "last checked" badge on cached data with timestamp.
+- [ ] Add manual single-edge recheck button in Edge Inspector.
+
+### What-If Demos
+- [ ] **Simulate retraction toggle:** Temporarily mark a PMID as retracted → watch edge turn red, score drop, PASS→FAIL.
+- [ ] **Ontology strictness slider:** Strict (descendant HPO only) vs Lenient (allow siblings) → edges appear/disappear.
+
 ### Class-Incremental Error Types
 - [ ] Add class-incremental error prototype store: `TypeViolation`, `RetractedSupport`, `WeakEvidence`, `OntologyMismatch`.
 - [ ] Feature centroid computation for new error types.
@@ -123,6 +155,15 @@
 - [ ] "Why flagged?" drawer: top rules + top suspicious edges.
 - [ ] One-click patch suggestions.
 - [ ] Surface per-edge rule feature aggregates in the subgraph edge table (e.g., show `rule_feature_sum` and `is_claim_edge_for_rule_features`).
+
+#### Edge Inspector Panel (NEW)
+- [ ] Right-panel Edge Inspector on edge click showing:
+  - Exact sources (PMIDs/DOIs) with "Open" buttons.
+  - "Why this edge exists" (DB + version + query used).
+  - Rule footprint (which rules passed/failed for this edge).
+  - Patch suggestions (nearest valid ontology term, alternate PMIDs).
+- [ ] Edge color coding: red = retracted, amber = expression of concern, green = clean.
+- [ ] Edge thickness by evidence multiplicity.
 
 ---
 
@@ -179,6 +220,7 @@
 - [ ] **Scene A (clean claim):** PASS with multi-source support; show subgraph; explain rules.
 - [ ] **Scene B (tainted claim):** FAIL due to retraction; re-run with "Auditor OFF" comparison.
 - [ ] **Scene C (fix):** Accept patch suggestion → re-audit → PASS/WARN.
+- [ ] **A/B "Frozen vs Live" demo:** Run same claim in frozen mode (cached) vs live mode (refetch + overlay) to show graph reacting to evidence changes.
 
 ### Packaging
 - [ ] `docker compose up` brings: MCP tools, Streamlit UI, agent service.
@@ -189,6 +231,7 @@
 - [ ] `RULES.md` documenting each rule's rationale and examples.
 - [ ] `EVAL.md` with datasets, metrics, ablation charts.
 - [ ] Short screen-capture of flow for judges.
+- [ ] 20–30s screen capture showing edges changing color/width as evidence updates (live overlay demo).
 
 ### Stretch Features (If Time)
 - [ ] **Strict vs Lenient auditor** toggle.

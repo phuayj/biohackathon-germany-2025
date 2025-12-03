@@ -23,7 +23,7 @@ from kg_skeptic.mcp.kg import InMemoryBackend, KGBackend, KGEdge, KGTool
 from .models import Claim, EntityMention, Report
 from .mcp.mini_kg import load_mini_kg_backend
 from .provenance import CitationProvenance, ProvenanceFetcher
-from .rules import RuleEngine, RuleEvaluation
+from .rules import RuleEngine, RuleEvaluation, RuleTraceEntry
 from .ner import GLiNER2Extractor, ExtractedEntity
 
 if TYPE_CHECKING:
@@ -1654,6 +1654,63 @@ class SkepticPipeline:
             "top_edges": top_edges,
         }
 
+    def _query_monarch_gene_disease(
+        self,
+        gene_id: str,
+        disease_id: str,
+        ncbi_gene_id: str | None = None,
+    ) -> EdgeQueryResult | None:
+        """Query Monarch for gene-disease associations with fallback strategies.
+
+        Monarch indexes genes by NCBIGene IDs (e.g., NCBIGene:1080) rather than
+        HGNC IDs. This method tries multiple ID formats and predicate options
+        to maximize the chance of finding a match:
+
+        1. NCBIGene ID (if available) with predicate filter
+        2. NCBIGene ID (if available) without predicate filter
+        3. Original gene ID (e.g., HGNC) with predicate filter
+        4. Original gene ID without predicate filter
+
+        Returns the first successful result with edges, or None.
+        """
+        monarch_tool = self._get_monarch_kg_tool()
+        if monarch_tool is None:
+            return None
+
+        # Build list of gene IDs to try (NCBIGene first if available)
+        gene_ids_to_try: list[str] = []
+        if ncbi_gene_id:
+            # Monarch uses NCBIGene: prefix
+            ncbi_curie = f"NCBIGene:{ncbi_gene_id}"
+            gene_ids_to_try.append(ncbi_curie)
+        gene_ids_to_try.append(gene_id)
+
+        # Predicates to try: specific first, then any
+        predicates_to_try: list[str | None] = [
+            "biolink:gene_associated_with_condition",
+            "biolink:causes",
+            None,  # Any predicate
+        ]
+
+        for try_gene_id in gene_ids_to_try:
+            for try_predicate in predicates_to_try:
+                try:
+                    result = monarch_tool.query_edge(
+                        try_gene_id,
+                        disease_id,
+                        predicate=try_predicate,
+                    )
+                    if result is not None and result.exists:
+                        return result
+                except Exception:
+                    continue
+
+        # Return the last attempted result even if no edges found
+        try:
+            return monarch_tool.query_edge(gene_id, disease_id, predicate=None)
+        except Exception:
+            return None
+
     def _build_curated_kg_facts(self, triple: NormalizedTriple) -> dict[str, object]:
         """Best-effort curated KG facts for gene–disease support.
 
@@ -1695,21 +1752,16 @@ class SkepticPipeline:
             # Even when DisGeNET cannot be queried due to missing NCBI/UMLS
             # metadata, we may still be able to query Monarch using the
             # normalized CURIEs on the triple itself.
-            monarch_tool = self._get_monarch_kg_tool()
-            if monarch_tool is not None:
-                try:
-                    monarch_result = monarch_tool.query_edge(
-                        triple.subject.id,
-                        triple.object.id,
-                        predicate="biolink:gene_associated_with_condition",
-                    )
-                except Exception:
-                    monarch_result = None
+            monarch_result = self._query_monarch_gene_disease(
+                triple.subject.id,
+                triple.object.id,
+                ncbi_gene_id=ncbi_gene_id,
+            )
 
-                if monarch_result is not None:
-                    facts["monarch_checked"] = True
-                    facts["monarch_support"] = bool(monarch_result.exists)
-                    facts["monarch_edge_count"] = len(monarch_result.edges)
+            if monarch_result is not None:
+                facts["monarch_checked"] = True
+                facts["monarch_support"] = bool(monarch_result.exists)
+                facts["monarch_edge_count"] = len(monarch_result.edges)
 
             # Aggregate a curated_kg_match flag for downstream rules.
             facts["curated_kg_match"] = bool(
@@ -1721,21 +1773,16 @@ class SkepticPipeline:
         if tool is None:
             # DisGeNET disabled or unavailable; Monarch may still provide
             # curated KG evidence when configured.
-            monarch_tool = self._get_monarch_kg_tool()
-            if monarch_tool is not None:
-                try:
-                    monarch_result = monarch_tool.query_edge(
-                        triple.subject.id,
-                        triple.object.id,
-                        predicate="biolink:gene_associated_with_condition",
-                    )
-                except Exception:
-                    monarch_result = None
+            monarch_result = self._query_monarch_gene_disease(
+                triple.subject.id,
+                triple.object.id,
+                ncbi_gene_id=ncbi_gene_id,
+            )
 
-                if monarch_result is not None:
-                    facts["monarch_checked"] = True
-                    facts["monarch_support"] = bool(monarch_result.exists)
-                    facts["monarch_edge_count"] = len(monarch_result.edges)
+            if monarch_result is not None:
+                facts["monarch_checked"] = True
+                facts["monarch_support"] = bool(monarch_result.exists)
+                facts["monarch_edge_count"] = len(monarch_result.edges)
 
             facts["curated_kg_match"] = bool(
                 facts.get("disgenet_support") or facts.get("monarch_support")
@@ -1765,21 +1812,16 @@ class SkepticPipeline:
                 continue
 
         # Monarch KG-backed curated support (optional, complements DisGeNET).
-        monarch_tool = self._get_monarch_kg_tool()
-        if monarch_tool is not None:
-            try:
-                monarch_result = monarch_tool.query_edge(
-                    triple.subject.id,
-                    triple.object.id,
-                    predicate="biolink:gene_associated_with_condition",
-                )
-            except Exception:
-                monarch_result = None
+        monarch_result = self._query_monarch_gene_disease(
+            triple.subject.id,
+            triple.object.id,
+            ncbi_gene_id=ncbi_gene_id,
+        )
 
-            if monarch_result is not None:
-                facts["monarch_checked"] = True
-                facts["monarch_support"] = bool(monarch_result.exists)
-                facts["monarch_edge_count"] = len(monarch_result.edges)
+        if monarch_result is not None:
+            facts["monarch_checked"] = True
+            facts["monarch_support"] = bool(monarch_result.exists)
+            facts["monarch_edge_count"] = len(monarch_result.edges)
 
         # Aggregate a curated_kg_match flag for downstream rules and gating.
         facts["curated_kg_match"] = bool(
@@ -1810,6 +1852,7 @@ class SkepticPipeline:
 
         # ------------------------------------------------------------------
         # Hard gates for retractions / expressions of concern
+        # These gates override score-based verdicts and add trace entries.
         # ------------------------------------------------------------------
         evidence_raw = facts.get("evidence")
         evidence = evidence_raw if isinstance(evidence_raw, Mapping) else {}
@@ -1830,27 +1873,70 @@ class SkepticPipeline:
         # Any retracted citation forces a FAIL verdict, regardless of score.
         if retracted_count > 0:
             verdict = "FAIL"
+            evaluation.trace.add(RuleTraceEntry(
+                rule_id="gate:retraction",
+                score=0.0,
+                because=f"because {retracted_count} citation(s) are retracted (hard gate override)",
+                description="Retraction gate: forces FAIL regardless of score",
+            ))
         # Expressions of concern downgrade PASS to WARN (but do not upgrade
         # existing WARN/FAIL verdicts).
         elif concern_count > 0 and verdict == "PASS":
             verdict = "WARN"
+            evaluation.trace.add(RuleTraceEntry(
+                rule_id="gate:expression_of_concern",
+                score=0.0,
+                because=f"because {concern_count} citation(s) have expressions of concern (downgrade PASS → WARN)",
+                description="Expression of concern gate: downgrades PASS to WARN",
+            ))
 
         # Gate PASS on positive evidence signals so structurally well-formed
         # but weakly supported claims are downgraded to WARN.
         if verdict == "PASS" and not self._has_positive_evidence(facts):
             verdict = "WARN"
+            curated = facts.get("curated_kg")
+            curated_dict = curated if isinstance(curated, Mapping) else {}
+            monarch_checked = curated_dict.get("monarch_checked", False)
+            disgenet_checked = curated_dict.get("disgenet_checked", False)
+            evaluation.trace.add(RuleTraceEntry(
+                rule_id="gate:positive_evidence_required",
+                score=0.0,
+                because=(
+                    "because PASS requires either multiple independent sources or curated KG support "
+                    f"(has_multiple_sources=False, monarch_checked={monarch_checked}, disgenet_checked={disgenet_checked})"
+                ),
+                description="Positive evidence gate: downgrades PASS to WARN without multi-source or curated KG",
+            ))
 
         conflicts_raw = facts.get("conflicts")
         conflicts = conflicts_raw if isinstance(conflicts_raw, Mapping) else {}
         if conflicts.get("self_negation_conflict"):
             verdict = "FAIL"
+            evaluation.trace.add(RuleTraceEntry(
+                rule_id="gate:self_negation",
+                score=0.0,
+                because="because the claim contains self-negation (hard gate override)",
+                description="Self-negation gate: forces FAIL",
+            ))
         if conflicts.get("opposite_predicate_same_context"):
             verdict = "FAIL"
+            evaluation.trace.add(RuleTraceEntry(
+                rule_id="gate:opposite_predicate",
+                score=0.0,
+                because="because the predicate conflicts with known context (hard gate override)",
+                description="Opposite predicate gate: forces FAIL",
+            ))
 
         extraction_raw = facts.get("extraction")
         extraction = extraction_raw if isinstance(extraction_raw, Mapping) else {}
         if extraction.get("is_low_confidence"):
             verdict = "FAIL"
+            evaluation.trace.add(RuleTraceEntry(
+                rule_id="gate:low_confidence",
+                score=0.0,
+                because="because the extraction has low confidence with hedging language (hard gate override)",
+                description="Low confidence gate: forces FAIL",
+            ))
 
         # Downgrade ontology sibling conflicts to WARN so sibling-like pairs
         # are surfaced even if other signals are strong.
@@ -1858,6 +1944,12 @@ class SkepticPipeline:
         ontology = ontology_raw if isinstance(ontology_raw, Mapping) else {}
         if verdict == "PASS" and ontology.get("is_sibling_conflict"):
             verdict = "WARN"
+            evaluation.trace.add(RuleTraceEntry(
+                rule_id="gate:sibling_conflict",
+                score=0.0,
+                because="because subject and object appear to be ontology siblings (downgrade PASS → WARN)",
+                description="Sibling conflict gate: downgrades PASS to WARN",
+            ))
 
         # Optional Day 3 suspicion GNN overlay (does not affect verdict).
         suspicion: dict[str, object] = {}
