@@ -53,6 +53,8 @@ def build_pyvis_network(
     selected_edge_types: set[str] | None = None,
     claim_subject: str | None = None,
     claim_object: str | None = None,
+    edge_origins: dict[tuple[str, str, str], str] | None = None,
+    selected_origins: set[str] | None = None,
     height: str = "600px",
     width: str = "100%",
 ) -> Network:
@@ -65,6 +67,10 @@ def build_pyvis_network(
         selected_edge_types: Filter to these edge types (e.g., {"G-G", "G-Dis"})
         claim_subject: Subject node ID of the claim (for highlighting)
         claim_object: Object node ID of the claim (for highlighting)
+        edge_origins: Optional mapping of (subj, pred, obj) -> origin label
+            such as "paper", "curated", or "agent".
+        selected_origins: Optional filter set of allowed origin labels. When
+            empty or None, all origins are shown.
         height: HTML height string
         width: HTML width string
 
@@ -74,6 +80,8 @@ def build_pyvis_network(
     suspicion_scores = suspicion_scores or {}
     edge_statuses = edge_statuses or {}
     selected_edge_types = selected_edge_types or {"G-G", "G-Dis", "G-Phe", "G-Path", "Other"}
+    edge_origins = edge_origins or {}
+    selected_origins = selected_origins or set()
 
     net = Network(
         height=height,
@@ -169,7 +177,7 @@ def build_pyvis_network(
             borderWidthSelected=5,
         )
 
-    # Add edges (filtered by type)
+    # Add edges (filtered by type and origin)
     for edge in subgraph.edges:
         subj_cat = category_by_id.get(edge.subject, "unknown")
         obj_cat = category_by_id.get(edge.object, "unknown")
@@ -180,6 +188,16 @@ def build_pyvis_network(
             continue
 
         edge_key = (edge.subject, edge.predicate, edge.object)
+
+        # Resolve origin for this edge.
+        origin = edge_origins.get(edge_key)
+        if origin is None:
+            raw_origin = edge.properties.get("origin")
+            origin = str(raw_origin) if isinstance(raw_origin, str) else "curated"
+
+        # Apply origin filter when enabled.
+        if selected_origins and origin not in selected_origins:
+            continue
 
         # Get suspicion score
         score = suspicion_scores.get(edge_key, 0.0)
@@ -213,6 +231,7 @@ def build_pyvis_network(
             f"Sources: {source_count}",
             f"Suspicion: {score:.2f}",
             f"Status: {status}",
+            f"Origin: {origin}",
         ]
         tooltip = "<br>".join(tooltip_lines)
 

@@ -436,6 +436,47 @@ def render_provenance(provenance: list[CitationProvenance]) -> None:
             st.caption(f"[Link]({record.url}) • source={record.source}")
 
 
+def _normalize_citation_identifier(identifier: str) -> str:
+    """Normalize citation identifiers for matching across provenance and edges."""
+    value = identifier.strip()
+    if not value:
+        return value
+
+    lower = value.lower()
+
+    # Normalize DOI URLs and prefixes to bare DOI strings.
+    if lower.startswith("https://doi.org/") or lower.startswith("http://doi.org/"):
+        value = value.split("doi.org/", 1)[-1]
+        lower = value.lower()
+    if lower.startswith("doi:"):
+        value = value.split(":", 1)[-1].strip()
+        lower = value.lower()
+
+    upper = value.upper()
+
+    # Normalize PMCID-style identifiers.
+    if upper.startswith("PMCID:"):
+        code = upper.split(":", 1)[-1].strip()
+        if not code.startswith("PMC"):
+            code = f"PMC{code}"
+        return code
+    if upper.startswith("PMC"):
+        return upper
+
+    # Normalize PMID-style identifiers.
+    if upper.startswith("PMID:"):
+        digits = upper.split(":", 1)[-1].strip()
+        return f"PMID:{digits}"
+    if value.isdigit():
+        return f"PMID:{value}"
+
+    # Bare DOIs starting with 10.* are returned as-is.
+    if value.startswith("10."):
+        return value
+
+    return value
+
+
 def render_edge_inspector(
     edge: KGEdge,
     subgraph: Subgraph,
@@ -458,6 +499,11 @@ def render_edge_inspector(
     label = f"{edge.subject_label or edge.subject} --[{pred}]--> {edge.object_label or edge.object}"
 
     with st.expander(f"Edge Inspector: {label}", expanded=True):
+        # Origin badge (when available)
+        origin_raw = edge.properties.get("origin")
+        if isinstance(origin_raw, str) and origin_raw:
+            st.caption(f"Origin: `{origin_raw}`")
+
         # Sources section
         st.markdown("**Sources**")
         if inspector_data.sources:
@@ -594,6 +640,8 @@ def render_subgraph_visualization(
     # Initialize session state for filters
     if "edge_type_filter" not in st.session_state:
         st.session_state.edge_type_filter = ["G-G", "G-Dis", "G-Phe", "G-Path", "Other"]
+    if "edge_origin_mode" not in st.session_state:
+        st.session_state.edge_origin_mode = "All origins"
     if "selected_edge_key" not in st.session_state:
         st.session_state.selected_edge_key = None
     if "claim_relevant_only" not in st.session_state:
@@ -605,21 +653,30 @@ def render_subgraph_visualization(
     if isinstance(top_edges, list):
         for item in top_edges:
             if isinstance(item, Mapping):
-                key = (
+                edge_key = (
                     str(item.get("subject", "")),
                     str(item.get("predicate", "")),
                     str(item.get("object", "")),
                 )
                 try:
-                    suspicion_scores[key] = float(item.get("score", 0.0))
+                    suspicion_scores[edge_key] = float(item.get("score", 0.0))
                 except (TypeError, ValueError):
                     pass
 
-    # Build edge status dict from provenance
+    # Build edge status and origin dicts from provenance and edge metadata.
     edge_statuses: dict[tuple[str, str, str], str] = {}
-    prov_status_by_id = {p.identifier: p.status for p in provenance}
+    edge_origins: dict[tuple[str, str, str], str] = {}
+
+    prov_status_by_id: dict[str, str] = {}
+    for record in provenance:
+        citation_key = _normalize_citation_identifier(record.identifier)
+        prov_status_by_id[citation_key] = record.status
+
+    evidence_ids: set[str] = set(prov_status_by_id.keys())
+
     for edge in subgraph.edges:
-        statuses = [prov_status_by_id.get(src, "unknown") for src in edge.sources]
+        normalized_sources = [_normalize_citation_identifier(src) for src in edge.sources]
+        statuses = [prov_status_by_id.get(src, "unknown") for src in normalized_sources]
         if "retracted" in statuses:
             status = "retracted"
         elif "concern" in statuses:
@@ -628,7 +685,33 @@ def render_subgraph_visualization(
             status = "clean"
         else:
             status = "unknown"
-        edge_statuses[(edge.subject, edge.predicate, edge.object)] = status
+        edge_key = (edge.subject, edge.predicate, edge.object)
+        edge_statuses[edge_key] = status
+
+        # Origin classification:
+        # - agent: direct claim endpoints flagged via rule-feature aggregates
+        # - paper: edges whose sources intersect claim evidence
+        # - curated: all remaining KG edges
+        props = edge.properties
+        is_claim_edge = False
+        flag = props.get("is_claim_edge_for_rule_features")
+        if isinstance(flag, (int, float, str)):
+            try:
+                is_claim_edge = float(flag) > 0.5
+            except (TypeError, ValueError):
+                is_claim_edge = False
+
+        has_evidence = any(src in evidence_ids for src in normalized_sources)
+
+        if is_claim_edge:
+            origin = "agent"
+        elif has_evidence:
+            origin = "paper"
+        else:
+            origin = "curated"
+
+        props.setdefault("origin", origin)
+        edge_origins[edge_key] = origin
 
     # Claim-relevant filter toggle
     claim_relevant_only = st.toggle(
@@ -680,6 +763,28 @@ def render_subgraph_visualization(
         f"Nodes: {len(display_subgraph.nodes)} | Edges: {len(display_subgraph.edges)} | k={subgraph.k_hops}{total_label}"
     )
 
+    # Edge origin filter
+    st.markdown("**Filter by Evidence Origin**")
+    origin_mode = st.radio(
+        "Select origin",
+        options=["All origins", "Paper-derived", "Curated KG", "Agent claim"],
+        index=["All origins", "Paper-derived", "Curated KG", "Agent claim"].index(
+            st.session_state.edge_origin_mode
+        ),
+        key="edge_origin_radio",
+        horizontal=True,
+    )
+    st.session_state.edge_origin_mode = origin_mode
+
+    if origin_mode == "Paper-derived":
+        selected_origins: set[str] | None = {"paper"}
+    elif origin_mode == "Curated KG":
+        selected_origins = {"curated"}
+    elif origin_mode == "Agent claim":
+        selected_origins = {"agent"}
+    else:
+        selected_origins = None
+
     # Edge type filter
     st.markdown("**Filter by Edge Type**")
     edge_types = st.multiselect(
@@ -730,6 +835,8 @@ def render_subgraph_visualization(
             selected_edge_types=set(edge_types),
             claim_subject=subject_id,
             claim_object=object_id,
+            edge_origins=edge_origins,
+            selected_origins=selected_origins or set(),
         )
 
         html = network_to_html(net)

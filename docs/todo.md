@@ -131,9 +131,9 @@
 - [ ] Add `overlay_evidence(edge)` function that enriches edges with freshest_year, has_retraction, source_count.
 
 #### Evidence-Driven Subgraph Construction
-- [ ] Build subgraphs **from evidence outward**: PMIDs → extract entities → link to IDs → pull curated edges.
-- [ ] Tag edges by origin: `origin: 'paper' | 'curated' | 'agent'`.
-- [ ] UI toggle to filter subgraph by origin (show only paper-derived, curated, or all).
+- [x] Build subgraphs **from evidence outward**: PMIDs → extract entities → link to IDs → pull curated edges.
+- [x] Tag edges by origin: `origin: 'paper' | 'curated' | 'agent'`.
+- [x] UI toggle to filter subgraph by origin (show only paper-derived, curated, or all).
 
 #### Live vs Frozen Mode
 - [ ] Expose `use_live` flag in Streamlit sidebar as "Frozen graph" / "Live graph" toggle.
@@ -156,6 +156,7 @@
 - [x] "Why flagged?" drawer: top rules + top suspicious edges.
 - [x] One-click patch suggestions.
 - [ ] Surface per-edge rule feature aggregates in the subgraph edge table (e.g., show `rule_feature_sum` and `is_claim_edge_for_rule_features`).
+- [ ] Add a concise legend in the subgraph UI explaining edge origin categories (`paper`, `curated`, `agent`) and how filters affect which edges are shown.
 
 #### Edge Inspector Panel (Done)
 - [x] Inline Edge Inspector on edge click showing:

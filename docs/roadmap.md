@@ -93,8 +93,8 @@
 - [ ] New error type → compute feature centroid; update linear head with rehearsal on 30–50 example buffer.
 
 ### UI v2
-- [ ] Subgraph viz with heat coloring by suspicion score.
-- [ ] "Why flagged?" drawer listing top rules and top suspicious edges.
+- [x] Subgraph viz with heat coloring by suspicion score.
+- [x] "Why flagged?" drawer listing top rules and top suspicious edges.
 
 **Definition of Done:** For seeded bad claims, UI highlights plausible problematic hop and labels error type; adding new error type updates behavior without GNN retraining.
 
