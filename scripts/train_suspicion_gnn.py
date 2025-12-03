@@ -32,7 +32,7 @@ import random
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Sequence, Tuple
+from typing import Any, Dict, Iterable, Mapping, Sequence, Tuple, cast
 
 import torch
 from torch import Tensor
@@ -40,6 +40,7 @@ from torch import nn
 
 from kg_skeptic.mcp.mini_kg import iter_mini_kg_edges, load_mini_kg_backend
 from kg_skeptic.mcp.kg import KGEdge, KGNode
+from kg_skeptic.pipeline import _category_from_id
 from kg_skeptic import subgraph as subgraph_module
 from kg_skeptic.subgraph import Subgraph, build_pair_subgraph
 from kg_skeptic.suspicion_gnn import (
@@ -124,7 +125,14 @@ def _edge_is_suspicious(edge: KGEdge) -> bool:
         return True
 
     perturbation_type = str(props.get("perturbation_type", "")).lower()
-    if perturbation_type in {"direction_flip", "sibling_phenotype", "retracted_support"}:
+    if perturbation_type in {
+        "direction_flip",
+        "sibling_phenotype",
+        "retracted_support",
+        "predicate_swap",
+        "ppi_noise",
+        "evidence_ablation",
+    }:
         return True
 
     has_retracted_support = bool(props.get("has_retracted_support", False))
@@ -184,8 +192,14 @@ def _build_perturbed_subgraph(
     for edge in base.edges:
         key = (edge.subject, edge.predicate, edge.object)
         props = dict(edge.properties)
+        sources = list(edge.sources)
+
         if key in overrides:
-            props.update(overrides[key])
+            ov = overrides[key]
+            props.update(ov)
+            if "sources" in ov:
+                sources = cast(list[str], ov["sources"])
+
         edges.append(
             KGEdge(
                 subject=edge.subject,
@@ -194,7 +208,7 @@ def _build_perturbed_subgraph(
                 subject_label=edge.subject_label,
                 object_label=edge.object_label,
                 properties=props,
-                sources=list(edge.sources),
+                sources=sources,
             )
         )
 
@@ -329,6 +343,144 @@ def _synthesize_sibling_phenotype_swaps(
         seen_triples.add(key)
 
     return swapped
+
+
+def _synthesize_predicate_swap(
+    subgraph: Subgraph,
+    rng: random.Random,
+    *,
+    max_swaps: int = 8,
+) -> Sequence[KGEdge]:
+    """Generate synthetic edges by swapping predicates to incompatible ones.
+
+    e.g. change 'associated_with' to 'interacts_with' between Gene and Phenotype
+    if that is semantically invalid (or just unlikely).
+    """
+    swapped: list[KGEdge] = []
+    seen_triples = {(e.subject, e.predicate, e.object) for e in subgraph.edges}
+
+    for edge in subgraph.edges:
+        if len(swapped) >= max_swaps:
+            break
+
+        # Only swap if we can find a "wrong" predicate
+        # For demo, we just swap any association to "incompatible_interaction"
+        if rng.random() > 0.2:
+            continue
+
+        new_pred = "incompatible_interaction"
+        if edge.predicate == new_pred:
+            continue
+
+        key = (edge.subject, new_pred, edge.object)
+        if key in seen_triples:
+            continue
+
+        props = dict(edge.properties)
+        props["perturbation_type"] = "predicate_swap"
+        props["is_perturbed_edge"] = 1.0
+
+        swapped_edge = KGEdge(
+            subject=edge.subject,
+            predicate=new_pred,
+            object=edge.object,
+            subject_label=edge.subject_label,
+            object_label=edge.object_label,
+            properties=props,
+            sources=list(edge.sources),
+        )
+        swapped.append(swapped_edge)
+        seen_triples.add(key)
+
+    return swapped
+
+
+def _synthesize_ppi_noise(
+    subgraph: Subgraph,
+    rng: random.Random,
+    *,
+    max_noise: int = 4,
+) -> Sequence[KGEdge]:
+    """Generate spurious PPI edges between disconnected genes."""
+    noise: list[KGEdge] = []
+    nodes = subgraph.nodes
+    gene_ids = [n.id for n in nodes if n.category == "gene" or _category_from_id(n.id) == "gene"]
+
+    if len(gene_ids) < 2:
+        return []
+
+    seen_triples = {(e.subject, e.predicate, e.object) for e in subgraph.edges}
+
+    count = 0
+    # Try a few times to find disconnected pairs
+    for _ in range(max_noise * 3):
+        if count >= max_noise:
+            break
+
+        u, v = rng.sample(gene_ids, 2)
+        key = (u, "interacts_with", v)
+        if key in seen_triples:
+            continue
+
+        # Check if reverse exists
+        if (v, "interacts_with", u) in seen_triples:
+            continue
+
+        props = {
+            "confidence": 0.05,  # Very low confidence
+            "cohort": "synthetic_noise",
+            "perturbation_type": "ppi_noise",
+            "is_perturbed_edge": 1.0,
+        }
+
+        noise_edge = KGEdge(
+            subject=u,
+            predicate="interacts_with",
+            object=v,
+            properties=props,
+            sources=[],  # No sources
+        )
+        noise.append(noise_edge)
+        seen_triples.add(key)
+        count += 1
+
+    return noise
+
+
+def _synthesize_evidence_ablation(
+    subgraph: Subgraph,
+    rng: random.Random,
+    *,
+    fraction: float = 0.15,
+) -> Dict[Tuple[str, str, str], Dict[str, Any]]:
+    """Remove sources from a subset of edges to simulate weak/unsupported claims."""
+    overrides: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    for edge in subgraph.edges:
+        if rng.random() > fraction:
+            continue
+        # Don't ablate if it's already weak (no sources)
+        if not edge.sources:
+            continue
+
+        key = (edge.subject, edge.predicate, edge.object)
+        overrides[key] = {
+            "sources": [],  # Clear sources (this needs handling in _build_perturbed_subgraph to actually apply to the KGEdge field, not just properties)
+            # Actually _build_perturbed_subgraph updates properties.
+            # We need to ensure we handle 'sources' field update in _build_perturbed_subgraph or
+            # treat sources as a property for the purpose of the override if we modify _build_perturbed_subgraph.
+            # Currently KGEdge.sources is separate.
+            # Let's set a property that indicates ablation, and we might need to update _build_perturbed_subgraph to respect it
+            # or just rely on 'is_perturbed_edge' flag and the fact that we set n_sources=0 via properties update if we calculate it there.
+            # But subgraph_to_tensors calculates n_sources from edge.sources.
+            # So strictly speaking we need to modify edge.sources.
+            # Since _build_perturbed_subgraph uses:
+            # edges.append(KGEdge(..., sources=list(edge.sources)))
+            # It doesn't look at overrides for 'sources' field.
+            # I will need to update _build_perturbed_subgraph to handle this.
+            "perturbation_type": "evidence_ablation",
+            "is_perturbed_edge": 1.0,
+        }
+    return overrides
 
 
 def _synthesize_retracted_support_overrides(
@@ -515,6 +667,105 @@ def build_dataset(
                     )
                 )
 
+        # Predicate swap perturbation
+        pred_swap_edges = _synthesize_predicate_swap(base_subgraph, rng)
+        if pred_swap_edges:
+            pswap_subgraph = _build_perturbed_subgraph(
+                base_subgraph,
+                extra_edges=pred_swap_edges,
+            )
+            pswap_label_map = _label_edges_in_subgraph(pswap_subgraph)
+            pswap_tensors = subgraph_to_tensors(pswap_subgraph)
+            if pswap_tensors.edge_index.numel() > 0:
+                pswap_y_values: list[float] = []
+                for s, p, o in pswap_tensors.edge_triples:
+                    y = pswap_label_map.get((s, p, o), 0.0)
+                    pswap_y_values.append(y)
+                    all_predicates.add(p)
+                    if y > 0.5:
+                        total_pos += 1
+                    else:
+                        total_neg += 1
+                pswap_edge_labels = torch.tensor(pswap_y_values, dtype=torch.float32)
+                samples.append(
+                    GraphSample(
+                        tensors=pswap_tensors,
+                        edge_labels=pswap_edge_labels,
+                        metadata={
+                            "kind": "perturbed_predicate_swap",
+                            "subject": subject,
+                            "object": obj,
+                        },
+                    )
+                )
+
+        # PPI Noise perturbation
+        ppi_noise_edges = _synthesize_ppi_noise(base_subgraph, rng)
+        if ppi_noise_edges:
+            noise_subgraph = _build_perturbed_subgraph(
+                base_subgraph,
+                extra_edges=ppi_noise_edges,
+            )
+            noise_label_map = _label_edges_in_subgraph(noise_subgraph)
+            noise_tensors = subgraph_to_tensors(noise_subgraph)
+            if noise_tensors.edge_index.numel() > 0:
+                noise_y_values: list[float] = []
+                for s, p, o in noise_tensors.edge_triples:
+                    y = noise_label_map.get((s, p, o), 0.0)
+                    noise_y_values.append(y)
+                    all_predicates.add(p)
+                    if y > 0.5:
+                        total_pos += 1
+                    else:
+                        total_neg += 1
+                noise_edge_labels = torch.tensor(noise_y_values, dtype=torch.float32)
+                samples.append(
+                    GraphSample(
+                        tensors=noise_tensors,
+                        edge_labels=noise_edge_labels,
+                        metadata={
+                            "kind": "perturbed_ppi_noise",
+                            "subject": subject,
+                            "object": obj,
+                        },
+                    )
+                )
+
+        # Evidence Ablation perturbation
+        ablation_overrides = _synthesize_evidence_ablation(base_subgraph, rng)
+        if ablation_overrides:
+            ablation_subgraph = _build_perturbed_subgraph(
+                base_subgraph,
+                edge_overrides=ablation_overrides,
+            )
+            ablation_label_map = _label_edges_in_subgraph(ablation_subgraph)
+            ablation_tensors = subgraph_to_tensors(ablation_subgraph)
+            if ablation_tensors.edge_index.numel() > 0:
+                ablation_y_values: list[float] = []
+                for s, p, o in ablation_tensors.edge_triples:
+                    y = ablation_label_map.get((s, p, o), 0.0)
+                    ablation_y_values.append(y)
+                    all_predicates.add(p)
+                    if y > 0.5:
+                        total_pos += 1
+                    else:
+                        total_neg += 1
+                ablation_edge_labels = torch.tensor(
+                    ablation_y_values,
+                    dtype=torch.float32,
+                )
+                samples.append(
+                    GraphSample(
+                        tensors=ablation_tensors,
+                        edge_labels=ablation_edge_labels,
+                        metadata={
+                            "kind": "perturbed_evidence_ablation",
+                            "subject": subject,
+                            "object": obj,
+                        },
+                    )
+                )
+
     if not samples:
         raise RuntimeError("Failed to build any training samples.")
 
@@ -660,10 +911,25 @@ def train_suspicion_gnn(
     torch_device = torch.device(device)
     model = model.to(torch_device)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-    loss_fn = nn.BCEWithLogitsLoss()
+    # Compute positive class weight to handle imbalance.
+    total_pos = 0
+    total_neg = 0
+    for s in train_samples:
+        pos = int((s.edge_labels > 0.5).sum().item())
+        total_pos += pos
+        total_neg += s.edge_labels.numel() - pos
 
-    def _run_epoch(batch: Sequence[GraphSample], *, train: bool) -> tuple[float, float, float]:
+    pos_weight = torch.tensor([total_neg / max(1.0, total_pos)], device=torch_device)
+    print(
+        f"Class balance: {total_pos} pos, {total_neg} neg. Using pos_weight={pos_weight.item():.2f}"
+    )
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+
+    def _run_epoch(
+        batch: Sequence[GraphSample], *, train: bool
+    ) -> tuple[float, float, float, float, float, float]:
         if train:
             model.train()
         else:
@@ -673,6 +939,13 @@ def train_suspicion_gnn(
         total_edges = 0
         correct = 0
         pos_count = 0
+
+        # Hits@k accumulators
+        hits_1_count = 0
+        hits_3_count = 0
+        hits_5_count = 0
+        total_graphs_with_pos = 0
+
         with torch.set_grad_enabled(train):
             for sample in batch:
                 tensors = sample.tensors
@@ -709,13 +982,34 @@ def train_suspicion_gnn(
                 correct += int((preds == y).sum().item())
                 pos_count += int(y.sum().item())
 
+                # Compute Hits@k for this graph
+                # Only relevant if there are positive (suspicious) edges to find
+                if y.sum() > 0:
+                    total_graphs_with_pos += 1
+                    # Sort edges by predicted suspicion score (descending)
+                    sorted_indices = torch.argsort(probs, descending=True)
+                    sorted_labels = y[sorted_indices]
+
+                    # Check if any positive label is in top k
+                    if sorted_labels[0] > 0.5:
+                        hits_1_count += 1
+                    if sorted_labels[:3].sum() > 0:
+                        hits_3_count += 1
+                    if sorted_labels[:5].sum() > 0:
+                        hits_5_count += 1
+
         if total_edges == 0:
-            return math.nan, 0.0, 0.0
+            return math.nan, 0.0, 0.0, 0.0, 0.0, 0.0
 
         avg_loss = total_loss / float(total_edges)
         accuracy = correct / float(total_edges)
         pos_fraction = pos_count / float(total_edges)
-        return avg_loss, accuracy, pos_fraction
+
+        h1 = hits_1_count / max(1, total_graphs_with_pos)
+        h3 = hits_3_count / max(1, total_graphs_with_pos)
+        h5 = hits_5_count / max(1, total_graphs_with_pos)
+
+        return avg_loss, accuracy, pos_fraction, h1, h3, h5
 
     print(
         f"Training RGCNSuspicionModel on {len(train_samples)} train subgraphs "
@@ -724,12 +1018,12 @@ def train_suspicion_gnn(
     )
 
     for epoch in range(1, epochs + 1):
-        train_loss, train_acc, train_pos = _run_epoch(train_samples, train=True)
-        val_loss, val_acc, val_pos = _run_epoch(val_samples, train=False)
+        train_loss, train_acc, train_pos, t_h1, t_h3, t_h5 = _run_epoch(train_samples, train=True)
+        val_loss, val_acc, val_pos, v_h1, v_h3, v_h5 = _run_epoch(val_samples, train=False)
         print(
             f"[Epoch {epoch:02d}] "
-            f"train_loss={train_loss:.4f} train_acc={train_acc:.3f} pos_frac={train_pos:.3f} | "
-            f"val_loss={val_loss:.4f} val_acc={val_acc:.3f} pos_frac={val_pos:.3f}"
+            f"train: loss={train_loss:.4f} acc={train_acc:.3f} H@1={t_h1:.2f} H@3={t_h3:.2f} | "
+            f"val: loss={val_loss:.4f} acc={val_acc:.3f} H@1={v_h1:.2f} H@3={v_h3:.2f}"
         )
 
     return model

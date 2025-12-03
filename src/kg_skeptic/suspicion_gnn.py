@@ -63,6 +63,8 @@ class SubgraphTensors:
 
 NUMERIC_EDGE_KEYS_DEFAULT: tuple[str, ...] = (
     "confidence",
+    "n_sources",
+    "n_pmids",
     "rule_feature_sum",
     "rule_feature_abs_sum",
     "rule_feature_positive_sum",
@@ -157,7 +159,16 @@ def subgraph_to_tensors(subgraph: Subgraph) -> SubgraphTensors:
         src_indices.append(node_index[edge.subject])
         dst_indices.append(node_index[edge.object])
         predicates.append(edge.predicate)
-        raw_props.append(edge.properties)
+
+        # Enrich properties with computed counts for feature extraction.
+        props_dict = dict(edge.properties)
+        props_dict["n_sources"] = len(edge.sources)
+        # heuristic: count sources that look like PMIDs or PMC IDs
+        props_dict["n_pmids"] = sum(
+            1 for s in edge.sources if "PMID" in s.upper() or "PMC" in s.upper()
+        )
+        raw_props.append(props_dict)
+
         edge_triples.append((edge.subject, edge.predicate, edge.object))
 
     if not src_indices:
@@ -229,7 +240,7 @@ class RGCNSuspicionModel(nn.Module):
 
     The final node embeddings are then used to compute per‑edge
     suspicion scores via a small MLP head operating on
-    ``[h_src, h_dst, edge_attr]``.
+    ``[h_src, h_dst, edge_type_emb, edge_attr]``.
     """
 
     def __init__(
@@ -257,8 +268,13 @@ class RGCNSuspicionModel(nn.Module):
         self.self_loop1 = nn.Linear(in_channels, hidden_channels, bias=True)
         self.self_loop2 = nn.Linear(hidden_channels, hidden_channels, bias=True)
 
-        # Edge suspicion head: operates on concatenated [h_src, h_dst, edge_attr?].
-        mlp_in = 2 * hidden_channels + edge_in_channels
+        # Embedding for edge types to feed into the edge scoring head.
+        # We use a small dimension (e.g., hidden_channels // 2) to keep it compact.
+        self.edge_type_dim = max(4, hidden_channels // 2)
+        self.edge_type_emb = nn.Embedding(num_relations, self.edge_type_dim)
+
+        # Edge suspicion head: operates on concatenated [h_src, h_dst, edge_type, edge_attr?].
+        mlp_in = 2 * hidden_channels + self.edge_type_dim + edge_in_channels
         self.edge_mlp = nn.Sequential(
             nn.Linear(mlp_in, hidden_channels),
             nn.ReLU(),
@@ -273,6 +289,7 @@ class RGCNSuspicionModel(nn.Module):
         nn.init.xavier_uniform_(self.rel_weights2)
         self.self_loop1.reset_parameters()
         self.self_loop2.reset_parameters()
+        nn.init.xavier_uniform_(self.edge_type_emb.weight)
         for module in self.edge_mlp:
             if isinstance(module, nn.Linear):
                 nn.init.xavier_uniform_(module.weight)
@@ -322,11 +339,12 @@ class RGCNSuspicionModel(nn.Module):
         src, dst = edge_index
         src_h = h[src]
         dst_h = h[dst]
+        type_h = self.edge_type_emb(edge_type)
 
         if edge_attr is not None:
-            edge_input = torch.cat([src_h, dst_h, edge_attr], dim=-1)
+            edge_input = torch.cat([src_h, dst_h, type_h, edge_attr], dim=-1)
         else:
-            edge_input = torch.cat([src_h, dst_h], dim=-1)
+            edge_input = torch.cat([src_h, dst_h, type_h], dim=-1)
 
         return cast(Tensor, self.edge_mlp(edge_input).squeeze(-1))
 
