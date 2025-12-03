@@ -122,11 +122,11 @@ def read_tsv(path: Path, max_rows: int | None = None) -> Iterator[dict[str, str]
     """Read a TSV file (plain or gzipped) and yield rows as dicts."""
     # Auto-detect gzip based on file extension
     if path.suffix == ".gz":
-        opener = lambda p: gzip.open(p, "rt", encoding="utf-8")
+        file_obj = gzip.open(path, "rt", encoding="utf-8")
     else:
-        opener = lambda p: open(p, "r", encoding="utf-8")
+        file_obj = path.open("r", encoding="utf-8")
 
-    with opener(path) as f:
+    with file_obj as f:
         reader = csv.DictReader(f, delimiter="\t")
         for i, row in enumerate(reader):
             if max_rows is not None and i >= max_rows:
@@ -593,7 +593,7 @@ def main() -> None:
         )
 
         # Load edges
-        edge_count = load_edges(
+        load_edges(
             session,
             edges_path,
             valid_node_ids=node_ids,

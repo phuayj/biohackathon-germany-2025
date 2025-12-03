@@ -27,7 +27,7 @@ take a hard dependency on PyG inside this library.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, cast
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple, cast
 
 try:
     import torch
@@ -226,7 +226,7 @@ def subgraph_to_tensors(subgraph: Subgraph) -> SubgraphTensors:
         for props in raw_props:
             edge_row: List[float] = []
             for name in edge_feature_names:
-                raw_val: Any = props.get(name, 0.0)
+                raw_val: object = props.get(name, 0.0)
                 if isinstance(raw_val, (int, float)):
                     edge_row.append(float(raw_val))
                 else:

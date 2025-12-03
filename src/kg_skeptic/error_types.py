@@ -26,7 +26,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Optional, cast
 
 
 class ErrorType(str, Enum):
@@ -336,7 +336,7 @@ class ErrorTypeStore:
         """Load a store from a JSON file."""
         path = Path(path)
         with path.open() as f:
-            data: Any = json.load(f)
+            data: object = json.load(f)
         return cls.from_dict(cast(Mapping[str, object], data))
 
 

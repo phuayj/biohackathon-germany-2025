@@ -32,14 +32,14 @@ import random
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
+from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
 import torch
 from torch import Tensor
 from torch import nn
 
 try:
-    from sklearn.metrics import roc_auc_score, average_precision_score  # type: ignore[import-untyped]
+    from sklearn.metrics import roc_auc_score, average_precision_score
 
     HAS_SKLEARN = True
 except ImportError:
@@ -47,7 +47,7 @@ except ImportError:
 
 from kg_skeptic.error_types import ErrorType
 from kg_skeptic.mcp.mini_kg import iter_mini_kg_edges, load_mini_kg_backend
-from kg_skeptic.mcp.kg import KGEdge, KGNode
+from kg_skeptic.mcp.kg import InMemoryBackend, KGEdge, KGNode
 from kg_skeptic.pipeline import _category_from_id
 from kg_skeptic import subgraph as subgraph_module
 from kg_skeptic.subgraph import Subgraph, build_pair_subgraph
@@ -134,7 +134,7 @@ class GraphSAGEEncoder(nn.Module):
 
 
 def _build_global_lp_graph(
-    backend: Any,
+    backend: InMemoryBackend,
 ) -> tuple[list[str], Tensor, Tensor, Tensor, Tensor, set[tuple[int, int]]]:
     """Build a global graph for self-supervised link prediction.
 
@@ -187,7 +187,7 @@ def _build_global_lp_graph(
         ]
 
         # Reuse existing deterministic Node2Vec-style embeddings when present.
-        raw_vec: Any = None
+        raw_vec: Sequence[object] | None = None
         for key in ("embedding", "node2vec", "n2v"):
             value = props.get(key)
             if isinstance(value, (list, tuple)):
@@ -267,7 +267,7 @@ def _sample_negative_pairs(
 
 
 def pretrain_link_prediction(
-    backend: Any,
+    backend: InMemoryBackend,
     *,
     epochs: int = 5,
     lr: float = 1e-3,
@@ -418,7 +418,7 @@ class GraphSample:
     error_type_labels: Tensor | None = (
         None  # shape: [num_edges], error type indices (-1=none/clean)
     )
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: Dict[str, object] = field(default_factory=dict)
 
 
 def _collect_global_phenotypes() -> Tuple[Sequence[str], Dict[str, str], Dict[str, set[str]]]:
@@ -621,10 +621,13 @@ def _edge_is_singleton_and_weak(edge: KGEdge) -> bool:
     if not (num_sources <= 1 and num_pmids <= 1):
         return False
 
-    raw_conf: Any = props.get("confidence", 0.0)
-    try:
-        confidence = float(raw_conf)
-    except (TypeError, ValueError):
+    raw_conf = props.get("confidence", 0.0)
+    if isinstance(raw_conf, (int, float, str)):
+        try:
+            confidence = float(raw_conf)
+        except ValueError:
+            confidence = 0.0
+    else:
         confidence = 0.0
 
     # Far from mechanistic context: low confidence or noisy cohorts.
@@ -704,10 +707,13 @@ def _edge_is_suspicious(edge: KGEdge) -> bool:
     - edges from noisy cohorts (e.g., model-organism or PPI) are suspicious.
     """
     props = edge.properties
-    raw_conf: Any = props.get("confidence", 0.0)
-    try:
-        confidence = float(raw_conf)
-    except (TypeError, ValueError):
+    raw_conf = props.get("confidence", 0.0)
+    if isinstance(raw_conf, (int, float, str)):
+        try:
+            confidence = float(raw_conf)
+        except ValueError:
+            confidence = 0.0
+    else:
         confidence = 0.0
 
     # Synthetic perturbations and explicit retraction flags are always suspicious.
@@ -834,7 +840,7 @@ def _build_perturbed_subgraph(
     base: Subgraph,
     *,
     extra_edges: Sequence[KGEdge] | None = None,
-    edge_overrides: Mapping[Tuple[str, str, str], Mapping[str, Any]] | None = None,
+    edge_overrides: Mapping[Tuple[str, str, str], Mapping[str, object]] | None = None,
 ) -> Subgraph:
     """Return a new Subgraph with optional synthetic perturbations applied.
 
@@ -868,7 +874,13 @@ def _build_perturbed_subgraph(
             ov = overrides[key]
             # Handle sources field override separately (it's on KGEdge, not in properties).
             if "sources" in ov:
-                sources = list(ov["sources"]) if ov["sources"] else []
+                raw_sources = ov["sources"]
+                if raw_sources is None:
+                    sources = []
+                elif isinstance(raw_sources, (list, tuple)):
+                    sources = [str(s) for s in raw_sources]
+                else:
+                    sources = [str(raw_sources)]
             # Update properties with remaining overrides (excluding sources).
             props.update({k: v for k, v in ov.items() if k != "sources"})
 
@@ -1143,13 +1155,13 @@ def _synthesize_evidence_ablation(
     rng: random.Random,
     *,
     fraction: float = 0.15,
-) -> Dict[Tuple[str, str, str], Dict[str, Any]]:
+) -> Dict[Tuple[str, str, str], Dict[str, object]]:
     """Remove sources from a subset of edges to simulate weak/unsupported claims.
 
     This simulates edges that have lost their supporting evidence, which should
     be flagged as suspicious per spec §2C (evidence ablation perturbation).
     """
-    overrides: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    overrides: Dict[Tuple[str, str, str], Dict[str, object]] = {}
     for edge in subgraph.edges:
         if rng.random() > fraction:
             continue
@@ -1171,9 +1183,9 @@ def _synthesize_retracted_support_overrides(
     rng: random.Random,
     *,
     fraction: float = 0.15,
-) -> Dict[Tuple[str, str, str], Dict[str, Any]]:
+) -> Dict[Tuple[str, str, str], Dict[str, object]]:
     """Mark a subset of edges as having synthetic retracted support."""
-    overrides: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    overrides: Dict[Tuple[str, str, str], Dict[str, object]] = {}
     for edge in subgraph.edges:
         if rng.random() > fraction:
             continue
@@ -1189,7 +1201,7 @@ def _synthesize_retracted_support_overrides(
 def _process_subgraph_to_sample(
     subgraph: Subgraph,
     all_predicates: set[str],
-    metadata: Dict[str, Any],
+    metadata: Dict[str, object],
 ) -> Tuple[GraphSample | None, int, int]:
     """Convert a subgraph to a GraphSample with suspicion and error type labels.
 
@@ -1235,7 +1247,7 @@ def build_dataset(
     *,
     seed: int = 13,
     k_hops: int = 2,
-    backend: Any | None = None,
+    backend: InMemoryBackend | None = None,
 ) -> tuple[list[GraphSample], Dict[str, int]]:
     """Construct a small graph-level dataset for training the suspicion GNN.
 
@@ -1772,7 +1784,7 @@ def train_suspicion_gnn(
 
     # Early stopping state
     best_val_auroc = -1.0
-    best_model_state: Dict[str, Any] | None = None
+    best_model_state: Dict[str, Tensor] | None = None
     epochs_without_improvement = 0
 
     for epoch in range(1, epochs + 1):

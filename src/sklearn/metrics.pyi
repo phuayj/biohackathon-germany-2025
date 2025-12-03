@@ -1,0 +1,6 @@
+from __future__ import annotations
+
+from collections.abc import Sequence
+
+def roc_auc_score(y_true: Sequence[float], y_score: Sequence[float]) -> float: ...
+def average_precision_score(y_true: Sequence[float], y_score: Sequence[float]) -> float: ...

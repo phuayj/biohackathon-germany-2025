@@ -16,8 +16,9 @@ from pathlib import Path
 import streamlit as st
 import streamlit.components.v1 as components
 from collections.abc import Iterable, Mapping
-from typing import Protocol, cast
+from typing import Protocol, cast, Literal
 
+from kg_skeptic.feedback import append_claim_to_dataset
 from kg_skeptic.models import Claim, EntityMention
 from kg_skeptic.pipeline import AuditResult, ClaimNormalizer, SkepticPipeline
 from kg_skeptic.mcp.kg import KGBackend, KGEdge, Neo4jBackend
@@ -960,7 +961,7 @@ def render_subgraph_visualization(
     render_why_flagged_drawer(evaluation, suspicion, error_type_predictions)
 
 
-def render_audit_card(result: AuditResult) -> None:
+def render_audit_card(result: AuditResult, allow_feedback: bool = False) -> None:
     """Render the main audit card."""
     claim = result.report.claims[0]
     evaluation = result.evaluation
@@ -993,6 +994,55 @@ def render_audit_card(result: AuditResult) -> None:
 </div>
 </div>"""
     st.markdown(card_html, unsafe_allow_html=True)
+
+    if allow_feedback:
+        # Check if already saved in this session to prevent duplicates
+        feedback_key = f"feedback_given_{claim.id}"
+        if st.session_state.get(feedback_key):
+            st.success("✅ Feedback recorded. Thank you!")
+        else:
+            # Layout buttons: Agree | Disagree options
+            cols = st.columns([2, 1, 1, 1])
+
+            with cols[0]:
+                st.markdown(f"**Is the verdict `{verdict}` correct?**")
+
+            # Button 1: Agree
+            with cols[1]:
+                if st.button(
+                    f"✅ Yes", key=f"btn_agree_{claim.id}", help=f"Confirm {verdict} verdict"
+                ):
+                    try:
+                        rec_id = append_claim_to_dataset(
+                            claim.text,
+                            claim.evidence,
+                            cast(Literal["PASS", "WARN", "FAIL"], verdict),
+                        )
+                        st.session_state[feedback_key] = True
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error saving: {e}")
+
+            # Buttons for disagreements
+            other_verdicts = [v for v in ["PASS", "WARN", "FAIL"] if v != verdict]
+
+            for i, other in enumerate(other_verdicts):
+                with cols[i + 2]:
+                    if st.button(
+                        f"No ({other})",
+                        key=f"btn_disagree_{other}_{claim.id}",
+                        help=f"Mark as {other}",
+                    ):
+                        try:
+                            rec_id = append_claim_to_dataset(
+                                claim.text,
+                                claim.evidence,
+                                cast(Literal["PASS", "WARN", "FAIL"], other),
+                            )
+                            st.session_state[feedback_key] = True
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error saving: {e}")
 
     # Claim text
     st.subheader("Claim")
@@ -1243,6 +1293,7 @@ def main() -> None:
                 result = pipeline.run(selected_claim)
                 st.session_state.audit_run = True
                 st.session_state.result = result
+                st.session_state.is_custom_claim = False
 
     with tab_custom:
         claim_text = st.text_area(
@@ -1295,11 +1346,15 @@ def main() -> None:
                     else:
                         st.session_state.audit_run = True
                         st.session_state.result = result
+                        st.session_state.is_custom_claim = True
 
     # Show results if audit has been run
     if st.session_state.audit_run:
         st.divider()
-        render_audit_card(st.session_state.result)
+        render_audit_card(
+            st.session_state.result,
+            allow_feedback=st.session_state.get("is_custom_claim", False),
+        )
 
         # Reset button
         if st.button("Reset", use_container_width=True):
