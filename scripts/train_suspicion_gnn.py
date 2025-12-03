@@ -57,6 +57,38 @@ from kg_skeptic.suspicion_gnn import (
 )
 
 
+# ---------------------------------------------------------------------------
+# Dataset & ontology helpers
+# ---------------------------------------------------------------------------
+
+# Fallback HPO "sibling" structure used only when external HPO
+# normalization is unavailable (e.g., no network). When HPO is
+# reachable, siblings are derived from real HPO ancestors instead.
+HPO_SIBLING_GROUPS: tuple[tuple[str, ...], ...] = (
+    (
+        "HP:0001250",
+        "HP:0001257",
+        "HP:0001288",
+        "HP:0001324",
+        "HP:0002376",
+        "HP:0004322",
+    ),
+    (
+        "HP:0002019",
+        "HP:0001629",
+        "HP:0001511",
+        "HP:0001644",
+        "HP:0001658",
+        "HP:0002099",
+    ),
+    (
+        "HP:0000707",
+        "HP:0000716",
+    ),
+    ("HP:0002013",),
+)
+
+
 @dataclass
 class GraphSample:
     """Single training sample: a subgraph and per-edge labels."""
@@ -66,7 +98,7 @@ class GraphSample:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
-def _collect_global_phenotypes() -> Tuple[Sequence[str], Dict[str, str]]:
+def _collect_global_phenotypes() -> Tuple[Sequence[str], Dict[str, str], Dict[str, set[str]]]:
     """Collect phenotype ids and labels from the mini KG.
 
     This is used to synthesize "sibling-like" phenotype replacements for
@@ -74,6 +106,7 @@ def _collect_global_phenotypes() -> Tuple[Sequence[str], Dict[str, str]]:
     """
     phenotype_ids: set[str] = set()
     phenotype_labels: Dict[str, str] = {}
+    gene_to_phenotypes: Dict[str, set[str]] = {}
     for edge in iter_mini_kg_edges():
         edge_type = str(edge.properties.get("edge_type", ""))
         if edge_type != "gene-phenotype":
@@ -81,8 +114,79 @@ def _collect_global_phenotypes() -> Tuple[Sequence[str], Dict[str, str]]:
         phenotype_ids.add(edge.object)
         if edge.object_label:
             phenotype_labels[edge.object] = edge.object_label
+        gene_to_phenotypes.setdefault(edge.subject, set()).add(edge.object)
 
-    return sorted(phenotype_ids), phenotype_labels
+    return sorted(phenotype_ids), phenotype_labels, gene_to_phenotypes
+
+
+def _build_hpo_sibling_map_fallback(phenotype_ids: Sequence[str]) -> Dict[str, list[str]]:
+    """Fallback sibling map based on static groups when HPO is unavailable."""
+    id_set = set(phenotype_ids)
+    sibling_map: Dict[str, list[str]] = {hp_id: [] for hp_id in phenotype_ids}
+    for group in HPO_SIBLING_GROUPS:
+        group_ids = [hp for hp in group if hp in id_set]
+        for hp in group_ids:
+            siblings = [other for other in group_ids if other != hp]
+            sibling_map[hp].extend(siblings)
+    return sibling_map
+
+
+def _build_hpo_sibling_map(phenotype_ids: Sequence[str]) -> Dict[str, list[str]]:
+    """Build HPO-based sibling map using ontology ancestors when available.
+
+    Two phenotypes are treated as siblings when they share at least one
+    non-root HPO ancestor (per the external HPO ontology accessed via OLS).
+    """
+    try:
+        from kg_skeptic.mcp.ids import IDNormalizerTool
+    except Exception:
+        return _build_hpo_sibling_map_fallback(phenotype_ids)
+
+    tool = IDNormalizerTool()
+    ancestor_map: Dict[str, set[str]] = {}
+
+    for hp_id in phenotype_ids:
+        if not hp_id.upper().startswith("HP:"):
+            continue
+        try:
+            norm = tool.normalize_hpo(hp_id)
+        except Exception:
+            continue
+        meta = getattr(norm, "metadata", {}) or {}
+        ancestors_raw = meta.get("ancestors")
+        if isinstance(ancestors_raw, list):
+            ancestors = {str(a) for a in ancestors_raw}
+        else:
+            ancestors = set()
+        # Drop HPO roots so "shared parent" is not just the root class.
+        ancestors.discard("HP:0000118")
+        ancestors.discard("HP:0000001")
+        if ancestors:
+            ancestor_map[hp_id] = ancestors
+
+    if not ancestor_map:
+        return _build_hpo_sibling_map_fallback(phenotype_ids)
+
+    sibling_map: Dict[str, list[str]] = {hp_id: [] for hp_id in ancestor_map}
+    ids = list(ancestor_map.keys())
+    for i, hp_i in enumerate(ids):
+        anc_i = ancestor_map.get(hp_i)
+        if not anc_i:
+            continue
+        for j in range(i + 1, len(ids)):
+            hp_j = ids[j]
+            anc_j = ancestor_map.get(hp_j)
+            if not anc_j:
+                continue
+            if anc_i & anc_j:
+                sibling_map[hp_i].append(hp_j)
+                sibling_map.setdefault(hp_j, []).append(hp_i)
+
+    # If the ontology did not yield any siblings, fall back to the static map.
+    if not any(sibling_map.values()):
+        return _build_hpo_sibling_map_fallback(phenotype_ids)
+
+    return sibling_map
 
 
 def _iter_unique_gene_disease_pairs(max_pairs: int | None = None) -> Iterable[Tuple[str, str]]:
@@ -103,6 +207,171 @@ def _iter_unique_gene_disease_pairs(max_pairs: int | None = None) -> Iterable[Tu
             return
 
 
+def _edge_source_stats(edge: KGEdge) -> Tuple[int, int, int]:
+    """Return (num_sources, num_pmids, num_dois) for an edge."""
+    props = edge.properties
+    num_sources = len(edge.sources)
+
+    pmids_value = props.get("supporting_pmids", [])
+    dois_value = props.get("supporting_dois", [])
+
+    num_pmids = len(pmids_value) if isinstance(pmids_value, list) else 0
+    num_dois = len(dois_value) if isinstance(dois_value, list) else 0
+
+    return num_sources, num_pmids, num_dois
+
+
+def _edge_has_retracted_support(edge: KGEdge) -> bool:
+    """Check if an edge carries any synthetic retraction flag."""
+    props = edge.properties
+    if bool(props.get("has_retracted_support", False)):
+        return True
+    # Keep the check tolerant to alternate flag names if added later.
+    retraction_flags = [
+        "is_retracted",
+        "has_retracted_evidence",
+    ]
+    return any(bool(props.get(flag, False)) for flag in retraction_flags)
+
+
+def _edge_is_domain_range_compatible(edge: KGEdge) -> bool:
+    """Approximate Biolink domain/range compatibility based on CURIE prefixes."""
+    subj_cat = _category_from_id(edge.subject)
+    obj_cat = _category_from_id(edge.object)
+
+    # Allowed coarse pairs for the mini KG slice.
+    allowed_pairs = {
+        ("gene", "disease"),
+        ("gene", "phenotype"),
+        ("gene", "gene"),
+        ("gene", "pathway"),
+    }
+    if (subj_cat, obj_cat) not in allowed_pairs:
+        return False
+
+    # Predicate-level filtering: some predicates are "coarse" and should not
+    # be treated as clean evidence, even if domain/range is acceptable.
+    pred = edge.predicate.lower()
+    coarse_predicates = {
+        "biolink:related_to",
+        "biolink:correlated_with",
+    }
+    if pred in coarse_predicates:
+        return False
+
+    # Synthetic / obviously incompatible predicates from perturbations.
+    if pred in {"incompatible_interaction", "interacts_with"}:
+        return False
+
+    return True
+
+
+def _edge_is_strong_mechanistic(edge: KGEdge) -> bool:
+    """Heuristic for edges that look mechanistically supported."""
+    props = edge.properties
+    cohort = str(props.get("cohort", "")).lower()
+    edge_type = str(props.get("edge_type", "")).lower()
+
+    strong_cohorts = {
+        "meta-analysis",
+        "curated-pathway",
+        "curated-gene-pathway",
+        "curated-seed",
+        "pathway-enrichment",
+    }
+    if cohort in strong_cohorts:
+        return True
+
+    strong_edge_types = {
+        "gene-pathway",
+        "curated-gene-pathway",
+    }
+    return edge_type in strong_edge_types
+
+
+def _edge_is_singleton_and_weak(edge: KGEdge) -> bool:
+    """Detect singleton & weak evidence edges per spec §2B."""
+    props = edge.properties
+    num_sources, num_pmids, _ = _edge_source_stats(edge)
+
+    # Singleton: at most one provenance source and at most one PMID.
+    if not (num_sources <= 1 and num_pmids <= 1):
+        return False
+
+    raw_conf: Any = props.get("confidence", 0.0)
+    try:
+        confidence = float(raw_conf)
+    except (TypeError, ValueError):
+        confidence = 0.0
+
+    # Far from mechanistic context: low confidence or noisy cohorts.
+    cohort = str(props.get("cohort", "")).lower()
+    noisy_cohorts = {
+        "case-control",
+        "clinical cohort",
+        "model-organism",
+        "ppi",
+        "genetic-interaction",
+        "synthetic_noise",
+    }
+
+    return confidence < 0.7 or cohort in noisy_cohorts
+
+
+def _edge_has_type_or_ontology_violation(edge: KGEdge) -> bool:
+    """Detect type/ontology violations for suspicious labeling per spec §2B."""
+    props = edge.properties
+
+    # Basic domain/range mismatch.
+    if not _edge_is_domain_range_compatible(edge):
+        return True
+
+    # Phenotype not in expected ontology "closure": for the mini KG, approximate
+    # this as non-HPO ids being used where a phenotype is expected.
+    edge_type = str(props.get("edge_type", "")).lower()
+    if edge_type == "gene-phenotype" and not edge.object.upper().startswith("HP:"):
+        return True
+
+    return False
+
+
+def _edge_is_clean(edge: KGEdge) -> bool:
+    """Implement clean-edge criteria per spec §2A."""
+    props = edge.properties
+
+    # No synthetic perturbations or retractions.
+    perturbed_raw = props.get("is_perturbed_edge", 0.0)
+    try:
+        is_perturbed_flag = (
+            float(perturbed_raw) if isinstance(perturbed_raw, (int, float, str)) else 0.0
+        )
+    except (TypeError, ValueError):
+        is_perturbed_flag = 0.0
+    if is_perturbed_flag > 0.5 or _edge_has_retracted_support(edge):
+        return False
+
+    perturbation_type = str(props.get("perturbation_type", "")).lower()
+    if perturbation_type:
+        return False
+
+    # Multi-source: at least two sources or PMIDs.
+    num_sources, num_pmids, _ = _edge_source_stats(edge)
+    if num_sources < 2 and num_pmids < 2:
+        return False
+
+    # Biolink-style domain/range compatibility and non-coarse predicates.
+    if not _edge_is_domain_range_compatible(edge):
+        return False
+
+    # Prefer mechanistically plausible contexts and exclude singleton & weak.
+    if _edge_is_singleton_and_weak(edge):
+        return False
+    if not _edge_is_strong_mechanistic(edge):
+        return False
+
+    return True
+
+
 def _edge_is_suspicious(edge: KGEdge) -> bool:
     """Heuristic label for synthetic "suspicious" edges.
 
@@ -119,6 +388,9 @@ def _edge_is_suspicious(edge: KGEdge) -> bool:
         confidence = 0.0
 
     # Synthetic perturbations and explicit retraction flags are always suspicious.
+    if _edge_has_retracted_support(edge):
+        return True
+
     perturbed_raw = props.get("is_perturbed_edge", 0.0)
     if isinstance(perturbed_raw, (int, float, str)):
         try:
@@ -142,8 +414,11 @@ def _edge_is_suspicious(edge: KGEdge) -> bool:
     }:
         return True
 
-    has_retracted_support = bool(props.get("has_retracted_support", False))
-    if has_retracted_support:
+    # Type/ontology violations and "singleton & weak" edges should be treated
+    # as suspicious per spec §2B.
+    if _edge_has_type_or_ontology_violation(edge):
+        return True
+    if _edge_is_singleton_and_weak(edge):
         return True
 
     cohort = str(props.get("cohort", "")).lower()
@@ -164,7 +439,14 @@ def _label_edges_in_subgraph(subgraph: Subgraph) -> Dict[Tuple[str, str, str], f
     labels: Dict[Tuple[str, str, str], float] = {}
     for edge in subgraph.edges:
         triple = (edge.subject, edge.predicate, edge.object)
-        labels[triple] = 1.0 if _edge_is_suspicious(edge) else 0.0
+        if _edge_is_suspicious(edge):
+            labels[triple] = 1.0
+        else:
+            # Only treat edges as "clean" negatives when they satisfy the
+            # stricter clean-edge criteria; otherwise, fall back to a
+            # conservative suspicious label so the model learns from clearer
+            # positives vs negatives.
+            labels[triple] = 0.0 if _edge_is_clean(edge) else 1.0
     return labels
 
 
@@ -305,13 +587,17 @@ def _synthesize_sibling_phenotype_swaps(
     *,
     all_phenotype_ids: Sequence[str],
     phenotype_labels: Mapping[str, str],
+    gene_to_phenotypes: Mapping[str, set[str]],
+    hpo_sibling_map: Mapping[str, Sequence[str]],
     max_swaps: int = 8,
 ) -> Sequence[KGEdge]:
     """Generate synthetic edges by swapping phenotype targets.
 
-    We approximate "sibling" phenotypes by sampling alternative
-    phenotypes from the global mini KG phenotype set, excluding the
-    original target.
+    We approximate "sibling" phenotypes using the external HPO ontology
+    where possible (shared non-root ancestors). When HPO is unavailable,
+    a small static grouping is used as a fallback. To prevent label
+    leakage, candidates that are already connected to the same gene
+    elsewhere in the mini KG are excluded.
     """
     if not all_phenotype_ids:
         return []
@@ -328,7 +614,22 @@ def _synthesize_sibling_phenotype_swaps(
         if rng.random() > 0.3:
             continue
 
-        candidates = [pid for pid in all_phenotype_ids if pid != edge.object]
+        # Determine a sibling pool based on HPO sibling map.
+        sibling_pool: list[str] = list(hpo_sibling_map.get(edge.object, []))
+
+        # Fallback: if we could not find siblings for this phenotype,
+        # fall back to the global phenotype id list while still excluding
+        # the original target.
+        if not sibling_pool:
+            sibling_pool = [pid for pid in all_phenotype_ids if pid != edge.object]
+
+        if not sibling_pool:
+            continue
+
+        # Label leakage prevention: avoid candidates that already appear
+        # as a gene–phenotype association for this subject in the global KG.
+        existing_for_gene = set(gene_to_phenotypes.get(edge.subject, set()))
+        candidates = [pid for pid in sibling_pool if pid not in existing_for_gene]
         if not candidates:
             continue
         new_obj = rng.choice(candidates)
@@ -528,7 +829,8 @@ def build_dataset(
     rng.shuffle(all_pairs)
     selected_pairs = all_pairs[: max(1, min(num_subgraphs, len(all_pairs)))]
 
-    all_phenotype_ids, phenotype_labels = _collect_global_phenotypes()
+    all_phenotype_ids, phenotype_labels, gene_to_phenotypes = _collect_global_phenotypes()
+    hpo_sibling_map = _build_hpo_sibling_map(all_phenotype_ids)
 
     samples: list[GraphSample] = []
     all_predicates: set[str] = set()
@@ -603,6 +905,8 @@ def build_dataset(
             rng,
             all_phenotype_ids=all_phenotype_ids,
             phenotype_labels=phenotype_labels,
+            gene_to_phenotypes=gene_to_phenotypes,
+            hpo_sibling_map=hpo_sibling_map,
         )
         if sibling_edges:
             sib_subgraph = _build_perturbed_subgraph(

@@ -99,11 +99,11 @@
 - [x] Add early stopping on validation AUROC per spec §3.2.
 
 #### GNN Spec Compliance (Phase 2 — Labeling Improvements)
-- [ ] Implement proper "clean" edge criteria per spec §2A: multi-source (≥2 sources or PMIDs), no retractions, biolink domain/range compatible, short plausible route.
-- [ ] Add type/ontology violation detection for suspicious edge labeling per spec §2B (disallowed predicates, phenotype not in ancestor closure).
-- [ ] Use HPO ontology for proper sibling phenotype swaps (same parent term) instead of random sampling per spec §2C.
-- [ ] Add label leakage prevention: ensure sibling swaps don't connect to subject elsewhere in global graph per spec §8.
-- [ ] Add "singleton & weak" detection: flag edges with 1 source, 1 PMID, far from mechanistic context per spec §2B.
+- [x] Implement proper "clean" edge criteria per spec §2A: multi-source (≥2 sources or PMIDs), no retractions, biolink domain/range compatible, short plausible route.
+- [x] Add type/ontology violation detection for suspicious edge labeling per spec §2B (disallowed predicates, phenotype not in ancestor closure).
+- [x] Use HPO ontology for proper sibling phenotype swaps (same parent term) instead of random sampling per spec §2C.
+- [x] Add label leakage prevention: ensure sibling swaps don't connect to subject elsewhere in global graph per spec §8.
+- [x] Add "singleton & weak" detection: flag edges with 1 source, 1 PMID, far from mechanistic context per spec §2B.
 
 #### GNN Spec Compliance (Phase 4 — Additional Features)
 - [ ] Add `evidence_age` feature (years since newest PMID) per spec §3.0.
