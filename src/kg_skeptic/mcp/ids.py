@@ -131,7 +131,7 @@ class IDNormalizerTool:
 
         iri = f"http://purl.obolibrary.org/obo/{obo_id.replace(':', '_')}"
         # OLS4 requires double URL-encoding for the IRI in the path
-        double_encoded_iri = quote(quote(iri, safe=''), safe='')
+        double_encoded_iri = quote(quote(iri, safe=""), safe="")
         url = f"{self.OLS_API_URL}/ontologies/{ontology}/terms/{double_encoded_iri}/ancestors"
 
         try:

@@ -1076,7 +1076,9 @@ class ClaimNormalizer:
                 if neural_error:
                     reasons.append(f"NER ({ner_backend_name}) error: {neural_error}")
                 elif not entity_diagnostics.get("neural_pair_found"):
-                    reasons.append(f"NER ({ner_backend_name}) did not find both a subject and a target")
+                    reasons.append(
+                        f"NER ({ner_backend_name}) did not find both a subject and a target"
+                    )
             if entity_diagnostics.get("dictionary_used"):
                 if not entity_diagnostics.get("dictionary_pair_found"):
                     reasons.append("dictionary/KG lookup did not match entities in the text")

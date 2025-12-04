@@ -1558,7 +1558,8 @@ class Neo4jBackend(KGBackend):
         RETURN DISTINCT
             p.id AS id,
             p.retracted AS retracted,
-            p.cites_retracted_count AS cites_retracted_count
+            p.cites_retracted_count AS cites_retracted_count,
+            p.title AS title
         """
 
         seen_nodes: set[str] = set()
@@ -1576,10 +1577,14 @@ class Neo4jBackend(KGBackend):
             if cites_retracted is not None:
                 props["cites_retracted_count"] = _coerce_to_int(cites_retracted)
 
+            # Use title if available, otherwise fall back to ID
+            title = rec.get("title")
+            label = str(title) if title else node_id
+
             nodes.append(
                 KGNode(
                     id=node_id,
-                    label=node_id,  # Use ID as label since title not in DB
+                    label=label,
                     category="publication",
                     properties=props,
                     provenance=provenance,

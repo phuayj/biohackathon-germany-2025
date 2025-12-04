@@ -95,9 +95,7 @@ def _collect_all_phenotype_ids() -> list[str]:
                 ),
             )
             neo4j_backend = Neo4jBackend(_DriverSessionWrapper(cast(_Neo4jDriverLike, driver)))
-            all_phenotype_ids, _, _ = neo4j_backend.collect_gene_phenotype_associations(
-                limit=10000
-            )
+            all_phenotype_ids, _, _ = neo4j_backend.collect_gene_phenotype_associations(limit=10000)
             for hp_id in all_phenotype_ids:
                 if hp_id.upper().startswith("HP:"):
                     phenotype_ids.add(hp_id.upper())
