@@ -44,6 +44,35 @@ class SuspicionRow(TypedDict):
     is_claim_edge: bool
 
 
+class SentenceNLIResult(TypedDict):
+    """Individual sentence NLI result with weight and confidence."""
+
+    citation: str
+    sentence: str
+    label: str  # SUPPORT, REFUTE, NEI
+    p_support: float  # Confidence for support (0-1)
+    p_contradict: float  # Confidence for contradiction (0-1)
+    weight: float  # Combined sentence weight (w_s * f_pred)
+    section_weight: float  # 1.0 results/conclusion, 0.7 intro
+    hedging_weight: float  # 0.5 if hedged, 1.0 otherwise
+    predicate_factor: float  # 0-1.2 based on predicate match
+
+
+class PaperNLIAggregate(TypedDict):
+    """Per-paper NLI aggregation."""
+
+    citation: str
+    paper_weight: float  # w_d: 1.0 primary human, 0.6 animal, 0.4 review
+    paper_type: str  # "primary_human", "animal", "review", "unknown"
+    s_pos: float  # S⁺_d = Σ w_d·w_s·p_sup(s)
+    s_neg: float  # S⁻_d = Σ w_d·w_s·p_con(s)
+    capped_s_pos: float  # min(S⁺_d, β) with β=0.8
+    capped_s_neg: float  # min(S⁻_d, β)
+    top_support: SentenceNLIResult | None  # Best supporting sentence
+    top_contradict: SentenceNLIResult | None  # Best contradicting sentence
+    sentence_count: int
+
+
 class TextNLIFacts(TypedDict):
     """Aggregated sentence-level NLI evidence from abstracts."""
 
@@ -55,6 +84,22 @@ class TextNLIFacts(TypedDict):
     support_examples: list[dict[str, str]]
     refute_examples: list[dict[str, str]]
     nei_examples: list[dict[str, str]]
+    # --- New Day 3 fields for NLI scoring ---
+    # Cross-paper aggregates
+    s_pos_total: float  # S⁺ = Σ min(S⁺_d, β) across papers
+    s_neg_total: float  # S⁻ = Σ min(S⁻_d, β) across papers
+    m_lit: float  # Literature margin = S⁺ - α·S⁻ with α=1.3
+    # Source diversity
+    n_support: int  # N_sup = |{d: S⁺_d > τ}| with τ=0.3
+    n_contradict: int  # N_con = |{d: S⁻_d > τ}| with τ=0.3
+    # Per-paper aggregates
+    paper_aggregates: list[PaperNLIAggregate]
+    # Predicate discipline
+    claim_predicate_class: str  # "causal" or "association"
+    predicate_mismatch_count: int  # Sentences with conflicting predicate type
+    # Hedging
+    claim_is_hedged: bool  # Whether claim text contains hedging
+    hedging_terms: list[str]  # Detected hedging terms in claim
 
 
 ONTOLOGY_ROOT_TERMS: dict[str, set[str]] = {
@@ -159,6 +204,129 @@ CANONICAL_PREDICATE_MAP: dict[str, str] = {
     "block": "blocks",
     "blocks": "blocks",
 }
+
+# ---------------------------------------------------------------------------
+# NLI Scoring Constants (Day 3)
+# ---------------------------------------------------------------------------
+# Per-paper contribution cap to prevent single paper dominance
+NLI_PAPER_CAP_BETA: float = 0.8
+
+# Contradiction penalty factor (contradictions bite harder)
+NLI_CONTRADICTION_ALPHA: float = 1.3
+
+# Threshold for counting a paper as supporting/contradicting
+NLI_SUPPORT_THRESHOLD_TAU: float = 0.3
+
+# Paper type weights
+NLI_PAPER_WEIGHTS: dict[str, float] = {
+    "primary_human": 1.0,
+    "animal": 0.6,
+    "review": 0.4,
+    "unknown": 0.8,  # Conservative default
+}
+
+# Section-based sentence weights
+NLI_SECTION_WEIGHTS: dict[str, float] = {
+    "results": 1.0,
+    "conclusion": 1.0,
+    "discussion": 0.9,
+    "methods": 0.5,
+    "introduction": 0.7,
+    "background": 0.7,
+    "abstract": 0.85,  # Abstracts summarize key findings
+    "unknown": 0.8,
+}
+
+# Causal predicates that require stronger evidence
+CAUSAL_PREDICATES: frozenset[str] = frozenset(
+    {
+        "causes",
+        "cause",
+        "increases",
+        "increase",
+        "decreases",
+        "decrease",
+        "induces",
+        "induce",
+        "leads_to",
+        "leads to",
+        "results_in",
+        "results in",
+    }
+)
+
+# Association predicates (weaker claim, easier to support)
+ASSOCIATION_PREDICATES: frozenset[str] = frozenset(
+    {
+        "associated_with",
+        "associated with",
+        "correlates_with",
+        "correlates with",
+        "linked_to",
+        "linked to",
+        "related_to",
+        "related to",
+        "gene_associated_with_condition",
+    }
+)
+
+# Predicate factor mapping: sentence predicate -> claim predicate class -> factor
+# If sentence says "associated" but claim says "causes", factor is 0.5
+PREDICATE_FACTOR_MAP: dict[str, dict[str, float]] = {
+    # Sentence predicate class -> claim predicate class -> factor
+    "causal": {
+        "causal": 1.2,  # Strong support for causal claim
+        "association": 1.0,  # Causal evidence supports association
+    },
+    "association": {
+        "causal": 0.5,  # Weak support for causal claim
+        "association": 1.0,  # Matches
+    },
+    "unknown": {
+        "causal": 0.7,
+        "association": 0.8,
+    },
+}
+
+# Review article indicators in title/journal
+REVIEW_INDICATORS: tuple[str, ...] = (
+    "review",
+    "meta-analysis",
+    "metaanalysis",
+    "systematic review",
+    "overview",
+    "survey of",
+)
+
+# Animal study indicators
+ANIMAL_STUDY_INDICATORS: tuple[str, ...] = (
+    "mouse",
+    "mice",
+    "rat",
+    "rats",
+    "murine",
+    "rodent",
+    "zebrafish",
+    "drosophila",
+    "c. elegans",
+    "animal model",
+    "in vivo",
+    "xenograft",
+)
+
+# Human study indicators
+HUMAN_STUDY_INDICATORS: tuple[str, ...] = (
+    "patient",
+    "patients",
+    "human",
+    "clinical",
+    "cohort",
+    "case-control",
+    "randomized",
+    "trial",
+    "gwas",
+    "genome-wide",
+)
 
 
 def _sha1_slug(text: str) -> str:
@@ -1229,6 +1397,198 @@ def _detect_hedging_language(text: str) -> tuple[bool, list[str]]:
     return bool(matches), matches
 
 
+# ---------------------------------------------------------------------------
+# NLI Scoring Helper Functions (Day 3)
+# ---------------------------------------------------------------------------
+
+
+def _classify_paper_type(provenance: "CitationProvenance") -> str:
+    """Classify paper as primary_human, animal, review, or unknown.
+
+    Uses title, journal, and abstract to infer paper type.
+    Returns one of: "primary_human", "animal", "review", "unknown".
+    """
+    metadata = provenance.metadata
+    title = (provenance.title or "").lower()
+    journal = str(metadata.get("journal", "")).lower()
+    abstract = str(metadata.get("abstract", "")).lower()
+
+    combined_text = f"{title} {journal} {abstract}"
+
+    # Check for review articles first (they take precedence)
+    for indicator in REVIEW_INDICATORS:
+        if indicator in combined_text:
+            return "review"
+
+    # Check for human study indicators
+    human_score = sum(1 for ind in HUMAN_STUDY_INDICATORS if ind in combined_text)
+
+    # Check for animal study indicators
+    animal_score = sum(1 for ind in ANIMAL_STUDY_INDICATORS if ind in combined_text)
+
+    # Classify based on scores
+    if human_score > animal_score and human_score > 0:
+        return "primary_human"
+    elif animal_score > 0:
+        return "animal"
+    elif human_score > 0:
+        return "primary_human"
+
+    return "unknown"
+
+
+def _get_paper_weight(paper_type: str) -> float:
+    """Get weight for paper type (w_d)."""
+    return NLI_PAPER_WEIGHTS.get(paper_type, NLI_PAPER_WEIGHTS["unknown"])
+
+
+def _detect_sentence_section(sentence: str, abstract_text: str) -> str:
+    """Heuristically detect which section a sentence belongs to.
+
+    For abstracts, we use position-based heuristics since structured
+    section headers are not always present.
+    """
+    lowered = sentence.lower()
+
+    # Check for explicit section markers in sentence
+    section_markers = {
+        "results": ["we found", "we show", "we demonstrate", "our results", "analysis revealed"],
+        "conclusion": [
+            "in conclusion",
+            "we conclude",
+            "these findings suggest",
+            "in summary",
+            "taken together",
+        ],
+        "methods": ["we used", "we performed", "was measured", "were analyzed", "methodology"],
+        "introduction": ["previous studies", "it is known", "has been shown to", "background"],
+    }
+
+    for section, markers in section_markers.items():
+        for marker in markers:
+            if marker in lowered:
+                return section
+
+    # Position-based heuristic for abstracts
+    if abstract_text:
+        sentences = _split_into_sentences_simple(abstract_text)
+        if sentences:
+            try:
+                idx = sentences.index(sentence)
+                total = len(sentences)
+                position_ratio = idx / total if total > 0 else 0.5
+
+                if position_ratio < 0.2:
+                    return "introduction"
+                elif position_ratio > 0.8:
+                    return "conclusion"
+                elif position_ratio > 0.5:
+                    return "results"
+            except ValueError:
+                pass
+
+    return "abstract"  # Default for abstract sentences
+
+
+def _split_into_sentences_simple(text: str) -> list[str]:
+    """Simple sentence splitter (duplicate to avoid circular dependency)."""
+    cleaned = re.sub(r"\s+", " ", text.strip())
+    if not cleaned:
+        return []
+    parts = re.split(r"(?<=[.!?])\s+", cleaned)
+    return [part.strip() for part in parts if part.strip()]
+
+
+def _get_section_weight(section: str) -> float:
+    """Get weight for section (part of w_s)."""
+    return NLI_SECTION_WEIGHTS.get(section, NLI_SECTION_WEIGHTS["unknown"])
+
+
+def _classify_predicate_class(predicate_text: str) -> str:
+    """Classify a predicate as 'causal', 'association', or 'unknown'.
+
+    Used for predicate discipline to weight sentence contributions
+    based on whether the sentence supports causal vs association claims.
+    """
+    normalized = predicate_text.lower().replace("_", " ").replace("-", " ")
+
+    # Check for causal predicates
+    for causal in CAUSAL_PREDICATES:
+        if causal in normalized:
+            return "causal"
+
+    # Check for association predicates
+    for assoc in ASSOCIATION_PREDICATES:
+        if assoc in normalized:
+            return "association"
+
+    # Check for polarity markers which often indicate causal relationships
+    for marker in POSITIVE_POLARITY_MARKERS + NEGATIVE_POLARITY_MARKERS:
+        if marker in normalized:
+            return "causal"
+
+    return "unknown"
+
+
+def _get_predicate_factor(
+    sentence_predicate_class: str,
+    claim_predicate_class: str,
+) -> float:
+    """Get predicate factor (f_pred) for sentence weight.
+
+    If sentence says "associated" but claim is causal, factor is reduced.
+    If sentence is causal and claim is causal, factor is boosted.
+    """
+    sentence_map = PREDICATE_FACTOR_MAP.get(
+        sentence_predicate_class, PREDICATE_FACTOR_MAP["unknown"]
+    )
+    return sentence_map.get(claim_predicate_class, 0.8)
+
+
+def _compute_sentence_weight(
+    sentence: str,
+    abstract_text: str,
+    claim_predicate_class: str,
+    qualifier_tissue: str | None = None,
+) -> tuple[float, float, float, float, str]:
+    """Compute combined sentence weight (w_s * f_pred).
+
+    Returns:
+        Tuple of (total_weight, section_weight, hedging_weight, predicate_factor, sentence_pred_class)
+    """
+    # Section weight
+    section = _detect_sentence_section(sentence, abstract_text)
+    section_weight = _get_section_weight(section)
+
+    # Hedging weight (0.5 if hedged, 1.0 otherwise)
+    is_hedged, _ = _detect_hedging_language(sentence)
+    hedging_weight = 0.5 if is_hedged else 1.0
+
+    # Predicate factor
+    sentence_predicate_class = _classify_predicate_class(sentence)
+    predicate_factor = _get_predicate_factor(sentence_predicate_class, claim_predicate_class)
+
+    # Qualifier mismatch weight (tissue/species)
+    qualifier_weight = 1.0
+    if qualifier_tissue:
+        sentence_lower = sentence.lower()
+        # Check if sentence mentions a different tissue context
+        # This is a simplified check - could be enhanced with UBERON matching
+        tissue_term = (
+            qualifier_tissue.split(":")[-1].lower()
+            if ":" in qualifier_tissue
+            else qualifier_tissue.lower()
+        )
+        if tissue_term and tissue_term not in sentence_lower:
+            # Sentence doesn't mention the claimed tissue - slight penalty
+            qualifier_weight = 0.9
+
+    # Combined weight
+    total_weight = section_weight * hedging_weight * predicate_factor * qualifier_weight
+
+    return total_weight, section_weight, hedging_weight, predicate_factor, sentence_predicate_class
+
+
 def _split_into_sentences(text: str) -> list[str]:
     """Lightweight sentence splitter for abstracts and free text."""
     cleaned = re.sub(r"\s+", " ", text.strip())
@@ -1345,11 +1705,12 @@ def _build_text_nli_facts(
 ) -> TextNLIFacts:
     """Best-effort text-level NLI-style verification over abstracts.
 
-    For each literature citation where an abstract is available, we
-    split into sentences and assign SUPPORT/REFUTE/NEI labels using a
-    simple polarity-based heuristic. The result is aggregated into
-    counts and a few example sentences per label for downstream rules
-    and UI.
+    Day 3 enhanced version with:
+    - Per-sentence weights (section, hedging, predicate factor)
+    - Per-paper aggregation with paper type weights
+    - Cross-paper aggregation with per-paper caps (β=0.8)
+    - Literature margin: M_lit = S⁺ - α·S⁻ with α=1.3
+    - Source diversity tracking (N_support, N_contradict)
     """
     checked = False
     total_sentences = 0
@@ -1360,6 +1721,26 @@ def _build_text_nli_facts(
     refute_examples: list[dict[str, str]] = []
     nei_examples: list[dict[str, str]] = []
 
+    # Per-paper aggregates
+    paper_aggregates: list[PaperNLIAggregate] = []
+
+    # Determine claim predicate class for predicate discipline
+    qualifiers_map = triple.qualifiers if isinstance(triple.qualifiers, Mapping) else {}
+    text_predicate = qualifiers_map.get("text_predicate")
+    predicate_for_class = text_predicate if isinstance(text_predicate, str) else triple.predicate
+    claim_predicate_class = _classify_predicate_class(predicate_for_class)
+
+    # Get tissue qualifier for sentence weight adjustment
+    qualifier_tissue = qualifiers_map.get("tissue")
+    tissue_str = qualifier_tissue if isinstance(qualifier_tissue, str) else None
+
+    # Check if claim text is hedged
+    claim_text = claim.text if isinstance(claim, Claim) else ""
+    claim_is_hedged, hedging_terms = _detect_hedging_language(claim_text)
+
+    # Track predicate mismatches
+    predicate_mismatch_count = 0
+
     for record in provenance:
         metadata = record.metadata
         abstract_raw = metadata.get("abstract")
@@ -1367,10 +1748,59 @@ def _build_text_nli_facts(
             continue
         checked = True
 
+        # Classify paper type and get weight
+        paper_type = _classify_paper_type(record)
+        paper_weight = _get_paper_weight(paper_type)
+
+        # Sentence-level results for this paper
+        paper_sentence_results: list[SentenceNLIResult] = []
+
         sentences = _split_into_sentences(abstract_raw)
         for sentence in sentences:
             total_sentences += 1
+
+            # Get NLI label
             label = _nli_label_for_sentence(sentence, triple, claim)
+
+            # Compute sentence weight
+            (
+                total_weight,
+                section_weight,
+                hedging_weight,
+                predicate_factor,
+                sentence_pred_class,
+            ) = _compute_sentence_weight(sentence, abstract_raw, claim_predicate_class, tissue_str)
+
+            # Track predicate mismatches (causal claim with association-only evidence)
+            if claim_predicate_class == "causal" and sentence_pred_class == "association":
+                predicate_mismatch_count += 1
+
+            # Compute p_support and p_contradict based on label
+            # These are simplified confidence scores (could be enhanced with ML model)
+            if label == "SUPPORT":
+                p_support = 0.8  # Base confidence for heuristic match
+                p_contradict = 0.1
+            elif label == "REFUTE":
+                p_support = 0.1
+                p_contradict = 0.8
+            else:  # NEI
+                p_support = 0.3
+                p_contradict = 0.3
+
+            sentence_result: SentenceNLIResult = {
+                "citation": record.identifier,
+                "sentence": sentence,
+                "label": label,
+                "p_support": p_support,
+                "p_contradict": p_contradict,
+                "weight": total_weight,
+                "section_weight": section_weight,
+                "hedging_weight": hedging_weight,
+                "predicate_factor": predicate_factor,
+            }
+            paper_sentence_results.append(sentence_result)
+
+            # Update counts and examples
             example = {"citation": record.identifier, "sentence": sentence}
             if label == "SUPPORT":
                 support_count += 1
@@ -1385,6 +1815,63 @@ def _build_text_nli_facts(
                 if len(nei_examples) < 3:
                     nei_examples.append(example)
 
+        # Within-paper aggregation (keep top-k=3 sentences by weight)
+        sorted_by_support = sorted(
+            paper_sentence_results,
+            key=lambda x: x["weight"] * x["p_support"],
+            reverse=True,
+        )[:3]
+        sorted_by_contradict = sorted(
+            paper_sentence_results,
+            key=lambda x: x["weight"] * x["p_contradict"],
+            reverse=True,
+        )[:3]
+
+        # Compute S⁺_d and S⁻_d for this paper
+        s_pos_d = sum(paper_weight * r["weight"] * r["p_support"] for r in sorted_by_support)
+        s_neg_d = sum(paper_weight * r["weight"] * r["p_contradict"] for r in sorted_by_contradict)
+
+        # Apply per-paper cap (β=0.8)
+        capped_s_pos = min(s_pos_d, NLI_PAPER_CAP_BETA)
+        capped_s_neg = min(s_neg_d, NLI_PAPER_CAP_BETA)
+
+        # Get top support and contradict sentences for UI
+        top_support: SentenceNLIResult | None = (
+            sorted_by_support[0]
+            if sorted_by_support and sorted_by_support[0]["label"] == "SUPPORT"
+            else None
+        )
+        top_contradict: SentenceNLIResult | None = (
+            sorted_by_contradict[0]
+            if sorted_by_contradict and sorted_by_contradict[0]["label"] == "REFUTE"
+            else None
+        )
+
+        paper_aggregate: PaperNLIAggregate = {
+            "citation": record.identifier,
+            "paper_weight": paper_weight,
+            "paper_type": paper_type,
+            "s_pos": s_pos_d,
+            "s_neg": s_neg_d,
+            "capped_s_pos": capped_s_pos,
+            "capped_s_neg": capped_s_neg,
+            "top_support": top_support,
+            "top_contradict": top_contradict,
+            "sentence_count": len(paper_sentence_results),
+        }
+        paper_aggregates.append(paper_aggregate)
+
+    # Cross-paper aggregation
+    s_pos_total = sum(p["capped_s_pos"] for p in paper_aggregates)
+    s_neg_total = sum(p["capped_s_neg"] for p in paper_aggregates)
+
+    # Literature margin: M_lit = S⁺ - α·S⁻ (α=1.3, contradictions bite harder)
+    m_lit = s_pos_total - NLI_CONTRADICTION_ALPHA * s_neg_total
+
+    # Source diversity: count papers with S⁺_d > τ or S⁻_d > τ (τ=0.3)
+    n_support = sum(1 for p in paper_aggregates if p["s_pos"] > NLI_SUPPORT_THRESHOLD_TAU)
+    n_contradict = sum(1 for p in paper_aggregates if p["s_neg"] > NLI_SUPPORT_THRESHOLD_TAU)
+
     return {
         "checked": checked,
         "sentence_count": total_sentences,
@@ -1394,6 +1881,17 @@ def _build_text_nli_facts(
         "support_examples": support_examples,
         "refute_examples": refute_examples,
         "nei_examples": nei_examples,
+        # New Day 3 fields
+        "s_pos_total": s_pos_total,
+        "s_neg_total": s_neg_total,
+        "m_lit": m_lit,
+        "n_support": n_support,
+        "n_contradict": n_contradict,
+        "paper_aggregates": paper_aggregates,
+        "claim_predicate_class": claim_predicate_class,
+        "predicate_mismatch_count": predicate_mismatch_count,
+        "claim_is_hedged": claim_is_hedged,
+        "hedging_terms": hedging_terms,
     }
 
 
@@ -2522,6 +3020,114 @@ class SkepticPipeline:
                     description="Tissue mismatch gate: downgrades PASS to WARN",
                 )
             )
+
+        # ------------------------------------------------------------------
+        # NLI-based verdict gates (Day 3)
+        # These gates use the aggregated NLI signals to override verdicts.
+        # Gates only apply when NLI verification was actually performed.
+        # ------------------------------------------------------------------
+        text_nli_raw = facts.get("text_nli")
+        text_nli = text_nli_raw if isinstance(text_nli_raw, Mapping) else {}
+
+        nli_checked = bool(text_nli.get("checked", False))
+        nli_n_support = int(text_nli.get("n_support", 0))
+        nli_n_contradict = int(text_nli.get("n_contradict", 0))
+        nli_s_neg_total = float(text_nli.get("s_neg_total", 0.0))
+        nli_m_lit = float(text_nli.get("m_lit", 0.0))
+        nli_claim_predicate_class = str(text_nli.get("claim_predicate_class", "unknown"))
+        nli_claim_is_hedged = bool(text_nli.get("claim_is_hedged", False))
+        nli_hedging_terms = text_nli.get("hedging_terms", [])
+        paper_aggregates = text_nli.get("paper_aggregates", [])
+
+        # NLI gates only apply when we actually checked abstracts
+        if nli_checked:
+            # Gate 1: Strong contradiction gate (FAIL)
+            # N_con ≥ 2 AND S⁻ ≥ 0.8, OR one high-weight human primary with S⁻_d ≥ 0.9
+            strong_contradiction = False
+            if nli_n_contradict >= 2 and nli_s_neg_total >= 0.8:
+                strong_contradiction = True
+            else:
+                # Check for single high-weight human primary with strong contradiction
+                for paper in paper_aggregates:
+                    if isinstance(paper, Mapping):
+                        paper_type = paper.get("paper_type", "")
+                        s_neg = float(paper.get("s_neg", 0.0))
+                        if paper_type == "primary_human" and s_neg >= 0.9:
+                            strong_contradiction = True
+                            break
+
+            if strong_contradiction and verdict != "FAIL":
+                verdict = "FAIL"
+                evaluation.trace.add(
+                    RuleTraceEntry(
+                        rule_id="gate:nli_strong_contradiction",
+                        score=0.0,
+                        because=f"because strong contradiction detected: N_con={nli_n_contradict}, S⁻={nli_s_neg_total:.2f} (hard gate override)",
+                        description="NLI strong contradiction gate: forces FAIL",
+                    )
+                )
+
+            # Gate 2: Insufficient support for causal predicates (WARN/FAIL)
+            # Claim predicate is causal but N_sup < 2 AND M_lit < 1.0 → WARN
+            # If N_sup = 0 and N_con ≥ 1 → FAIL
+            if nli_claim_predicate_class == "causal":
+                if nli_n_support == 0 and nli_n_contradict >= 1 and verdict != "FAIL":
+                    verdict = "FAIL"
+                    evaluation.trace.add(
+                        RuleTraceEntry(
+                            rule_id="gate:nli_no_support_with_contradiction",
+                            score=0.0,
+                            because=f"because causal claim has no support (N_sup=0) but has contradiction (N_con={nli_n_contradict}) (hard gate override)",
+                            description="NLI insufficient support gate: forces FAIL for causal claims with contradictions",
+                        )
+                    )
+                elif nli_n_support < 2 and nli_m_lit < 1.0 and verdict == "PASS":
+                    verdict = "WARN"
+                    evaluation.trace.add(
+                        RuleTraceEntry(
+                            rule_id="gate:nli_weak_causal_support",
+                            score=0.0,
+                            because=f"because causal claim has weak support: N_sup={nli_n_support}, M_lit={nli_m_lit:.2f} (suggest downgrade to association)",
+                            description="NLI weak causal support gate: downgrades PASS to WARN",
+                        )
+                    )
+
+            # Gate 3: Mixed evidence (WARN)
+            # N_sup ≥ 1 AND N_con ≥ 1 AND |M_lit| < 0.4 → WARN with "contested" badge
+            if nli_n_support >= 1 and nli_n_contradict >= 1 and abs(nli_m_lit) < 0.4:
+                if verdict == "PASS":
+                    verdict = "WARN"
+                evaluation.trace.add(
+                    RuleTraceEntry(
+                        rule_id="gate:nli_mixed_evidence",
+                        score=0.0,
+                        because=f"because evidence is contested: N_sup={nli_n_support}, N_con={nli_n_contradict}, M_lit={nli_m_lit:.2f} (mixed/contested)",
+                        description="NLI mixed evidence gate: marks claim as contested",
+                    )
+                )
+
+        # Gate 4: Hedging adjustment
+        # If claim text is hedged ("may cause"), raise PASS threshold by +0.05
+        # This effectively means we're stricter about passing hedged claims
+        if nli_claim_is_hedged and verdict == "PASS":
+            # Re-evaluate with stricter threshold
+            hedging_threshold_boost = 0.05
+            effective_threshold = 0.8 + hedging_threshold_boost  # Normal PASS threshold + boost
+            if score < effective_threshold:
+                verdict = "WARN"
+                hedging_str = (
+                    ", ".join(nli_hedging_terms)
+                    if isinstance(nli_hedging_terms, list)
+                    else str(nli_hedging_terms)
+                )
+                evaluation.trace.add(
+                    RuleTraceEntry(
+                        rule_id="gate:nli_hedged_claim",
+                        score=0.0,
+                        because=f"because claim uses hedging language ({hedging_str}), raised PASS threshold to {effective_threshold:.2f}",
+                        description="NLI hedging gate: applies stricter threshold for hedged claims",
+                    )
+                )
 
         # Optional Day 3 suspicion GNN overlay (does not affect verdict).
         suspicion: dict[str, object] = {}

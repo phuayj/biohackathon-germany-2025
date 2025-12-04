@@ -164,3 +164,93 @@ rules:
           op: equals
           value: true
     because: "because {tissue.mismatch_details}"
+
+  # ---------------------------------------------------------------------------
+  # NLI Scoring Rules (Day 3)
+  # ---------------------------------------------------------------------------
+
+  - id: nli_multi_source_support
+    description: Multiple independent sources provide NLI support
+    weight: 0.5
+    when:
+      all:
+        - fact: text_nli.n_support
+          op: gte
+          value: 2
+    because: "because {text_nli.n_support} independent papers provide supporting evidence (N_sup ≥ 2)"
+
+  - id: nli_single_source_support
+    description: At least one source provides NLI support
+    weight: 0.2
+    when:
+      all:
+        - fact: text_nli.n_support
+          op: gte
+          value: 1
+        - fact: text_nli.n_support
+          op: lt
+          value: 2
+    because: "because at least one paper provides supporting evidence (N_sup = 1)"
+
+  - id: nli_strong_support_margin
+    description: Literature margin strongly supports the claim
+    weight: 0.4
+    when:
+      all:
+        - fact: text_nli.m_lit
+          op: gte
+          value: 1.0
+    because: "because literature margin is strongly positive (M_lit = {text_nli.m_lit:.2f} ≥ 1.0)"
+
+  - id: nli_contradiction_detected
+    description: At least one source contradicts the claim
+    weight: -0.6
+    when:
+      all:
+        - fact: text_nli.n_contradict
+          op: gte
+          value: 1
+    because: "because {text_nli.n_contradict} paper(s) contradict the claim (N_con ≥ 1)"
+
+  - id: nli_negative_margin
+    description: Literature margin is negative (more contradiction than support)
+    weight: -0.8
+    when:
+      all:
+        - fact: text_nli.m_lit
+          op: lt
+          value: 0
+    because: "because literature margin is negative (M_lit = {text_nli.m_lit:.2f} < 0, contradictions outweigh support)"
+
+  - id: nli_predicate_mismatch
+    description: Evidence uses weaker predicates than the claim
+    weight: -0.3
+    when:
+      all:
+        - fact: text_nli.claim_predicate_class
+          op: equals
+          value: "causal"
+        - fact: text_nli.predicate_mismatch_count
+          op: gte
+          value: 2
+    because: "because causal claim is supported only by association-level evidence ({text_nli.predicate_mismatch_count} predicate mismatches)"
+
+  - id: nli_hedged_claim_penalty
+    description: Claim uses hedging language (may, might, could)
+    weight: -0.15
+    when:
+      all:
+        - fact: text_nli.claim_is_hedged
+          op: equals
+          value: true
+    because: "because claim uses hedging language ({text_nli.hedging_terms})"
+
+  - id: nli_no_evidence_checked
+    description: No abstracts were available for NLI verification
+    weight: -0.05
+    when:
+      all:
+        - fact: text_nli.checked
+          op: equals
+          value: false
+    because: "because no abstracts were available for text-level NLI verification (neutral signal)"

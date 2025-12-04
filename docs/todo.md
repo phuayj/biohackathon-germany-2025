@@ -79,6 +79,45 @@
 
 ## Day 3 — Graph Suspicion & Incremental Learning
 
+### NLI Scoring & Aggregation
+> Treat NLI as a **first-class evidence signal** that can both **gate** (hard decision) and **shape** (continuous score) the verdict.
+
+#### Sentence & Paper Weighting (Done)
+- [x] Add **sentence weight** `w_s`: 1.0 if in Results/Conclusion; 0.7 Introduction; ×0.5 if hedged ("may/suggests/possible"); ×0.5 if qualifiers (tissue/species) mismatch.
+- [x] Add **paper weight** `w_d`: 1.0 primary human; 0.6 animal-only; 0.4 review.
+- [x] Cap each paper's contribution (β=0.8) to prevent one paper from dominating.
+
+#### Within-Paper Aggregation (Done)
+- [x] Keep **top-k** sentences by retrieval score (k=3) per paper.
+- [x] Compute soft aggregates: `S⁺_d = Σ w_d·w_s·p_sup(s)` and `S⁻_d = Σ w_d·w_s·p_con(s)`.
+- [ ] Optional log-odds conversion for stability: `L⁺_d = Σ w_d·w_s·logit(p_sup(s)+ε)`.
+
+#### Cross-Paper Aggregation (Diversity Aware) (Done)
+- [x] Aggregate with per-paper cap: `S⁺ = Σ min(S⁺_d, β)` and `S⁻ = Σ min(S⁻_d, β)`.
+- [x] Compute **literature margin**: `M_lit = S⁺ - α·S⁻` with α=1.2–1.5 (contradictions bite harder).
+- [x] Track **source diversity**: `N_sup = |{d: S⁺_d > τ}|` and `N_con = |{d: S⁻_d > τ}|` with τ=0.3.
+
+#### Predicate Discipline (Association vs Causation) (Done)
+- [x] Maintain **predicate map** from sentence-level relation to claim predicate class.
+- [x] "associated with" → supports **associated_with**; weak (×0.5) for **causes**.
+- [x] "loss of X results in Y", "X causes Y" → supports **causes** strongly (×1.0–1.2).
+- [x] Conflicting directionality (claim "increases" but sentence "decreases") → treat as contradiction.
+- [x] Apply **predicate factor** `f_pred ∈ {0, 0.5, 1.0, 1.2}` to each sentence before aggregation.
+
+#### NLI-Based Verdict Gates (Done)
+- [x] **Strong contradiction gate (FAIL):** `N_con ≥ 2` AND `S⁻ ≥ 0.8`, OR one high-weight human primary with `S⁻_d ≥ 0.9`.
+- [x] **Insufficient support for strong predicates (WARN/FAIL):** Claim predicate is **causes/increases/decreases** but `N_sup < 2` AND `M_lit < 1.0` → WARN (suggest downgrade to "associated_with"). If `N_sup = 0` and `N_con ≥ 1` → FAIL.
+- [x] **Mixed evidence (WARN):** `N_sup ≥ 1` AND `N_con ≥ 1` AND `|M_lit| < 0.4` → WARN with "contested" badge.
+
+#### NLI in Continuous Score (Done)
+- [x] Fold `M_lit` into audit score: `audit_score = σ(w_lit·M̂_lit + w_kg·Ŝ_kg + w_multi·N̂_sup - w_mismatch·qualifier_mismatch - w_pred·predicate_mismatch)`.
+- [x] Starter weights: `w_lit=0.6, w_kg=0.2, w_multi=0.2, w_mismatch=0.3, w_pred=0.3`.
+- [ ] Decision thresholds: **PASS** `≥0.65` AND `N_sup≥2` AND `N_con=0`; **WARN** `0.4–0.65` or mixed; **FAIL** `<0.4` or gate fired.
+
+#### Hedging & Deduplication (Done)
+- [x] Limit to **one** top supporting and one top contradicting sentence **per paper** in UI.
+- [x] If claim text is hedged ("may cause"), raise PASS threshold by +0.05.
+
 ### Subgraph Builder
 - [x] Fetch 2–3 hop ego-net given (subject, object).
 - [x] Compute node features: clustering, path counts, PPI weights (extend existing degree features).
@@ -195,6 +234,12 @@
 - [ ] Ablation: no GNN vs with GNN.
 - [ ] Ablation: no retraction gate vs with.
 
+#### NLI Calibration
+- [ ] **Calibrate NLI probabilities:** Fit isotonic/Platt scaling on seeded claims so `p_sup` and `p_con` are well-behaved.
+- [ ] **Dedupe bias control:** Cap per-paper contribution in scoring (β cap) to prevent single paper dominance.
+- [ ] **Hedging sensitivity:** If claim text is hedged ("may cause"), raise PASS threshold by +0.05.
+- [ ] Min-max or Z-normalize NLI features (`M̂_lit`, `N̂_sup`) on seeded set before combining with other features.
+
 #### GNN Spec Compliance (Phase 3 — Calibration & Losses)
 - [ ] Add temperature scaling for suspicion score calibration per spec §3.3.
 - [ ] Add focal loss as alternative to BCE for class imbalance per spec §3.2.
@@ -215,6 +260,7 @@
 - [ ] Refine variant-context detection beyond simple mutation keywords (e.g., better patterns/NER for `has_variant_context` on GeneToDiseaseAssociation edges).
 - [x] Modernize predicate polarity detection using pattern sets or lightweight classifiers (beyond manual verb lists) and expose configurable synonym maps.
 - [ ] Add corpus-derived predicate canonicalization (embedding/alias lookup) so opposite-predicate detection covers nuanced phrasing.
+- [ ] Make NLI paper type classifiers data-driven: replace hardcoded REVIEW_INDICATORS, ANIMAL_STUDY_INDICATORS, HUMAN_STUDY_INDICATORS with configurable patterns or lightweight ML-based classification using MeSH terms/publication types.
 
 ### Integration Testing
 - [ ] Run `UV_CACHE_DIR=.uv-cache uv run pytest` to validate recent type-tightening changes around text NLI facts.
@@ -244,7 +290,9 @@
 - [ ] 20–30s screen capture showing edges changing color/width as evidence updates (live overlay demo).
 
 ### Stretch Features (If Time)
-- [ ] **Strict vs Lenient auditor** toggle.
+- [ ] **Strict vs Lenient auditor** toggle:
+  - **Strict:** α=1.5, θ⁻=0.6, require `N_sup≥2` (primary human) for PASS on causal predicates.
+  - **Lenient:** α=1.2, allow PASS with `N_sup≥1` if predicate is **associated_with** and no contradictions.
 - [ ] **Provenance explain:** Link from each edge to exact PMIDs/DOIs.
 - [ ] **Batch mode:** Upload claim list → CSV of audit results.
 - [ ] KG-backed contradiction checks using external literature evidence (cached).
@@ -289,4 +337,41 @@ class ErrorTypeStore:
     def classify(self, feat):
         return argmax_cosine(feat, self.prototypes)
     def update_with_rehearsal(self, new_name, new_examples, replay_buf): ...
+```
+
+### NLI Aggregation (pseudo)
+```python
+def aggregate_nli(papers, claim_predicate):
+    S_pos = S_neg = 0.0
+    Ns, Nc = 0, 0
+    for d in papers:
+        if d.retracted:
+            return {"gate": "FAIL:retracted"}
+        w_d = paper_weight(d)  # 1.0 primary human, 0.6 animal, 0.4 review
+        Spos_d = Sneg_d = 0.0
+        for s in top_k_sentences(d, k=3):
+            w_s = sent_weight(s) * predicate_factor(s, claim_predicate)
+            Spos_d += w_d * w_s * p_support(s)
+            Sneg_d += w_d * w_s * p_contradict(s)
+        S_pos += min(Spos_d, 0.8)  # cap per-paper contribution
+        S_neg += min(Sneg_d, 0.8)
+        Ns += (Spos_d > 0.3)
+        Nc += (Sneg_d > 0.3)
+    M_lit = S_pos - 1.3 * S_neg  # contradictions bite harder
+    return {"S_pos": S_pos, "S_neg": S_neg, "M_lit": M_lit, "Ns": Ns, "Nc": Nc}
+
+def apply_nli_gates(nli_result, claim_predicate):
+    # Strong contradiction gate
+    if nli_result["Nc"] >= 2 and nli_result["S_neg"] >= 0.8:
+        return "FAIL:strong_contradiction"
+    # Insufficient support for causal predicates
+    if claim_predicate in ["causes", "increases", "decreases"]:
+        if nli_result["Ns"] < 2 and nli_result["M_lit"] < 1.0:
+            return "WARN:weak_causal_support"
+        if nli_result["Ns"] == 0 and nli_result["Nc"] >= 1:
+            return "FAIL:no_support_with_contradiction"
+    # Mixed evidence
+    if nli_result["Ns"] >= 1 and nli_result["Nc"] >= 1 and abs(nli_result["M_lit"]) < 0.4:
+        return "WARN:contested"
+    return None  # no gate fired
 ```
