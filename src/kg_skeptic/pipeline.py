@@ -1165,7 +1165,7 @@ def _normalize_ancestor_ids(raw_values: Sequence[object] | list[object]) -> set[
     return ancestors
 
 
-def _detect_sibling_conflict(
+def detect_sibling_conflict(
     subject: NormalizedEntity, obj: NormalizedEntity, predicate: str
 ) -> tuple[bool, list[str]]:
     """Detect ontology sibling conflicts between subject and object entities.
@@ -1979,7 +1979,7 @@ def build_rule_facts(
         domain_valid = True
         range_valid = True
 
-    sibling_conflict, shared_ancestors = _detect_sibling_conflict(
+    sibling_conflict, shared_ancestors = detect_sibling_conflict(
         triple.subject, triple.object, predicate
     )
 
@@ -2094,6 +2094,7 @@ class AuditResult:
     verdict: str
     facts: dict[str, object]
     provenance: list[CitationProvenance]
+    normalization: NormalizationResult
     suspicion: dict[str, object] = field(default_factory=dict)
 
 
@@ -2850,10 +2851,13 @@ class SkepticPipeline:
             "structured_sources": sorted(structured_sources),
         }
 
-    def run(self, audit_payload: AuditPayload) -> AuditResult:
-        """Run the skeptic on a normalized audit payload."""
-        normalization = self.normalizer.normalize(audit_payload)
-        provenance = self.provenance_fetcher.fetch_many(normalization.citations)
+    def evaluate_audit(
+        self,
+        normalization: NormalizationResult,
+        provenance: Sequence[CitationProvenance],
+        audit_payload: AuditPayload | None = None,
+    ) -> AuditResult:
+        """Evaluate rules and gates for a normalized claim + provenance."""
         context_conflicts = _detect_opposite_predicate_context(
             normalization.triple,
             getattr(self.normalizer, "backend", None),
@@ -3146,20 +3150,16 @@ class SkepticPipeline:
             suspicion = {}
 
         # Build a report with key stats embedded
-        task_id = (
-            audit_payload.get("task_id")
-            if isinstance(audit_payload, Mapping) and "task_id" in audit_payload
-            else normalization.claim.id
-        )
-        agent_name = (
-            audit_payload.get("agent_name")
-            if isinstance(audit_payload, Mapping) and "agent_name" in audit_payload
-            else "unknown"
-        )
+        # Try to extract metadata from payload if available
+        task_id = normalization.claim.id
+        agent_name = "unknown"
+        if isinstance(audit_payload, Mapping):
+            task_id = str(audit_payload.get("task_id") or task_id)
+            agent_name = str(audit_payload.get("agent_name") or agent_name)
 
         report = Report(
-            task_id=str(task_id),
-            agent_name=str(agent_name),
+            task_id=task_id,
+            agent_name=agent_name,
             summary=f"Verdict: {verdict} (score={score:.2f})",
             claims=[normalization.claim],
             findings=[],
@@ -3180,5 +3180,13 @@ class SkepticPipeline:
             verdict=verdict,
             facts=facts,
             provenance=list(provenance),
+            normalization=normalization,
             suspicion=suspicion,
         )
+
+
+    def run(self, audit_payload: AuditPayload) -> AuditResult:
+        """Run the skeptic on a normalized audit payload."""
+        normalization = self.normalizer.normalize(audit_payload)
+        provenance = self.provenance_fetcher.fetch_many(normalization.citations)
+        return self.evaluate_audit(normalization, provenance, audit_payload=audit_payload)

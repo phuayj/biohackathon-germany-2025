@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from dataclasses import replace
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -24,7 +25,7 @@ from kg_skeptic.pipeline import AuditResult, ClaimNormalizer, SkepticPipeline
 from kg_skeptic.mcp.kg import KGBackend, KGEdge, Neo4jBackend, MonarchBackend
 from kg_skeptic.mcp.mini_kg import load_mini_kg_backend
 from kg_skeptic.provenance import CitationProvenance
-from kg_skeptic.rules import RuleEvaluation
+from kg_skeptic.rules import RuleEvaluation, RuleTraceEntry
 from kg_skeptic.subgraph import Subgraph, build_pair_subgraph
 from kg_skeptic.visualization import (
     CATEGORY_COLORS,
@@ -1454,6 +1455,43 @@ def main() -> None:
             st.caption("ℹ️ No GNN model configured")
 
         st.divider()
+        st.header("What-If Scenarios")
+
+        # Ontology Strictness
+        ontology_strictness = st.radio(
+            "Ontology Strictness",
+            options=["Lenient (allow siblings)", "Strict (descendant only)"],
+            index=0,
+            key="ontology_strictness_radio",
+            help="Strict mode treats sibling conflicts as FAIL. Lenient mode treats them as WARN.",
+        )
+        st.session_state.ontology_strictness = ontology_strictness
+
+        # Retraction Simulation
+        st.markdown("**Simulate Retraction**")
+        st.caption("Temporarily mark citations as retracted.")
+
+        # We need the current result to populate the multiselect
+        current_result = st.session_state.get("result")
+        
+        # Initialize simulated_retractions if not present
+        if "simulated_retractions" not in st.session_state:
+            st.session_state.simulated_retractions = []
+
+        if current_result and hasattr(current_result, "provenance"):
+            all_citations = sorted(list({p.identifier for p in current_result.provenance}))
+            
+            selected_retractions = st.multiselect(
+                "Select citations to retract:",
+                options=all_citations,
+                default=st.session_state.simulated_retractions,
+                key="retraction_multiselect",
+            )
+            st.session_state.simulated_retractions = selected_retractions
+        else:
+            st.caption("Run an audit to see citations.")
+
+        st.divider()
         st.caption("**Entity Source Legend:**")
         st.markdown(
             '<span style="background-color: #5c6bc0; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.8em;">GLiNER+KG</span> Neural + KG normalized',
@@ -1612,8 +1650,66 @@ def main() -> None:
     # Show results if audit has been run
     if st.session_state.audit_run:
         st.divider()
+        
+        result = st.session_state.result
+        
+        # Apply What-If Scenarios
+        # 1. Retraction Simulation
+        simulated_retractions = st.session_state.get("simulated_retractions", [])
+        
+        # 2. Ontology Strictness
+        strictness_setting = st.session_state.get("ontology_strictness", "")
+        is_strict = strictness_setting.startswith("Strict")
+        
+        display_result = result
+        
+        # Only re-evaluate if we have overrides AND the necessary data (normalization)
+        if (simulated_retractions or is_strict):
+            if hasattr(result, "normalization") and result.normalization:
+                # Clone provenance and apply retractions
+                modified_provenance = []
+                for p in result.provenance:
+                    new_p = replace(p)
+                    if p.identifier in simulated_retractions:
+                        new_p.status = "retracted"
+                        # Reset db_provenance status if it was carrying the status?
+                        # No, status is on CitationProvenance.
+                    modified_provenance.append(new_p)
+                
+                # Re-evaluate
+                pipeline = _get_pipeline(use_gliner=st.session_state.get("use_gliner", True))
+                
+                # We assume the normalization is valid.
+                # Note: This does not re-fetch provenance, just re-evaluates rules.
+                new_result = pipeline.evaluate_audit(
+                    result.normalization, 
+                    modified_provenance,
+                    audit_payload=None
+                )
+                 
+                # Apply Ontology Strictness Override (Verdict Change)
+                if is_strict:
+                    # Check if sibling conflict rule fired
+                    sibling_entry = next((e for e in new_result.evaluation.trace.entries if e.rule_id == "gate:sibling_conflict"), None)
+                    if sibling_entry:
+                        new_result.verdict = "FAIL"
+                        new_result.evaluation.trace.add(
+                            RuleTraceEntry(
+                                rule_id="gate:strict_ontology",
+                                score=0.0,
+                                because="because strict mode is enabled and sibling conflict detected (Strict Mode override: WARN → FAIL)",
+                                description="Strict ontology gate: forces FAIL on sibling conflict"
+                            )
+                        )
+                
+                display_result = new_result
+            else:
+                 # If result doesn't have normalization (e.g. old object), we can't apply scenarios easily
+                 # without re-running normalization which might be slow/different.
+                 pass
+
         render_audit_card(
-            st.session_state.result,
+            display_result,
             allow_feedback=st.session_state.get("is_custom_claim", False),
         )
 

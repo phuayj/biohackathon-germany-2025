@@ -184,8 +184,8 @@
 - [x] Add manual single-edge recheck button in Edge Inspector.
 
 ### What-If Demos
-- [ ] **Simulate retraction toggle:** Temporarily mark a PMID as retracted → watch edge turn red, score drop, PASS→FAIL.
-- [ ] **Ontology strictness slider:** Strict (descendant HPO only) vs Lenient (allow siblings) → edges appear/disappear.
+- [x] **Simulate retraction toggle:** Temporarily mark a PMID as retracted → watch edge turn red, score drop, PASS→FAIL.
+- [x] **Ontology strictness slider:** Strict (descendant HPO only) vs Lenient (allow siblings) → edges appear/disappear.
 
 ### Class-Incremental Error Types (Done)
 - [x] Add class-incremental error prototype store: `TypeViolation`, `RetractedSupport`, `WeakEvidence`, `OntologyMismatch`.
