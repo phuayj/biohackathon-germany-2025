@@ -580,7 +580,9 @@ def load_edges(
         record_hash = hashlib.sha256(content.encode()).hexdigest()
 
         # Extract publications (Monarch KG uses Python list literal format)
-        pubs: list[str] = parse_list_literal(row.get("publications", ""))
+        # Filter to only include PMID entries for publication nodes
+        pubs_raw: list[str] = parse_list_literal(row.get("publications", ""))
+        pubs: list[str] = [p for p in pubs_raw if p.startswith("PMID:")]
 
         # Decide: reify (has publications) or direct edge (no publications)
         if pubs:
@@ -1058,9 +1060,14 @@ def load_hpo_disease_phenotypes(
             record_hash = hashlib.sha256(content.encode()).hexdigest()
 
             # Extract publications from reference field
+            # Reference may contain mixed IDs (PMID, OMIM, etc.) separated by semicolons
+            # Only keep PMID entries for publication nodes
             publications: list[str] = []
-            if reference and reference.startswith("PMID:"):
-                publications = [p.strip() for p in reference.split(";") if p.strip()]
+            if reference:
+                for ref in reference.split(";"):
+                    ref = ref.strip()
+                    if ref.startswith("PMID:"):
+                        publications.append(ref)
 
             # Decide: reify (has publications) or direct edge (no publications)
             if publications:
