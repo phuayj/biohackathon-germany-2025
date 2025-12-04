@@ -450,7 +450,7 @@ class GraphSample:
     metadata: Dict[str, object] = field(default_factory=dict)
 
 
-def _collect_global_phenotypes() -> Tuple[Sequence[str], Dict[str, str], Dict[str, set[str]]]:
+def _collect_global_phenotypes() -> Tuple[list[str], Dict[str, str], Dict[str, set[str]]]:
     """Collect phenotype ids and labels from the mini KG.
 
     This is used to synthesize "sibling-like" phenotype replacements for
@@ -747,6 +747,11 @@ def _edge_is_suspicious(edge: KGEdge) -> bool:
 
     # Synthetic perturbations and explicit retraction flags are always suspicious.
     if _edge_has_retracted_support(edge):
+        return True
+
+    # Edges with significant ratio of supporting papers citing retracted work are suspicious.
+    citing_retracted_ratio = props.get("citing_retracted_ratio", 0)
+    if isinstance(citing_retracted_ratio, (int, float)) and citing_retracted_ratio > 0.1:
         return True
 
     perturbed_raw = props.get("is_perturbed_edge", 0.0)
@@ -1232,6 +1237,7 @@ def _build_real_retracted_samples(
     k_hops: int,
     all_predicates: set[str],
     oversample_factor: int = 1,
+    include_publications: bool = False,
 ) -> tuple[list[GraphSample], int, int]:
     """Build training samples from real retracted support associations.
 
@@ -1240,6 +1246,7 @@ def _build_real_retracted_samples(
         k_hops: Hops for ego subgraph.
         all_predicates: Set to track predicates (mutated).
         oversample_factor: How many times to repeat each real example (for balancing).
+        include_publications: If True, include publication nodes and citation edges.
 
     Returns:
         Tuple of (samples, total_pos, total_neg).
@@ -1361,6 +1368,7 @@ def build_dataset(
     k_hops: int = 2,
     backend: KGBackend | None = None,
     use_real_retractions: bool = True,
+    include_publications: bool = True,
 ) -> tuple[list[GraphSample], Dict[str, int]]:
     """Construct a small graph-level dataset for training the suspicion GNN.
 
@@ -1378,6 +1386,9 @@ def build_dataset(
         backend: KG backend (defaults to mini KG).
         use_real_retractions: If True and using Neo4j, use real retracted support
             associations instead of synthetic ones.
+        include_publications: If True (default), include publication nodes and
+            citation edges in subgraphs. Enables the GNN to learn citation-based
+            suspicion patterns. Gracefully skipped if citation data unavailable.
     """
     if backend is None:
         backend = load_mini_kg_backend()
@@ -1419,7 +1430,7 @@ def build_dataset(
     # Handle real retracted support if Neo4j backend and enabled
     use_real_retracted = use_real_retractions and isinstance(backend, Neo4jBackend)
 
-    if use_real_retracted:
+    if use_real_retracted and isinstance(backend, Neo4jBackend):
         print("Querying real retracted support associations from Neo4j...")
         # We'll add these samples after the main loop with proper balancing
         # For now, just check if any exist
@@ -1428,7 +1439,9 @@ def build_dataset(
         print(f"  Publications checked: {total_pubs}, retracted: {retracted_pubs}")
 
     for subject, obj in selected_pairs:
-        base_subgraph = build_pair_subgraph(backend, subject, obj, k=k_hops)
+        base_subgraph = build_pair_subgraph(
+            backend, subject, obj, k=k_hops, include_publications=include_publications
+        )
         if not base_subgraph.edges:
             continue
 
@@ -2190,6 +2203,22 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Use synthetic retracted support instead of real data from Neo4j.",
     )
+    parser.add_argument(
+        "--include-publications",
+        action="store_true",
+        default=True,
+        help=(
+            "Include publication nodes and citation edges in subgraphs. "
+            "Enables GNN to learn citation-based suspicion patterns "
+            "(papers citing retracted work). Enabled by default; gracefully "
+            "skipped if citation data unavailable."
+        ),
+    )
+    parser.add_argument(
+        "--no-publications",
+        action="store_true",
+        help="Disable publication/citation network in subgraphs.",
+    )
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
@@ -2331,6 +2360,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         args, "no_real_retractions", False
     )
 
+    include_publications = args.include_publications and not getattr(args, "no_publications", False)
+
     try:
         samples, predicate_to_index = build_dataset(
             num_subgraphs=args.num_subgraphs,
@@ -2338,6 +2369,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             k_hops=2,
             backend=backend,
             use_real_retractions=use_real_retractions,
+            include_publications=include_publications,
         )
     except RuntimeError as exc:
         print(f"✖ Failed to build dataset: {exc}", file=sys.stderr)

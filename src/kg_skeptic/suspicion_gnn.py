@@ -92,6 +92,10 @@ NUMERIC_EDGE_KEYS_DEFAULT: tuple[str, ...] = (
     "rule_feature_max",
     "rule_feature_min",
     "is_claim_edge_for_rule_features",
+    # Retraction and citation-based suspicion features (ratios, not raw counts)
+    "has_retracted_support",
+    "retracted_support_ratio",  # Ratio of supporting pubs that are retracted
+    "citing_retracted_ratio",  # Ratio of supporting pubs that cite retracted papers
 )
 
 

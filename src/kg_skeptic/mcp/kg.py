@@ -714,6 +714,9 @@ class Neo4jBackend(KGBackend):
             "a.predicate AS predicate_prop, "
             "a AS assoc, "
             "collect(pub.id) AS publications, "
+            "count(pub) AS total_pub_count, "
+            "sum(CASE WHEN pub.retracted = true THEN 1 ELSE 0 END) AS retracted_pub_count, "
+            "sum(CASE WHEN pub.cites_retracted_count > 0 THEN 1 ELSE 0 END) AS pubs_citing_retracted_count, "
             "'reified' AS pattern"
         )
 
@@ -749,6 +752,24 @@ class Neo4jBackend(KGBackend):
             pubs = rec.get("publications", [])
             if isinstance(pubs, list):
                 assoc_sources = [str(p) for p in pubs if p]
+
+            # Add citation-based suspicion metrics as RATIOS (not raw counts)
+            # to avoid skewing toward edges with many supporting publications
+            total_pub_count = _coerce_to_int(rec.get("total_pub_count", 0))
+            retracted_pub_count = _coerce_to_int(rec.get("retracted_pub_count", 0))
+            pubs_citing_retracted = _coerce_to_int(rec.get("pubs_citing_retracted_count", 0))
+
+            if total_pub_count > 0:
+                # Ratio of supporting publications that are retracted
+                if retracted_pub_count > 0:
+                    assoc_properties["retracted_support_ratio"] = float(
+                        retracted_pub_count / total_pub_count
+                    )
+                # Ratio of supporting publications that cite retracted papers
+                if pubs_citing_retracted > 0:
+                    assoc_properties["citing_retracted_ratio"] = float(
+                        pubs_citing_retracted / total_pub_count
+                    )
 
             actual_predicate = rec.get("predicate_prop", "")
 
@@ -960,7 +981,10 @@ class Neo4jBackend(KGBackend):
             "o.name AS object_label, "
             "a.predicate AS predicate_prop, "
             "a AS assoc_props, "
-            "collect(pub.id) AS publications"
+            "collect(pub.id) AS publications, "
+            "count(pub) AS total_pub_count, "
+            "sum(CASE WHEN pub.retracted = true THEN 1 ELSE 0 END) AS retracted_pub_count, "
+            "sum(CASE WHEN pub.cites_retracted_count > 0 THEN 1 ELSE 0 END) AS pubs_citing_retracted_count"
         )
 
         for rec in self._iter_records(assoc_query, params):
@@ -995,6 +1019,21 @@ class Neo4jBackend(KGBackend):
             pubs = rec.get("publications", [])
             if isinstance(pubs, list):
                 assoc_sources = [str(p) for p in pubs if p]
+
+            # Add citation-based suspicion metrics as RATIOS (not raw counts)
+            total_pub_count = _coerce_to_int(rec.get("total_pub_count", 0))
+            retracted_pub_count = _coerce_to_int(rec.get("retracted_pub_count", 0))
+            pubs_citing_retracted = _coerce_to_int(rec.get("pubs_citing_retracted_count", 0))
+
+            if total_pub_count > 0:
+                if retracted_pub_count > 0:
+                    assoc_properties["retracted_support_ratio"] = float(
+                        retracted_pub_count / total_pub_count
+                    )
+                if pubs_citing_retracted > 0:
+                    assoc_properties["citing_retracted_ratio"] = float(
+                        pubs_citing_retracted / total_pub_count
+                    )
 
             subj_id = str(rec.get("subject_id"))
             obj_id = str(rec.get("object_id"))
@@ -1473,6 +1512,113 @@ class Neo4jBackend(KGBackend):
             return total, retracted
 
         return 0, 0
+
+    def get_citation_subgraph(
+        self,
+        pmids: list[str],
+        k_hops: int = 2,
+    ) -> tuple[list[KGNode], list[KGEdge]]:
+        """Get publication nodes and citation edges for a set of PMIDs.
+
+        Fetches the citation network (CITES relationships) around the given
+        publications, up to k_hops away. Also returns the retracted status
+        and cites_retracted_count for each publication.
+
+        Args:
+            pmids: List of PMIDs (with or without "PMID:" prefix)
+            k_hops: How many citation hops to traverse (default: 2)
+
+        Returns:
+            Tuple of (publication_nodes, citation_edges)
+        """
+        provenance = make_static_provenance(source_db="neo4j")
+        nodes: list[KGNode] = []
+        edges: list[KGEdge] = []
+
+        if not pmids:
+            return nodes, edges
+
+        # Normalize PMIDs to have PMID: prefix
+        normalized_pmids = []
+        for pmid in pmids:
+            if pmid.upper().startswith("PMID:"):
+                normalized_pmids.append(pmid)
+            else:
+                normalized_pmids.append(f"PMID:{pmid}")
+
+        hop_range = f"0..{int(k_hops)}"
+
+        # Query publication nodes and their properties
+        node_query = f"""
+        MATCH (seed:Publication)
+        WHERE seed.id IN $pmids
+        MATCH (p:Publication)-[:CITES*{hop_range}]-(seed)
+        RETURN DISTINCT
+            p.id AS id,
+            p.retracted AS retracted,
+            p.cites_retracted_count AS cites_retracted_count,
+            p.title AS title
+        """
+
+        seen_nodes: set[str] = set()
+        for rec in self._iter_records(node_query, {"pmids": normalized_pmids}):
+            node_id = str(rec.get("id", ""))
+            if not node_id or node_id in seen_nodes:
+                continue
+            seen_nodes.add(node_id)
+
+            props: dict[str, _object] = {}
+            retracted = rec.get("retracted")
+            if retracted is not None:
+                props["retracted"] = bool(retracted)
+            cites_retracted = rec.get("cites_retracted_count")
+            if cites_retracted is not None:
+                props["cites_retracted_count"] = _coerce_to_int(cites_retracted)
+
+            nodes.append(
+                KGNode(
+                    id=node_id,
+                    label=str(rec.get("title", "")) if rec.get("title") else None,
+                    category="publication",
+                    properties=props,
+                    provenance=provenance,
+                )
+            )
+
+        # Query citation edges
+        edge_query = f"""
+        MATCH (seed:Publication)
+        WHERE seed.id IN $pmids
+        MATCH (citing:Publication)-[:CITES*{hop_range}]-(seed)
+        MATCH (citing)-[r:CITES]->(cited:Publication)
+        WHERE citing.id IN $all_ids AND cited.id IN $all_ids
+        RETURN DISTINCT
+            citing.id AS citing_id,
+            cited.id AS cited_id
+        """
+
+        all_ids = list(seen_nodes)
+        seen_edges: set[tuple[str, str]] = set()
+        for rec in self._iter_records(edge_query, {"pmids": normalized_pmids, "all_ids": all_ids}):
+            citing_id = str(rec.get("citing_id", ""))
+            cited_id = str(rec.get("cited_id", ""))
+            if not citing_id or not cited_id:
+                continue
+            edge_key = (citing_id, cited_id)
+            if edge_key in seen_edges:
+                continue
+            seen_edges.add(edge_key)
+
+            edges.append(
+                KGEdge(
+                    subject=citing_id,
+                    predicate="CITES",
+                    object=cited_id,
+                    provenance=provenance,
+                )
+            )
+
+        return nodes, edges
 
 
 class KGTool:

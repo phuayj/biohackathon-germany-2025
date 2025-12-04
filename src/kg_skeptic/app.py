@@ -250,7 +250,7 @@ def _build_neo4j_backend_from_env() -> KGBackend | None:
     except Exception:
         st.warning(
             "Neo4j Python driver is not installed. "
-            "Run `pip install neo4j` to enable the Neo4j/BioCypher backend."
+            "Run `pip install neo4j` to enable the Neo4j KG backend."
         )
         return None
 
@@ -1422,7 +1422,7 @@ def main() -> None:
 
         kg_backend = _get_kg_backend()
         if isinstance(kg_backend, Neo4jBackend):
-            st.caption("🕸 Using Neo4j/BioCypher KG backend")
+            st.caption("🕸 Using Neo4j KG backend")
         elif kg_backend is not None:
             st.caption("🕸 Using custom KG backend")
         else:

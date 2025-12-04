@@ -17,6 +17,7 @@ top of this core builder.
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Dict, List, Mapping
@@ -30,7 +31,7 @@ from kg_skeptic.mcp.kg import (
 from kg_skeptic.pipeline import _category_from_id
 
 
-ALLOWED_NODE_CATEGORIES: set[str] = {"gene", "disease", "phenotype", "pathway"}
+ALLOWED_NODE_CATEGORIES: set[str] = {"gene", "disease", "phenotype", "pathway", "publication"}
 
 
 def _normalize_category(category: str | None) -> str:
@@ -57,6 +58,8 @@ def _normalize_category(category: str | None) -> str:
         "molecularactivity": "pathway",
         "pathway": "pathway",
         "cellularcomponent": "pathway",
+        "publication": "publication",
+        "article": "publication",
     }
 
     return category_mapping.get(cat, cat)
@@ -75,8 +78,15 @@ class Subgraph:
     node_features: dict[str, dict[str, float]] = field(default_factory=dict)
 
 
-def _is_allowed_edge(subj_id: str, obj_id: str) -> bool:
-    """Return True if an edge is one of the allowed Day 3 types."""
+def _is_allowed_edge(subj_id: str, obj_id: str, *, include_publications: bool = False) -> bool:
+    """Return True if an edge is one of the allowed Day 3 types.
+
+    Args:
+        subj_id: Subject node identifier
+        obj_id: Object node identifier
+        include_publications: If True, also allow publication-related edges
+            (publication-publication for CITES, any-publication for SUPPORTED_BY)
+    """
     subj_cat = _category_from_id(subj_id)
     obj_cat = _category_from_id(obj_id)
 
@@ -95,6 +105,15 @@ def _is_allowed_edge(subj_id: str, obj_id: str) -> bool:
     # Gene–pathway (GO / Reactome)
     if {"gene", "pathway"} == {subj_cat, obj_cat}:
         return True
+
+    # Publication edges (citation network)
+    if include_publications:
+        # Publication-publication (CITES)
+        if subj_cat == "publication" and obj_cat == "publication":
+            return True
+        # Any entity supported by publication (for SUPPORTED_BY edges)
+        if "publication" in {subj_cat, obj_cat}:
+            return True
 
     return False
 
@@ -243,6 +262,44 @@ def _compute_node_features(
                 for idx, value in enumerate(embedding_values):
                     features[node_id][f"node2vec_{idx}"] = value
 
+            # Publication-specific features for citation network GNN
+            node_category = _normalize_category(
+                getattr(node, "category", None) or _category_from_id(node_id)
+            )
+            if node_category == "publication":
+                # Retracted status (0 or 1)
+                retracted = raw_props.get("retracted", False)
+                features[node_id]["is_retracted"] = 1.0 if retracted else 0.0
+
+                # Citation-based suspicion: compute RATIO not raw count
+                # to avoid skewing toward high-citation papers
+                cites_retracted = raw_props.get("cites_retracted_count", 0)
+                total_citations_out = outdeg  # How many papers this one cites
+                if isinstance(cites_retracted, (int, float)) and cites_retracted > 0:
+                    if total_citations_out > 0:
+                        # Ratio of citations that go to retracted papers
+                        features[node_id]["retracted_citation_ratio"] = float(
+                            cites_retracted / total_citations_out
+                        )
+                    else:
+                        # No outgoing citations in subgraph but has retracted
+                        # citation data - use a high ratio to signal suspicion
+                        features[node_id]["retracted_citation_ratio"] = 1.0
+                else:
+                    features[node_id]["retracted_citation_ratio"] = 0.0
+
+                # Also include log-scaled count for papers with extreme values
+                # log(1 + count) to handle zero and reduce outlier impact
+                if isinstance(cites_retracted, (int, float)):
+                    features[node_id]["log_cites_retracted"] = math.log1p(float(cites_retracted))
+                else:
+                    features[node_id]["log_cites_retracted"] = 0.0
+
+                # Mark as publication for heterogeneous GNN
+                features[node_id]["is_publication"] = 1.0
+            else:
+                features[node_id]["is_publication"] = 0.0
+
     return features
 
 
@@ -368,6 +425,7 @@ def build_pair_subgraph(
     direction: EdgeDirection = EdgeDirection.BOTH,
     rule_features: dict[str, float] | None = None,
     evidence_ids: list[str] | None = None,
+    include_publications: bool = False,
 ) -> Subgraph:
     """Build a heterogeneous subgraph around a (subject, object) pair.
 
@@ -376,8 +434,9 @@ def build_pair_subgraph(
     - optionally includes ego networks for evidence IDs (GO, Reactome, etc.)
     - merges them into a single node/edge set
     - keeps only nodes whose inferred category is in
-      {gene, disease, phenotype, pathway}
+      {gene, disease, phenotype, pathway} (plus publication if enabled)
     - keeps only G–G, G–Disease, G–Phenotype, and G–Pathway edges
+      (plus publication citation edges if enabled)
     - computes basic degree features per node
     - optionally attaches aggregated rule features to edge attributes
 
@@ -394,7 +453,10 @@ def build_pair_subgraph(
         evidence_ids: Optional list of evidence identifiers (GO terms,
             Reactome IDs, etc.) to include in the subgraph. Literature
             references (PMIDs, DOIs) are filtered out as they are not
-            KG nodes.
+            KG nodes (unless include_publications is True).
+        include_publications: If True, include Publication nodes and
+            citation edges (CITES, SUPPORTED_BY) in the subgraph. This
+            enables the GNN to learn citation-based suspicion patterns.
 
     Returns:
         Subgraph capturing the merged ego networks and simple node features.
@@ -402,9 +464,14 @@ def build_pair_subgraph(
     node_map: dict[str, KGNode] = {}
 
     # Filter evidence IDs to only those that could be KG nodes
+    # When include_publications is True, also allow PMIDs
     kg_evidence_ids: list[str] = []
     if evidence_ids:
-        kg_evidence_ids = [eid for eid in evidence_ids if _is_kg_node_id(eid)]
+        for eid in evidence_ids:
+            if _is_kg_node_id(eid):
+                kg_evidence_ids.append(eid)
+            elif include_publications and eid.upper().startswith(("PMID:", "PMC")):
+                kg_evidence_ids.append(eid)
 
     if k <= 0:
         # Degenerate case: just the pair nodes, if they are of allowed types.
@@ -467,7 +534,9 @@ def build_pair_subgraph(
         for edge in ego.edges:
             if edge.subject not in node_map or edge.object not in node_map:
                 continue
-            if not _is_allowed_edge(edge.subject, edge.object):
+            if not _is_allowed_edge(
+                edge.subject, edge.object, include_publications=include_publications
+            ):
                 continue
             key = (edge.subject, edge.predicate, edge.object)
             if key in seen:
@@ -496,6 +565,55 @@ def build_pair_subgraph(
                 props[name] = value
             is_claim_edge = {edge.subject, edge.object} == {subject, object}
             props["is_claim_edge_for_rule_features"] = 1.0 if is_claim_edge else 0.0
+
+    # Add citation subgraph if requested and backend supports it
+    if include_publications:
+        # Collect all PMIDs from edge sources
+        all_pmids: set[str] = set()
+        for edge in edges:
+            for source in edge.sources:
+                if source.upper().startswith(("PMID:", "PMC")):
+                    all_pmids.add(source)
+
+        # Fetch citation network if backend supports it
+        if all_pmids and hasattr(backend, "get_citation_subgraph"):
+            try:
+                pub_nodes, cites_edges = backend.get_citation_subgraph(list(all_pmids), k_hops=k)
+
+                # Add publication nodes
+                for pub_node in pub_nodes:
+                    if pub_node.id not in node_map:
+                        node_map[pub_node.id] = pub_node
+
+                # Add citation edges (CITES)
+                for cites_edge in cites_edges:
+                    if cites_edge.subject in node_map and cites_edge.object in node_map:
+                        key = (cites_edge.subject, cites_edge.predicate, cites_edge.object)
+                        if key not in seen:
+                            seen.add(key)
+                            edges.append(cites_edge)
+
+                # Add SUPPORTED_BY edges from biological edges to their publications
+                for edge in list(edges):  # Iterate over copy
+                    if edge.predicate == "CITES":
+                        continue  # Skip citation edges
+                    for source in edge.sources:
+                        if source in node_map:
+                            # Create edge: (subject, object) pair -> publication
+                            # Use a synthetic "association" node or direct edge
+                            supported_by_key = (edge.subject, "SUPPORTED_BY", source)
+                            if supported_by_key not in seen:
+                                seen.add(supported_by_key)
+                                edges.append(
+                                    KGEdge(
+                                        subject=edge.subject,
+                                        predicate="SUPPORTED_BY",
+                                        object=source,
+                                    )
+                                )
+            except Exception:
+                # If citation fetch fails, continue without it
+                pass
 
     node_features = _compute_node_features(node_map, edges, subject, object)
 

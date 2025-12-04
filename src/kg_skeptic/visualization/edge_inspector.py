@@ -152,9 +152,10 @@ def compute_rule_footprint(
     """Determine which rules passed/failed for this specific edge.
 
     This projects the *claim-level* rule trace down to the edge level.
-    Only rules that have a clear evidence/edge interpretation are
-    included; purely claim-level rules (type, ontology, NLI gates, etc.)
-    are omitted to avoid confusing edge-specific views.
+    Only rules that directly relate to this edge's evidence sources are
+    included. Claim-level rules (type/domain checks, ontology validation,
+    NLI gates, curated KG lookups, predicate conflicts) are omitted as
+    they apply to the claim triple, not to individual edge sources.
 
     Args:
         edge: The KGEdge being inspected
@@ -162,7 +163,7 @@ def compute_rule_footprint(
         sources: Optional list of source references for this edge
 
     Returns:
-        List of RuleResult objects
+        List of RuleResult objects with edge-specific descriptions
     """
     results: list[RuleResult] = []
     sources = sources or []
@@ -170,50 +171,83 @@ def compute_rule_footprint(
     # Pre-calculate edge properties for filtering
     has_retracted = any(s.status == "retracted" for s in sources)
     has_concern = any(s.status == "concern" for s in sources)
+    retracted_ids = [s.identifier for s in sources if s.status == "retracted"]
+    concern_ids = [s.identifier for s in sources if s.status == "concern"]
     source_count = len(sources)
 
-    # Only include rules that are meaningfully edge/evidence-level.
+    # Only include rules that are directly tied to THIS edge's evidence sources.
+    # Excluded (claim-level, not edge-specific):
+    #   - type_domain_range_* (claim's subject/object types)
+    #   - ontology_* (entity ancestry, not edge sources)
+    #   - self_negation_conflict (claim's negation qualifier)
+    #   - opposite_predicate_same_context (claim's predicate polarity)
+    #   - extraction_low_confidence (claim extraction quality)
+    #   - tissue_mismatch (claimed tissue context)
+    #   - nli_* (text-level verification of the claim)
+    #   - disgenet_*/structured_literature_support (curated KG checks for the triple)
     edge_level_rule_ids = {
         "retraction_gate",
         "expression_of_concern",
         "minimal_evidence",
         "multi_source_bonus",
-        "structured_literature_support",
-        "disgenet_support_bonus",
-        "disgenet_missing_support_penalty",
+    }
+
+    # Edge-specific descriptions and messages (overrides claim-level wording)
+    edge_descriptions = {
+        "retraction_gate": "This edge has retracted source(s)",
+        "expression_of_concern": "This edge has source(s) with expression of concern",
+        "minimal_evidence": "This edge has no supporting sources",
+        "multi_source_bonus": "This edge has multiple independent sources",
     }
 
     for entry in evaluation.trace.entries:
         if entry.rule_id not in edge_level_rule_ids:
             continue
+
         # Filter 1: Retraction gate
-        # Only show on the edge if it actually carries a retracted source.
-        if entry.rule_id == "retraction_gate" and not has_retracted:
-            continue
+        # Only show if this edge actually carries a retracted source.
+        if entry.rule_id == "retraction_gate":
+            if not has_retracted:
+                continue
+            # Edge-specific message
+            description = edge_descriptions["retraction_gate"]
+            because = f"because source(s) {', '.join(retracted_ids)} are retracted"
 
         # Filter 2: Expression of concern
-        # Only show on the edge if it actually carries a concerned source.
-        if entry.rule_id == "expression_of_concern" and not has_concern:
-            continue
+        # Only show if this edge actually carries a concerned source.
+        elif entry.rule_id == "expression_of_concern":
+            if not has_concern:
+                continue
+            description = edge_descriptions["expression_of_concern"]
+            because = f"because source(s) {', '.join(concern_ids)} have expressions of concern"
 
-        # Filter 3: Minimal evidence (fails if count <= 0)
-        # If this edge HAS sources, don't show the "no evidence" failure here,
-        # as it is confusing to see "No PMIDs supplied" next to a list of PMIDs.
-        if entry.rule_id == "minimal_evidence" and source_count > 0:
-            continue
+        # Filter 3: Minimal evidence
+        # If this edge HAS sources, don't show the "no evidence" failure here.
+        elif entry.rule_id == "minimal_evidence":
+            if source_count > 0:
+                continue
+            description = edge_descriptions["minimal_evidence"]
+            because = "because no PMIDs or DOIs are attached to this edge"
 
         # Filter 4: Multi-source bonus
-        # If this specific edge relies on a single source (or none), it shouldn't
-        # claim credit for the global multi-source bonus.
-        if entry.rule_id == "multi_source_bonus" and source_count < 2:
-            continue
+        # Only show if this edge has 2+ sources.
+        elif entry.rule_id == "multi_source_bonus":
+            if source_count < 2:
+                continue
+            description = edge_descriptions["multi_source_bonus"]
+            because = f"because this edge cites {source_count} sources"
+
+        else:
+            # Fallback (shouldn't happen with the filter above)
+            description = entry.description
+            because = entry.because
 
         results.append(
             RuleResult(
                 rule_id=entry.rule_id,
                 passed=entry.score >= 0,
-                description=entry.description,
-                because=entry.because,
+                description=description,
+                because=because,
             )
         )
 

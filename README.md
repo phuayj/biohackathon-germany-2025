@@ -109,7 +109,7 @@ export DISGENET_API_KEY=your_key_here
 uv run streamlit run src/kg_skeptic/app.py
 ```
 
-### With a Neo4j / BioCypher backend
+### With a Neo4j backend
 
 To use a local Neo4j graph instead:
 
@@ -129,7 +129,7 @@ To use a local Neo4j graph instead:
    uv run streamlit run src/kg_skeptic/app.py   # or just: streamlit run ...
    ```
 
-The sidebar will show "Using Neo4j/BioCypher KG backend" when connected. If configuration is missing, the app falls back to the in-memory mini KG.
+The sidebar will show "Using Neo4j KG backend" when connected. If configuration is missing, the app falls back to the in-memory mini KG.
 
 ## Project structure
 
@@ -173,6 +173,57 @@ A small synthetic dataset and training loop live in `scripts/train_suspicion_gnn
   (override via `--save-dataset` / `--save-model` if needed)
 
 The script builds 2-hop subgraphs from the mini KG, adds perturbed variants (direction flips, phenotype swaps, synthetic retracted support), and trains a tiny R-GCN to produce per-edge suspicion scores. The main pipeline and Streamlit UI will automatically pick up `data/suspicion_gnn/model.pt` when present.
+
+### Citation Network Integration
+
+The GNN can learn citation-based suspicion patterns by including the PubMed citation network in subgraphs. This enables detection of suspicious edges supported by papers that cite retracted work.
+
+**Step 1: Enrich retraction status**
+
+Mark publications in Neo4j as retracted/not retracted:
+
+```bash
+uv run python scripts/enrich_retraction_status.py
+```
+
+**Step 2: Build citation network**
+
+Fetch citation relationships from PubMed and create `CITES` edges:
+
+```bash
+# Fast: only find papers that cite retracted publications
+uv run python scripts/enrich_citations.py --mode retracted
+
+# Comprehensive: build full citation network (slower)
+uv run python scripts/enrich_citations.py --mode full --limit 1000
+
+# With NCBI API key for higher rate limits (10 req/sec vs 3 req/sec)
+uv run python scripts/enrich_citations.py --ncbi-api-key YOUR_KEY --mode retracted
+```
+
+**Step 3: Train GNN**
+
+Publication nodes and citation edges are included by default:
+
+```bash
+uv run python scripts/train_suspicion_gnn.py
+
+# To disable citation network (faster, smaller subgraphs):
+uv run python scripts/train_suspicion_gnn.py --no-publications
+```
+
+**How it works:**
+
+The citation network integration adds:
+- **Publication nodes** with features: `is_retracted`, `retracted_citation_ratio` (ratio of citations going to retracted papers), `log_cites_retracted`
+- **CITES edges** between publications (directed: citing → cited)
+- **SUPPORTED_BY edges** from biological entities to their supporting publications
+
+The GNN uses message passing to propagate suspicion through the citation network. Key design: all features use **ratios instead of raw counts** to avoid skewing toward high-citation papers (e.g., 2/10 citations to retracted work is more suspicious than 10/1000).
+
+Edge-level features added:
+- `retracted_support_ratio`: fraction of supporting publications that are retracted
+- `citing_retracted_ratio`: fraction of supporting publications that cite retracted papers
 
 ## Contributing
 - See `docs/roadmap.md` for current progress and open tasks.

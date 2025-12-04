@@ -25,6 +25,13 @@ class DummySession:
     ) -> object:
         self.last_query = query
         self.last_params = parameters or {}
+
+        # Heuristic: if query is for reified associations (contains "a:Association"),
+        # but the mock records are for direct edges (don't have "assoc"), return empty.
+        if "a:Association" in query and self.records:
+            if "assoc" not in self.records[0]:
+                return []
+
         return self.records
 
 
