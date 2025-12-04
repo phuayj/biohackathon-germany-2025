@@ -1322,7 +1322,7 @@ class Neo4jBackend(KGBackend):
             params = {"limit": limit * 2}
 
         direct_query = f"""
-        MATCH (g:Node:Gene)-[r:RELATION]->(d:Node:Disease)
+        MATCH (g:Node)-[r:RELATION]->(d:Node)
         WHERE g.category = 'biolink:Gene' AND d.category = 'biolink:Disease'{predicate_filter}
         RETURN DISTINCT g.id AS gene, d.id AS disease
         LIMIT $limit

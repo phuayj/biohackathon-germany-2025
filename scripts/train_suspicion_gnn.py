@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import random
 import sys
 from dataclasses import dataclass, field
@@ -2155,27 +2156,28 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "Set to an empty string to disable saving."
         ),
     )
-    # Neo4j backend options
+    # Neo4j backend options (use environment variables as defaults)
     parser.add_argument(
         "--neo4j-uri",
         type=str,
-        default=None,
+        default=os.environ.get("NEO4J_URI"),
         help=(
             "Neo4j connection URI (e.g., bolt://localhost:7687). "
-            "If provided, uses Neo4j instead of the mini KG backend."
+            "If provided, uses Neo4j instead of the mini KG backend. "
+            "Default: $NEO4J_URI environment variable."
         ),
     )
     parser.add_argument(
         "--neo4j-user",
         type=str,
-        default="neo4j",
-        help="Neo4j username (default: neo4j).",
+        default=os.environ.get("NEO4J_USER", "neo4j"),
+        help="Neo4j username (default: $NEO4J_USER or 'neo4j').",
     )
     parser.add_argument(
         "--neo4j-password",
         type=str,
-        default="password",
-        help="Neo4j password (default: password).",
+        default=os.environ.get("NEO4J_PASSWORD", "password"),
+        help="Neo4j password (default: $NEO4J_PASSWORD or 'password').",
     )
     parser.add_argument(
         "--use-real-retractions",
