@@ -151,9 +151,10 @@ def compute_rule_footprint(
 ) -> list[RuleResult]:
     """Determine which rules passed/failed for this specific edge.
 
-    Filters the global rule trace to exclude evidence-related rules that
-    do not apply to this specific edge (e.g., do not show "Retracted citation"
-    if this edge's sources are clean).
+    This projects the *claim-level* rule trace down to the edge level.
+    Only rules that have a clear evidence/edge interpretation are
+    included; purely claim-level rules (type, ontology, NLI gates, etc.)
+    are omitted to avoid confusing edge-specific views.
 
     Args:
         edge: The KGEdge being inspected
@@ -171,7 +172,20 @@ def compute_rule_footprint(
     has_concern = any(s.status == "concern" for s in sources)
     source_count = len(sources)
 
+    # Only include rules that are meaningfully edge/evidence-level.
+    edge_level_rule_ids = {
+        "retraction_gate",
+        "expression_of_concern",
+        "minimal_evidence",
+        "multi_source_bonus",
+        "structured_literature_support",
+        "disgenet_support_bonus",
+        "disgenet_missing_support_penalty",
+    }
+
     for entry in evaluation.trace.entries:
+        if entry.rule_id not in edge_level_rule_ids:
+            continue
         # Filter 1: Retraction gate
         # Only show on the edge if it actually carries a retracted source.
         if entry.rule_id == "retraction_gate" and not has_retracted:

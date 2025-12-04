@@ -258,6 +258,9 @@
 - [ ] Anonymized audit logs for reproducibility.
 - [ ] Improve negation detection beyond hard-coded phrases (data-driven patterns or lightweight NLP cues) alongside variant cue hardening.
 - [ ] Refine variant-context detection beyond simple mutation keywords (e.g., better patterns/NER for `has_variant_context` on GeneToDiseaseAssociation edges).
+- [ ] Tighten Edge Inspector rule footprint to only show truly edge/evidence-level rules (type/ontology/NLI gates stay at claim level) and ensure wording is edge-specific.
+- [ ] Attach explicit evidence/source identifiers to Neo4j/BioCypher edges where possible so Edge Inspector can surface PMIDs/DOIs/GO/Reactome IDs instead of "Sources: (none)".
+- [ ] Consider enriching Neo4j edges with suspicion/error-type overlays (or add a mini-KG-backed "evidence overlay" mode) so Edge Inspector can display GNN-based suspicion and error type predictions for graph edges.
 - [x] Modernize predicate polarity detection using pattern sets or lightweight classifiers (beyond manual verb lists) and expose configurable synonym maps.
 - [ ] Add corpus-derived predicate canonicalization (embedding/alias lookup) so opposite-predicate detection covers nuanced phrasing.
 - [ ] Make NLI paper type classifiers data-driven: replace hardcoded REVIEW_INDICATORS, ANIMAL_STUDY_INDICATORS, HUMAN_STUDY_INDICATORS with configurable patterns or lightweight ML-based classification using MeSH terms/publication types.

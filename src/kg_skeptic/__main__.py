@@ -33,6 +33,9 @@ from kg_skeptic.models import Claim, EntityMention
 from kg_skeptic.pipeline import AuditResult, ClaimNormalizer, NormalizationResult, SkepticPipeline
 from kg_skeptic.provenance import CitationProvenance
 from kg_skeptic.rules import RuleTraceEntry
+from kg_skeptic.subgraph import build_pair_subgraph
+from kg_skeptic.visualization.edge_inspector import extract_edge_inspector_data
+from kg_skeptic.mcp.kg import KGEdge
 
 
 def _build_pipeline(use_gliner: bool) -> SkepticPipeline:
@@ -466,6 +469,216 @@ def _render_text_result(result: AuditResult, *, max_nli_examples: int) -> None:
     _print_suspicion_summary(result)
 
 
+def _print_subgraph(
+    result: AuditResult,
+    pipeline: SkepticPipeline,
+    *,
+    k_hops: int,
+    inspect: bool,
+    inspect_max_edges: int,
+) -> None:
+    """Build and print a small KG subgraph around the normalized triple.
+
+    When ``inspect`` is True, also show per-edge inspector details for
+    edges that touch the claim entities or KG-evidence nodes.
+    """
+    try:
+        from kg_skeptic.mcp.kg import KGBackend
+    except Exception:  # pragma: no cover - defensive
+        print("\nSubgraph: KG backend types not available.")
+        return
+
+    backend = getattr(pipeline.normalizer, "backend", None)
+    if backend is None or not isinstance(backend, KGBackend):
+        print("\nSubgraph: no KG backend configured (using in-memory only).")
+        return
+
+    claim = result.report.claims[0]
+    triple = result.normalization.triple
+    hops = max(1, min(int(k_hops), 2))
+
+    evidence_ids = list(claim.evidence) if claim.evidence else []
+    evidence_set = set(evidence_ids)
+
+    try:
+        subgraph = build_pair_subgraph(
+            backend,
+            triple.subject.id,
+            triple.object.id,
+            k=hops,
+            rule_features=result.evaluation.features,
+            evidence_ids=evidence_ids,
+        )
+    except Exception as exc:  # pragma: no cover - KG/driver issues
+        print(f"\nSubgraph: failed to build ({exc}).")
+        return
+
+    if not subgraph.edges:
+        print(
+            f"\nSubgraph: no edges found for {subgraph.subject} and {subgraph.object} "
+            f"with k={subgraph.k_hops} on this KG backend.",
+        )
+        return
+
+    print(
+        f"\nSubgraph ({subgraph.k_hops}-hop) around "
+        f"{subgraph.subject} and {subgraph.object}: "
+        f"nodes={len(subgraph.nodes)} edges={len(subgraph.edges)}",
+    )
+    for edge in subgraph.edges:
+        subj_label = edge.subject_label or ""
+        obj_label = edge.object_label or ""
+        origin = edge.properties.get("origin")
+        is_claim_edge = bool(edge.properties.get("is_claim_edge_for_rule_features"))
+        flags: list[str] = []
+        if origin:
+            flags.append(f"origin={origin}")
+        if is_claim_edge:
+            flags.append("CLAIM_EDGE")
+        flag_str = f" [{' '.join(flags)}]" if flags else ""
+        print(
+            f"- {edge.subject} ({subj_label}) --[{edge.predicate}]--> "
+            f"{edge.object} ({obj_label}){flag_str}",
+        )
+
+    if not inspect:
+        return
+
+    # Build suspicion score map from result.suspicion (if any).
+    suspicion_raw = result.suspicion or result.report.stats.get("suspicion", {})
+    suspicion_scores: dict[tuple[str, str, str], float] = {}
+    if isinstance(suspicion_raw, Mapping):
+        top_edges = suspicion_raw.get("top_edges", [])
+        if isinstance(top_edges, list):
+            for item in top_edges:
+                if not isinstance(item, Mapping):
+                    continue
+                key = (
+                    str(item.get("subject", "")),
+                    str(item.get("predicate", "")),
+                    str(item.get("object", "")),
+                )
+                try:
+                    suspicion_scores[key] = float(item.get("score", 0.0))
+                except (TypeError, ValueError):
+                    continue
+
+    # Build error type predictions mapping if available.
+    error_type_predictions: dict[tuple[str, str, str], tuple[str, float]] = {}
+    if isinstance(suspicion_raw, Mapping):
+        raw_preds = suspicion_raw.get("error_type_predictions", {})
+        if isinstance(raw_preds, Mapping):
+            for key_str, value in raw_preds.items():
+                if not isinstance(key_str, str) or "|" not in key_str:
+                    continue
+                parts = key_str.split("|", 2)
+                if len(parts) != 3:
+                    continue
+                if not isinstance(value, (list, tuple)) or len(value) != 2:
+                    continue
+                et_str, conf = value
+                if not isinstance(et_str, str):
+                    continue
+                try:
+                    conf_f = float(conf)
+                except (TypeError, ValueError):
+                    continue
+                error_type_predictions[(parts[0], parts[1], parts[2])] = (et_str, conf_f)
+
+    # Select edges involving the claim entities or evidence IDs.
+    subject_id = result.normalization.triple.subject.id
+    object_id = result.normalization.triple.object.id
+
+    def _is_relevant(edge: KGEdge) -> bool:
+        endpoints = {edge.subject, edge.object}
+        if subject_id in endpoints or object_id in endpoints:
+            return True
+        if evidence_set and endpoints & evidence_set:
+            return True
+        return False
+
+    relevant_edges = [e for e in subgraph.edges if _is_relevant(e)]
+    if not relevant_edges:
+        print("\nEdge inspector: no edges involving claim entities or evidence nodes.")
+        return
+
+    print(
+        f"\nEdge inspector details for {min(len(relevant_edges), inspect_max_edges)} "
+        f"edge(s) touching claim entities / evidence:",
+    )
+
+    # Limit number of inspected edges for readability.
+    for edge in relevant_edges[:inspect_max_edges]:
+        pred = edge.predicate
+        if pred.startswith("biolink:"):
+            pred_disp = pred[8:]
+        else:
+            pred_disp = pred
+        print(
+            f"\n  Edge: {edge.subject_label or edge.subject} "
+            f"--[{pred_disp}]--> {edge.object_label or edge.object}",
+        )
+
+        inspector = extract_edge_inspector_data(
+            edge=edge,
+            subgraph=subgraph,
+            evaluation=result.evaluation,
+            suspicion_scores=suspicion_scores,
+            provenance=result.provenance,
+            error_type_predictions=error_type_predictions,
+        )
+
+        # Sources
+        if inspector.sources:
+            print("    Sources:")
+            for src in inspector.sources:
+                line = f"      - {src.identifier} [{src.status}]"
+                if src.url:
+                    line += f"  url={src.url}"
+                print(line)
+        else:
+            print("    Sources: (none)")
+
+        # DB provenance
+        if inspector.db_provenance:
+            dbp = inspector.db_provenance
+            print("    DB provenance:")
+            print(f"      - source_db={dbp.source_db}")
+            if dbp.db_version:
+                print(f"      - db_version={dbp.db_version}")
+            if dbp.retrieved_at:
+                print(f"      - retrieved_at={dbp.retrieved_at}")
+            if dbp.record_hash:
+                print(f"      - record_hash={dbp.record_hash}")
+
+        # Rule footprint
+        if inspector.rule_footprint:
+            print("    Rule footprint:")
+            for rf in inspector.rule_footprint:
+                status = "PASSED" if rf.passed else "FAILED"
+                print(f"      - {rf.rule_id}: {status}")
+                if rf.because:
+                    print(f"          because {rf.because}")
+
+        # Suspicion score
+        if inspector.suspicion_score is not None:
+            print(f"    Suspicion score: {inspector.suspicion_score:.3f}")
+
+        # Error type prediction
+        if inspector.error_type_prediction is not None:
+            et = inspector.error_type_prediction
+            print(
+                f"    Error type: {et.error_type} "
+                f"(confidence={et.confidence:.2f}) - {et.description}",
+            )
+
+        # Patch suggestions
+        if inspector.patch_suggestions:
+            print("    Patch suggestions:")
+            for ps in inspector.patch_suggestions:
+                print(f"      - {ps.description}  (action: {ps.action})")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="KG-Skeptic CLI audit tool")
     parser.add_argument(
@@ -531,6 +744,34 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["text", "json"],
         default="text",
         help="Output format: human-readable text (default) or JSON.",
+    )
+    parser.add_argument(
+        "--show-subgraph",
+        action="store_true",
+        help=(
+            "When using text output, also print a small KG subgraph "
+            "around the normalized subject/object pair."
+        ),
+    )
+    parser.add_argument(
+        "--subgraph-hops",
+        type=int,
+        default=1,
+        help="Number of hops for subgraph display (1 or 2).",
+    )
+    parser.add_argument(
+        "--inspect-edges",
+        action="store_true",
+        help=(
+            "When used with --show-subgraph, also print edge-inspector "
+            "details for edges that touch the claim entities or KG evidence nodes."
+        ),
+    )
+    parser.add_argument(
+        "--inspect-max-edges",
+        type=int,
+        default=5,
+        help="Maximum number of edges to show detailed inspector info for.",
     )
     parser.add_argument(
         "--max-nli-examples",
@@ -636,6 +877,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(data, indent=2, sort_keys=True))
     else:
         _render_text_result(display_result, max_nli_examples=int(args.max_nli_examples))
+        if args.show_subgraph:
+            _print_subgraph(
+                display_result,
+                pipeline,
+                k_hops=int(args.subgraph_hops),
+                inspect=bool(args.inspect_edges),
+                inspect_max_edges=int(args.inspect_max_edges),
+            )
 
     return 0
 
