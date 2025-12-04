@@ -54,7 +54,7 @@
 - [x] **extraction_low_confidence:** Add a rule capturing low-confidence extraction / vague predicates (e.g., `REAL_F05`); after implementation, re-run the same E2E seed fixture test and update `REAL_F05` expectations in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`.
 - [x] **opposite_predicate_same_context:** Add a rule for opposite predicates in the same context (e.g., `REAL_025`); after implementation, re-run the same E2E seed fixture test and update `REAL_025` expectations in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`, removing the temporary WARN override.
 - [x] Fix all mypy strict type-checking errors in `src/`.
-- [ ] Replace remaining `Any`-based Neo4j driver casts in `src/kg_skeptic/app.py` and `src/kg_skeptic/__main__.py` with a typed protocol to keep strict mypy happy long-term.
+- [x] Replace remaining `Any`-based Neo4j driver casts in `src/kg_skeptic/app.py` and `src/kg_skeptic/__main__.py` with a typed protocol to keep strict mypy happy long-term.
 
 ### Scoring & Decision
 - [x] Concatenate rule features → weighted sum → scalar audit score.

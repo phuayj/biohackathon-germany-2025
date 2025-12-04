@@ -288,16 +288,40 @@ def network_to_html(net: Network) -> str:
     return html
 
 
-def get_edge_options(subgraph: Subgraph) -> dict[str, tuple[str, str, str]]:
+def get_edge_options(
+    subgraph: Subgraph,
+    *,
+    claim_subject: str | None = None,
+    claim_object: str | None = None,
+    suspicion_scores: dict[tuple[str, str, str], float] | None = None,
+    evidence_ids: set[str] | None = None,
+) -> dict[str, tuple[str, str, str]]:
     """Build a mapping of display labels to edge keys for dropdown selection.
+
+    Edges are sorted by relevance to the claim:
+    1. Claim edge (direct subject-object connection)
+    2. Suspicious edges (high GNN score)
+    3. Edges touching claim endpoints
+    4. Edges linked to evidence sources
+    5. Other edges (alphabetically)
 
     Args:
         subgraph: The Subgraph containing edges
+        claim_subject: Subject node ID for claim (for relevance sorting)
+        claim_object: Object node ID for claim (for relevance sorting)
+        suspicion_scores: GNN suspicion scores keyed by (s, p, o) tuples
+        evidence_ids: Evidence source identifiers
 
     Returns:
         Dictionary mapping display label -> (subject, predicate, object)
+        (ordered by relevance when claim_subject/object provided)
     """
-    options: dict[str, tuple[str, str, str]] = {}
+    suspicion_scores = suspicion_scores or {}
+    evidence_ids = evidence_ids or set()
+
+    # Build list of (score, label, key) for sorting
+    scored_edges: list[tuple[float, str, tuple[str, str, str]]] = []
+
     for edge in subgraph.edges:
         subj_label = edge.subject_label or edge.subject
         obj_label = edge.object_label or edge.object
@@ -305,7 +329,51 @@ def get_edge_options(subgraph: Subgraph) -> dict[str, tuple[str, str, str]]:
         if pred.startswith("biolink:"):
             pred = pred[8:]
         label = f"{subj_label} --[{pred}]--> {obj_label}"
-        options[label] = (edge.subject, edge.predicate, edge.object)
+        key = (edge.subject, edge.predicate, edge.object)
+
+        # Calculate relevance score for sorting
+        score = 0.0
+
+        # Claim edge: highest priority
+        if claim_subject and claim_object:
+            if {edge.subject, edge.object} == {claim_subject, claim_object}:
+                score += 1000.0
+
+        # Marked as claim edge via properties
+        if edge.properties.get("is_claim_edge_for_rule_features"):
+            score += 1000.0
+
+        # High suspicion score
+        gnn_score = suspicion_scores.get(key, 0.0)
+        if gnn_score >= 0.5:
+            score += 500.0 + gnn_score * 100.0
+
+        # Edges touching claim endpoints
+        if claim_subject and (edge.subject == claim_subject or edge.object == claim_subject):
+            score += 100.0
+        if claim_object and (edge.subject == claim_object or edge.object == claim_object):
+            score += 100.0
+
+        # Edges linked to evidence sources
+        edge_sources = set(edge.sources)
+        if edge_sources & evidence_ids:
+            score += 50.0
+
+        # Has rule violations (negative rule feature sum)
+        rule_sum = edge.properties.get("rule_feature_sum")
+        if isinstance(rule_sum, (int, float)) and rule_sum < 0:
+            score += 75.0
+
+        scored_edges.append((score, label, key))
+
+    # Sort by score (descending), then alphabetically by label
+    scored_edges.sort(key=lambda x: (-x[0], x[1]))
+
+    # Build ordered dict
+    options: dict[str, tuple[str, str, str]] = {}
+    for _, label, key in scored_edges:
+        options[label] = key
+
     return options
 
 

@@ -129,6 +129,9 @@ def _category_from_id(identifier: str) -> str:
     # Reactome stable IDs and prefixed Reactome identifiers
     if upper.startswith("R-HSA-") or upper.startswith("REACT:"):
         return "pathway"
+    # Publication identifiers (PubMed, PMC)
+    if upper.startswith("PMID:") or upper.startswith("PMC"):
+        return "publication"
     return "unknown"
 
 

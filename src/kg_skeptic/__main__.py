@@ -26,14 +26,14 @@ import os
 import sys
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Mapping, Sequence, cast
+from typing import Mapping, Sequence, cast
 
 from kg_skeptic.app import DEMO_CLAIMS
 from kg_skeptic.models import Claim, EntityMention
 from kg_skeptic.pipeline import AuditResult, ClaimNormalizer, NormalizationResult, SkepticPipeline
 from kg_skeptic.provenance import CitationProvenance
 from kg_skeptic.rules import RuleTraceEntry
-from kg_skeptic.subgraph import build_pair_subgraph
+from kg_skeptic.subgraph import build_pair_subgraph, filter_subgraph_for_visualization
 from kg_skeptic.visualization.edge_inspector import extract_edge_inspector_data
 from kg_skeptic.mcp.kg import KGEdge
 
@@ -94,7 +94,7 @@ def _build_pipeline(use_gliner: bool) -> SkepticPipeline:
                     return records
 
             driver = GraphDatabase.driver(uri, auth=(user, password))
-            backend = Neo4jBackend(cast(Any, _DriverSessionWrapper(cast(Any, driver))))
+            backend = Neo4jBackend(_DriverSessionWrapper(cast(_Neo4jDriverLike, driver)))
 
     normalizer = ClaimNormalizer(kg_backend=backend, use_gliner=use_gliner)
 
@@ -476,11 +476,16 @@ def _print_subgraph(
     k_hops: int,
     inspect: bool,
     inspect_max_edges: int,
+    focus: bool = False,
+    focus_max_edges: int = 30,
 ) -> None:
     """Build and print a small KG subgraph around the normalized triple.
 
     When ``inspect`` is True, also show per-edge inspector details for
     edges that touch the claim entities or KG-evidence nodes.
+
+    When ``focus`` is True, filter the subgraph to show only relevant edges:
+    claim edge, shortest paths, evidence-linked, and suspicious edges.
     """
     try:
         from kg_skeptic.mcp.kg import KGBackend
@@ -500,6 +505,9 @@ def _print_subgraph(
     evidence_ids = list(claim.evidence) if claim.evidence else []
     evidence_set = set(evidence_ids)
 
+    # Check if claim has PMID evidence - default to showing publications if so
+    has_pmid_evidence = any(eid.upper().startswith(("PMID:", "PMC")) for eid in evidence_ids)
+
     try:
         subgraph = build_pair_subgraph(
             backend,
@@ -508,6 +516,7 @@ def _print_subgraph(
             k=hops,
             rule_features=result.evaluation.features,
             evidence_ids=evidence_ids,
+            include_publications=has_pmid_evidence,  # Auto-include when PMIDs present
         )
     except Exception as exc:  # pragma: no cover - KG/driver issues
         print(f"\nSubgraph: failed to build ({exc}).")
@@ -520,11 +529,45 @@ def _print_subgraph(
         )
         return
 
+    # Build suspicion score map from result.suspicion for filtering
+    suspicion_raw = result.suspicion or result.report.stats.get("suspicion", {})
+    suspicion_scores_for_filter: dict[tuple[str, str, str], float] = {}
+    if isinstance(suspicion_raw, Mapping):
+        top_edges = suspicion_raw.get("top_edges", [])
+        if isinstance(top_edges, list):
+            for item in top_edges:
+                if not isinstance(item, Mapping):
+                    continue
+                key = (
+                    str(item.get("subject", "")),
+                    str(item.get("predicate", "")),
+                    str(item.get("object", "")),
+                )
+                try:
+                    suspicion_scores_for_filter[key] = float(item.get("score", 0.0))
+                except (TypeError, ValueError):
+                    continue
+
+    # Apply focus filtering if requested
+    original_edge_count = len(subgraph.edges)
+    original_node_count = len(subgraph.nodes)
+    if focus:
+        subgraph = filter_subgraph_for_visualization(
+            subgraph,
+            evidence_ids=evidence_ids,
+            suspicion_scores=suspicion_scores_for_filter,
+            suspicion_threshold=0.5,
+            max_edges=focus_max_edges,
+        )
+
+    focus_label = " [focused]" if focus else ""
     print(
-        f"\nSubgraph ({subgraph.k_hops}-hop) around "
+        f"\nSubgraph ({subgraph.k_hops}-hop{focus_label}) around "
         f"{subgraph.subject} and {subgraph.object}: "
         f"nodes={len(subgraph.nodes)} edges={len(subgraph.edges)}",
     )
+    if focus and (original_edge_count > len(subgraph.edges)):
+        print(f"  (filtered from {original_node_count} nodes, {original_edge_count} edges)")
     for edge in subgraph.edges:
         subj_label = edge.subject_label or ""
         obj_label = edge.object_label or ""
@@ -760,6 +803,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Number of hops for subgraph display (1 or 2).",
     )
     parser.add_argument(
+        "--focus-subgraph",
+        action="store_true",
+        help=(
+            "Filter subgraph to show only relevant edges: claim edge, "
+            "shortest paths, evidence-linked, and suspicious edges."
+        ),
+    )
+    parser.add_argument(
+        "--focus-max-edges",
+        type=int,
+        default=30,
+        help="Maximum edges to show in focused subgraph view (default: 30).",
+    )
+    parser.add_argument(
         "--inspect-edges",
         action="store_true",
         help=(
@@ -884,6 +941,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 k_hops=int(args.subgraph_hops),
                 inspect=bool(args.inspect_edges),
                 inspect_max_edges=int(args.inspect_max_edges),
+                focus=bool(args.focus_subgraph),
+                focus_max_edges=int(args.focus_max_edges),
             )
 
     return 0

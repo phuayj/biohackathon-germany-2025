@@ -17,7 +17,7 @@ from dataclasses import replace
 import streamlit as st
 import streamlit.components.v1 as components
 from collections.abc import Iterable, Mapping
-from typing import Protocol, cast, Literal, Any
+from typing import Protocol, cast, Literal
 
 from kg_skeptic.feedback import append_claim_to_dataset
 from kg_skeptic.models import Claim, EntityMention
@@ -286,7 +286,7 @@ def _build_neo4j_backend_from_env() -> KGBackend | None:
     st.session_state["neo4j_driver"] = driver
     # Neo4jBackend expects nodes to expose a canonical CURIE identifier
     # via the `id` property (e.g., HGNC:1100, MONDO:0007254).
-    return Neo4jBackend(_DriverSessionWrapper(cast(Any, driver)))
+    return Neo4jBackend(_DriverSessionWrapper(cast(_Neo4jDriverLike, driver)))
 
 
 def _get_kg_backend() -> KGBackend | None:
@@ -1145,7 +1145,13 @@ def render_subgraph_visualization(
     st.markdown("---")
     st.markdown("**Select Edge to Inspect**")
 
-    edge_options = get_edge_options(display_subgraph)
+    edge_options = get_edge_options(
+        display_subgraph,
+        claim_subject=subject_id,
+        claim_object=object_id,
+        suspicion_scores=suspicion_scores,
+        evidence_ids=evidence_ids,
+    )
 
     selected_edge_label = st.selectbox(
         "Choose an edge",
@@ -1219,6 +1225,9 @@ def render_audit_card(result: AuditResult, allow_feedback: bool = False) -> None
         if st.session_state.get(feedback_key):
             st.success("✅ Feedback recorded. Thank you!")
         else:
+            # Comment box
+            comment = st.text_area("Optional feedback comment", key=f"comment_{claim.id}")
+
             # Layout buttons: Agree | Disagree options
             cols = st.columns([2, 1, 1, 1])
 
@@ -1235,6 +1244,7 @@ def render_audit_card(result: AuditResult, allow_feedback: bool = False) -> None
                             claim.text,
                             claim.evidence,
                             cast(Literal["PASS", "WARN", "FAIL"], verdict),
+                            comment=comment,
                         )
                         st.session_state[feedback_key] = True
                         st.rerun()
@@ -1256,6 +1266,7 @@ def render_audit_card(result: AuditResult, allow_feedback: bool = False) -> None
                                 claim.text,
                                 claim.evidence,
                                 cast(Literal["PASS", "WARN", "FAIL"], other),
+                                comment=comment,
                             )
                             st.session_state[feedback_key] = True
                             st.rerun()
@@ -1334,12 +1345,18 @@ def render_audit_card(result: AuditResult, allow_feedback: bool = False) -> None
     if subject_id and object_id:
         st.subheader("Interactive Subgraph")
 
-        # Initialize subgraph hop setting in session state
+        # Initialize subgraph settings in session state
         if "subgraph_k_hops" not in st.session_state:
             st.session_state.subgraph_k_hops = 1
+        if "show_publications" not in st.session_state:
+            st.session_state.show_publications = False
 
-        # Hop count selector
-        col_hops, col_warning = st.columns([1, 3])
+        # Check if claim has PMID evidence (to suggest enabling publications)
+        evidence_ids = list(claim.evidence) if claim.evidence else []
+        has_pmid_evidence = any(eid.upper().startswith(("PMID:", "PMC")) for eid in evidence_ids)
+
+        # Subgraph options
+        col_hops, col_pubs, col_warning = st.columns([1, 2, 2])
         with col_hops:
             k_hops = st.selectbox(
                 "Hops",
@@ -1349,6 +1366,16 @@ def render_audit_card(result: AuditResult, allow_feedback: bool = False) -> None
                 key="k_hops_selector",
             )
             st.session_state.subgraph_k_hops = k_hops
+        with col_pubs:
+            show_pubs = st.checkbox(
+                "Show literature nodes",
+                value=st.session_state.show_publications,
+                help="Include PMID citation nodes and their relationships in the graph",
+                key="show_publications_checkbox",
+            )
+            st.session_state.show_publications = show_pubs
+            if has_pmid_evidence and not show_pubs:
+                st.caption("📄 This claim has PMID evidence")
         with col_warning:
             if k_hops == 2:
                 st.caption("⚠️ 2-hop subgraphs can be very large and slow to load")
@@ -1357,8 +1384,7 @@ def render_audit_card(result: AuditResult, allow_feedback: bool = False) -> None
             try:
                 backend = _get_subgraph_backend()
                 # Show loading indicator while fetching subgraph from KG
-                # Include evidence IDs (GO terms, Reactome, etc.) as additional nodes
-                evidence_ids = list(claim.evidence) if claim.evidence else []
+                # Include evidence IDs (GO terms, Reactome, PMIDs) as additional nodes
                 with st.spinner(f"Loading {k_hops}-hop subgraph from knowledge graph..."):
                     subgraph = build_pair_subgraph(
                         backend,
@@ -1367,6 +1393,7 @@ def render_audit_card(result: AuditResult, allow_feedback: bool = False) -> None
                         k=k_hops,
                         rule_features=evaluation.features,
                         evidence_ids=evidence_ids,
+                        include_publications=show_pubs,
                     )
             except Exception as exc:  # pragma: no cover - UI surface
                 st.error("Could not build a subgraph for this claim.")

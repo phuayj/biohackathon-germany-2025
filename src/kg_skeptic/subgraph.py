@@ -566,24 +566,63 @@ def build_pair_subgraph(
             is_claim_edge = {edge.subject, edge.object} == {subject, object}
             props["is_claim_edge_for_rule_features"] = 1.0 if is_claim_edge else 0.0
 
-    # Add citation subgraph if requested and backend supports it
+    # Add citation subgraph if requested
     if include_publications:
-        # Collect all PMIDs from edge sources
+        # Collect all PMIDs from edge sources AND from evidence_ids
         all_pmids: set[str] = set()
         for edge in edges:
             for source in edge.sources:
                 if source.upper().startswith(("PMID:", "PMC")):
                     all_pmids.add(source)
 
-        # Fetch citation network if backend supports it
+        # Also include PMIDs from evidence_ids (claim's evidence)
+        for eid in kg_evidence_ids:
+            if eid.upper().startswith(("PMID:", "PMC")):
+                all_pmids.add(eid)
+
+        # Add publication nodes for all PMIDs (even without backend support)
+        for pmid in all_pmids:
+            if pmid not in node_map:
+                node_map[pmid] = KGNode(
+                    id=pmid,
+                    label=pmid,
+                    category="publication",
+                    properties={},
+                )
+
+        # Create SUPPORTED_BY edges from claim endpoints to evidence publications
+        # This connects the claim to its supporting literature
+        for pmid in all_pmids:
+            if pmid in node_map:
+                # Connect subject to publication
+                subj_key = (subject, "SUPPORTED_BY", pmid)
+                if subj_key not in seen:
+                    seen.add(subj_key)
+                    edges.append(
+                        KGEdge(
+                            subject=subject,
+                            predicate="SUPPORTED_BY",
+                            object=pmid,
+                            subject_label=node_map.get(subject, KGNode(id=subject)).label,
+                            object_label=pmid,
+                        )
+                    )
+
+        # Fetch citation network if backend supports it (additional enrichment)
         if all_pmids and hasattr(backend, "get_citation_subgraph"):
             try:
                 pub_nodes, cites_edges = backend.get_citation_subgraph(list(all_pmids), k_hops=k)
 
-                # Add publication nodes
+                # Update publication nodes with richer data from backend
                 for pub_node in pub_nodes:
                     if pub_node.id not in node_map:
                         node_map[pub_node.id] = pub_node
+                    else:
+                        # Merge properties if we have richer data
+                        existing = node_map[pub_node.id]
+                        if pub_node.label and not existing.label:
+                            existing.label = pub_node.label
+                        existing.properties.update(pub_node.properties)
 
                 # Add citation edges (CITES)
                 for cites_edge in cites_edges:
@@ -593,14 +632,12 @@ def build_pair_subgraph(
                             seen.add(key)
                             edges.append(cites_edge)
 
-                # Add SUPPORTED_BY edges from biological edges to their publications
+                # Add SUPPORTED_BY edges from biological edges to their source publications
                 for edge in list(edges):  # Iterate over copy
-                    if edge.predicate == "CITES":
-                        continue  # Skip citation edges
+                    if edge.predicate in ("CITES", "SUPPORTED_BY"):
+                        continue  # Skip citation/support edges
                     for source in edge.sources:
                         if source in node_map:
-                            # Create edge: (subject, object) pair -> publication
-                            # Use a synthetic "association" node or direct edge
                             supported_by_key = (edge.subject, "SUPPORTED_BY", source)
                             if supported_by_key not in seen:
                                 seen.add(supported_by_key)
@@ -624,4 +661,190 @@ def build_pair_subgraph(
         nodes=list(node_map.values()),
         edges=edges,
         node_features=node_features,
+    )
+
+
+def _find_edges_on_shortest_paths(
+    subject: str,
+    object: str,
+    edges: List[KGEdge],
+) -> set[tuple[str, str, str]]:
+    """Find edges that lie on shortest paths between subject and object.
+
+    Returns a set of (subject, predicate, object) tuples for edges on
+    any shortest path.
+    """
+    if not edges:
+        return set()
+
+    # Build undirected adjacency with edge keys
+    adj: dict[str, list[tuple[str, tuple[str, str, str]]]] = defaultdict(list)
+    for edge in edges:
+        key = (edge.subject, edge.predicate, edge.object)
+        adj[edge.subject].append((edge.object, key))
+        adj[edge.object].append((edge.subject, key))
+
+    if subject not in adj or object not in adj:
+        return set()
+
+    # BFS from subject to find distances
+    dist_from_subj: dict[str, int] = {subject: 0}
+    queue: deque[str] = deque([subject])
+    while queue:
+        current = queue.popleft()
+        for neighbor, _ in adj.get(current, []):
+            if neighbor not in dist_from_subj:
+                dist_from_subj[neighbor] = dist_from_subj[current] + 1
+                queue.append(neighbor)
+
+    if object not in dist_from_subj:
+        return set()
+
+    # BFS from object to find distances
+    dist_from_obj: dict[str, int] = {object: 0}
+    queue = deque([object])
+    while queue:
+        current = queue.popleft()
+        for neighbor, _ in adj.get(current, []):
+            if neighbor not in dist_from_obj:
+                dist_from_obj[neighbor] = dist_from_obj[current] + 1
+                queue.append(neighbor)
+
+    shortest_path_len = dist_from_subj[object]
+
+    # Find edges on shortest paths: edge (u, v) is on a shortest path if
+    # dist(subject, u) + 1 + dist(v, object) == shortest_path_len
+    # (or the reverse for undirected)
+    on_path: set[tuple[str, str, str]] = set()
+    for edge in edges:
+        u, v = edge.subject, edge.object
+        key = (edge.subject, edge.predicate, edge.object)
+
+        # Check u -> v direction
+        dist_u = dist_from_subj.get(u, float("inf"))
+        dist_v = dist_from_obj.get(v, float("inf"))
+        if dist_u + 1 + dist_v == shortest_path_len:
+            on_path.add(key)
+            continue
+
+        # Check v -> u direction (undirected)
+        dist_v_from_subj = dist_from_subj.get(v, float("inf"))
+        dist_u_from_obj = dist_from_obj.get(u, float("inf"))
+        if dist_v_from_subj + 1 + dist_u_from_obj == shortest_path_len:
+            on_path.add(key)
+
+    return on_path
+
+
+def filter_subgraph_for_visualization(
+    subgraph: Subgraph,
+    *,
+    evidence_ids: list[str] | None = None,
+    suspicion_scores: dict[tuple[str, str, str], float] | None = None,
+    suspicion_threshold: float = 0.5,
+    max_edges: int | None = None,
+) -> Subgraph:
+    """Filter subgraph to show only relevant edges for visualization.
+
+    This creates a focused view by keeping only:
+    1. The claim edge (direct subject <-> object connection)
+    2. Edges on shortest paths between subject and object
+    3. Edges touching evidence source nodes
+    4. Suspicious edges (above threshold, if scores provided)
+
+    Args:
+        subgraph: The full subgraph to filter.
+        evidence_ids: Evidence identifiers to include edges for.
+        suspicion_scores: GNN suspicion scores keyed by (s, p, o) tuples.
+        suspicion_threshold: Minimum suspicion score to include an edge.
+        max_edges: Optional maximum number of edges to return.
+
+    Returns:
+        A new Subgraph with filtered edges and corresponding nodes.
+    """
+    if not subgraph.edges:
+        return subgraph
+
+    subject = subgraph.subject
+    object_ = subgraph.object
+    evidence_set = set(evidence_ids or [])
+    suspicion_scores = suspicion_scores or {}
+
+    # Find edges on shortest paths
+    path_edges = _find_edges_on_shortest_paths(subject, object_, subgraph.edges)
+
+    # Score each edge for relevance
+    edge_scores: list[tuple[float, KGEdge]] = []
+    for edge in subgraph.edges:
+        score = 0.0
+        key = (edge.subject, edge.predicate, edge.object)
+
+        # Claim edge: highest priority
+        if {edge.subject, edge.object} == {subject, object_}:
+            score += 100.0
+
+        # On shortest path: high priority
+        if key in path_edges:
+            score += 50.0
+
+        # Touches evidence source
+        if edge.subject in evidence_set or edge.object in evidence_set:
+            score += 30.0
+
+        # Edge sources overlap with evidence
+        edge_sources = set(edge.sources)
+        if edge_sources & evidence_set:
+            score += 20.0
+
+        # Suspicious edge (from GNN)
+        gnn_score = suspicion_scores.get(key, 0.0)
+        if gnn_score >= suspicion_threshold:
+            score += 25.0 + gnn_score * 10.0
+
+        # Edges directly touching claim endpoints
+        if edge.subject in {subject, object_} or edge.object in {subject, object_}:
+            score += 10.0
+
+        # Has rule violations (negative rule feature sum)
+        rule_sum = edge.properties.get("rule_feature_sum")
+        if isinstance(rule_sum, (int, float)) and rule_sum < 0:
+            score += 15.0
+
+        # Is marked as claim edge
+        if edge.properties.get("is_claim_edge_for_rule_features"):
+            score += 100.0
+
+        edge_scores.append((score, edge))
+
+    # Sort by score (highest first) and filter
+    edge_scores.sort(key=lambda x: -x[0])
+
+    # Keep edges with score > 0 (some relevance)
+    filtered_edges = [edge for score, edge in edge_scores if score > 0]
+
+    # Apply max_edges limit if specified
+    if max_edges is not None and len(filtered_edges) > max_edges:
+        filtered_edges = filtered_edges[:max_edges]
+
+    # Collect nodes referenced by filtered edges
+    relevant_node_ids: set[str] = {subject, object_}
+    for edge in filtered_edges:
+        relevant_node_ids.add(edge.subject)
+        relevant_node_ids.add(edge.object)
+
+    # Filter nodes
+    filtered_nodes = [n for n in subgraph.nodes if n.id in relevant_node_ids]
+
+    # Filter node features
+    filtered_features = {
+        nid: feats for nid, feats in subgraph.node_features.items() if nid in relevant_node_ids
+    }
+
+    return Subgraph(
+        subject=subject,
+        object=object_,
+        k_hops=subgraph.k_hops,
+        nodes=filtered_nodes,
+        edges=filtered_edges,
+        node_features=filtered_features,
     )

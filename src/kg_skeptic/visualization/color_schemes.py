@@ -8,6 +8,7 @@ CATEGORY_COLORS: dict[str, str] = {
     "disease": "#F44336",  # Red
     "phenotype": "#FF9800",  # Orange
     "pathway": "#2196F3",  # Blue
+    "publication": "#795548",  # Brown - literature/papers
     "unknown": "#9E9E9E",  # Gray
 }
 
@@ -17,6 +18,7 @@ CATEGORY_SHAPES: dict[str, str] = {
     "disease": "diamond",  # Diamond
     "phenotype": "square",  # Square
     "pathway": "triangle",  # Triangle
+    "publication": "star",  # Star - literature nodes
     "unknown": "dot",  # Default circle
 }
 

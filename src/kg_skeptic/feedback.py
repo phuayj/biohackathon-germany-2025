@@ -12,6 +12,7 @@ def append_claim_to_dataset(
     evidence: list[str],
     label: Literal["PASS", "FAIL", "WARN"],
     output_path: str | Path = "data/annotated_claims.jsonl",
+    comment: str | None = None,
 ) -> str:
     """
     Appends a user-submitted claim with ground truth label to a JSONL file.
@@ -21,6 +22,7 @@ def append_claim_to_dataset(
         evidence: List of evidence strings (e.g. "PMID:12345").
         label: The user-provided ground truth label.
         output_path: Path to the JSONL file.
+        comment: Optional user comment explaining the feedback.
 
     Returns:
         The generated ID of the new record.
@@ -41,15 +43,19 @@ def append_claim_to_dataset(
         else:
             structured_evidence.append({"type": "other", "id": ev})
 
+    metadata = {
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "source": "user_feedback",
+    }
+    if comment:
+        metadata["comment"] = comment
+
     record = {
         "id": record_id,
         "claim": claim_text,
         "evidence": structured_evidence,
         "expected_decision": label,
-        "metadata": {
-            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "source": "user_feedback",
-        },
+        "metadata": metadata,
     }
 
     path = Path(output_path)
