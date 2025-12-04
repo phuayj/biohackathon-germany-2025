@@ -112,16 +112,21 @@ def _collect_all_phenotype_ids() -> list[str]:
 def build_hpo_ancestor_map(
     phenotype_ids: Sequence[str],
     show_progress: bool = True,
+    max_workers: int = 3,
 ) -> Dict[str, list[str]]:
     """Build HPO ancestor map by querying OLS API.
 
     Args:
         phenotype_ids: List of HPO IDs to query
         show_progress: Whether to show progress
+        max_workers: Max concurrent requests (default 3 to be polite to OLS servers)
 
     Returns:
         Dict mapping HPO ID -> list of ancestor HPO IDs
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import threading
+
     try:
         from kg_skeptic.mcp.ids import IDNormalizerTool
     except ImportError as e:
@@ -133,27 +138,14 @@ def build_hpo_ancestor_map(
     hpo_ids = [hp for hp in phenotype_ids if hp.upper().startswith("HP:")]
     total = len(hpo_ids)
     errors = 0
+    completed = 0
+    lock = threading.Lock()
     start_time = time.time()
 
-    print(f"  Querying OLS API for {total} HPO IDs...")
+    print(f"  Querying OLS API for {total} HPO IDs ({max_workers} concurrent)...")
 
-    for i, hp_id in enumerate(hpo_ids):
-        elapsed = time.time() - start_time
-        rate = (i + 1) / elapsed if elapsed > 0 else 0
-        eta = (total - i - 1) / rate if rate > 0 else 0
-
-        if show_progress:
-            bar_width = 30
-            progress = (i + 1) / total
-            filled = int(bar_width * progress)
-            bar = "█" * filled + "░" * (bar_width - filled)
-            print(
-                f"\r  [{bar}] {i + 1}/{total} ({100 * progress:.1f}%) "
-                f"| {rate:.1f}/s | ETA: {eta:.0f}s | OK: {len(ancestor_map)} | Err: {errors}",
-                end="",
-                flush=True,
-            )
-
+    def fetch_ancestors(hp_id: str) -> tuple[str, list[str] | None, bool]:
+        """Fetch ancestors for a single HPO ID. Returns (hp_id, ancestors, success)."""
         try:
             norm = tool.normalize_hpo(hp_id)
             meta = getattr(norm, "metadata", {}) or {}
@@ -166,11 +158,39 @@ def build_hpo_ancestor_map(
                     if str(a).upper().startswith("HP:")
                     and str(a).upper() not in ("HP:0000118", "HP:0000001")
                 ]
-                if ancestors:
-                    ancestor_map[hp_id] = ancestors
+                return (hp_id, ancestors if ancestors else None, True)
+            return (hp_id, None, True)
         except Exception:
-            errors += 1
-            continue
+            return (hp_id, None, False)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(fetch_ancestors, hp_id): hp_id for hp_id in hpo_ids}
+
+        for future in as_completed(futures):
+            hp_id, ancestors, success = future.result()
+
+            with lock:
+                completed += 1
+                if not success:
+                    errors += 1
+                elif ancestors:
+                    ancestor_map[hp_id] = ancestors
+
+                if show_progress:
+                    elapsed = time.time() - start_time
+                    rate = completed / elapsed if elapsed > 0 else 0
+                    eta = (total - completed) / rate if rate > 0 else 0
+
+                    bar_width = 30
+                    progress = completed / total
+                    filled = int(bar_width * progress)
+                    bar = "█" * filled + "░" * (bar_width - filled)
+                    print(
+                        f"\r  [{bar}] {completed}/{total} ({100 * progress:.1f}%) "
+                        f"| {rate:.1f}/s | ETA: {eta:.0f}s | OK: {len(ancestor_map)} | Err: {errors}",
+                        end="",
+                        flush=True,
+                    )
 
     if show_progress:
         elapsed = time.time() - start_time
