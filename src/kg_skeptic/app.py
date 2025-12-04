@@ -16,12 +16,12 @@ from pathlib import Path
 import streamlit as st
 import streamlit.components.v1 as components
 from collections.abc import Iterable, Mapping
-from typing import Protocol, cast, Literal
+from typing import Protocol, cast, Literal, Any
 
 from kg_skeptic.feedback import append_claim_to_dataset
 from kg_skeptic.models import Claim, EntityMention
 from kg_skeptic.pipeline import AuditResult, ClaimNormalizer, SkepticPipeline
-from kg_skeptic.mcp.kg import KGBackend, KGEdge, Neo4jBackend
+from kg_skeptic.mcp.kg import KGBackend, KGEdge, Neo4jBackend, MonarchBackend
 from kg_skeptic.mcp.mini_kg import load_mini_kg_backend
 from kg_skeptic.provenance import CitationProvenance
 from kg_skeptic.rules import RuleEvaluation
@@ -39,6 +39,7 @@ from kg_skeptic.visualization import (
     network_to_html,
     suspicion_to_color,
 )
+from kg_skeptic.visualization.edge_inspector import DbProvenance
 
 
 def _load_demo_claims_from_fixtures() -> list[tuple[str, Claim]]:
@@ -284,7 +285,7 @@ def _build_neo4j_backend_from_env() -> KGBackend | None:
     st.session_state["neo4j_driver"] = driver
     # Neo4jBackend expects nodes to expose a canonical CURIE identifier
     # via the `id` property (e.g., HGNC:1100, MONDO:0007254).
-    return Neo4jBackend(_DriverSessionWrapper(driver))
+    return Neo4jBackend(_DriverSessionWrapper(cast(Any, driver)))
 
 
 def _get_kg_backend() -> KGBackend | None:
@@ -670,11 +671,56 @@ def render_edge_inspector(
         # Database provenance
         if inspector_data.db_provenance:
             st.markdown("**Database Provenance**")
+
+            # Display Last Checked badge
+            if inspector_data.db_provenance.retrieved_at:
+                retrieved_at = inspector_data.db_provenance.retrieved_at
+                try:
+                    # Simple parsing of ISO string for display
+                    dt_str = retrieved_at.split("T")[0]
+                except Exception:
+                    dt_str = retrieved_at
+
+                st.markdown(
+                    f'<span style="background-color: #455a64; color: white; '
+                    f'padding: 2px 8px; border-radius: 4px; font-size: 0.85em;">'
+                    f"Last checked: {dt_str}</span>",
+                    unsafe_allow_html=True,
+                )
+
             st.caption(f"Source: {inspector_data.db_provenance.source_db}")
             if inspector_data.db_provenance.db_version:
                 st.caption(f"Version: {inspector_data.db_provenance.db_version}")
             if inspector_data.db_provenance.retrieved_at:
                 st.caption(f"Retrieved: {inspector_data.db_provenance.retrieved_at}")
+            if inspector_data.db_provenance.record_hash:
+                st.caption(f"Hash: `{inspector_data.db_provenance.record_hash[:8]}...`")
+
+            # Rebuild button (only if Live Mode is on and we have a Neo4j backend)
+            kg_backend = _get_kg_backend()
+            if (
+                st.session_state.get("use_live_mode")
+                and isinstance(kg_backend, Neo4jBackend)
+                and inspector_data.db_provenance.source_db == "monarch"
+            ):
+                if st.button(
+                    "🔄 Rebuild from sources",
+                    key=f"rebuild_{edge.subject}_{edge.predicate}_{edge.object}",
+                ):
+                    with st.spinner("Rebuilding edge from live Monarch API..."):
+                        try:
+                            # Use MonarchBackend as source
+                            monarch_source = MonarchBackend()
+                            kg_backend.rebuild_edge(
+                                subject=edge.subject,
+                                object=edge.object,
+                                predicate=edge.predicate,
+                                source=monarch_source,
+                            )
+                            st.success("Edge updated! Refreshing page...")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to rebuild edge: {e}")
 
         # Rule footprint
         if inspector_data.rule_footprint:
@@ -863,6 +909,7 @@ def render_subgraph_visualization(
     # Build edge status and origin dicts from provenance and edge metadata.
     edge_statuses: dict[tuple[str, str, str], str] = {}
     edge_origins: dict[tuple[str, str, str], str] = {}
+    edge_provenance_map: dict[tuple[str, str, str], DbProvenance] = {}
 
     prov_status_by_id: dict[str, str] = {}
     for record in provenance:
@@ -909,6 +956,44 @@ def render_subgraph_visualization(
 
         props.setdefault("origin", origin)
         edge_origins[edge_key] = origin
+
+        # Extract provenance for visualization
+        source_db_value = props.get("source_db") or props.get("primary_knowledge_source")
+        db_version_value = props.get("db_version")
+        retrieved_value = props.get("retrieved_at")
+        cache_ttl_raw = props.get("cache_ttl")
+        record_hash_value = props.get("record_hash")
+
+        edge_prov = getattr(edge, "provenance", None)
+        if edge_prov is not None:
+            if not source_db_value:
+                source_db_value = edge_prov.source_db
+            if db_version_value is None and edge_prov.db_version is not None:
+                db_version_value = edge_prov.db_version
+            if retrieved_value is None and edge_prov.retrieved_at:
+                retrieved_value = edge_prov.retrieved_at
+            if cache_ttl_raw is None and edge_prov.cache_ttl is not None:
+                cache_ttl_raw = edge_prov.cache_ttl
+            if record_hash_value is None and hasattr(edge_prov, "record_hash"):
+                record_hash_value = edge_prov.record_hash
+
+        cache_ttl_value: int | None = None
+        if isinstance(cache_ttl_raw, (int, float)):
+            cache_ttl_value = int(cache_ttl_raw)
+        elif isinstance(cache_ttl_raw, str):
+            try:
+                cache_ttl_value = int(cache_ttl_raw)
+            except ValueError:
+                pass
+
+        if source_db_value:
+            edge_provenance_map[edge_key] = DbProvenance(
+                source_db=str(source_db_value),
+                db_version=str(db_version_value) if db_version_value else None,
+                retrieved_at=str(retrieved_value) if retrieved_value else None,
+                cache_ttl=cache_ttl_value,
+                record_hash=str(record_hash_value) if record_hash_value else None,
+            )
 
     # Claim-relevant filter toggle
     claim_relevant_only = st.toggle(
@@ -1047,6 +1132,7 @@ def render_subgraph_visualization(
                 claim_object=object_id,
                 edge_origins=edge_origins,
                 selected_origins=selected_origins or set(),
+                edge_provenance=edge_provenance_map,
             )
 
             html = network_to_html(net)
@@ -1340,6 +1426,19 @@ def main() -> None:
             st.caption("🕸 Using custom KG backend")
         else:
             st.caption("🧪 Using in-memory mini KG backend")
+
+        # Live/Frozen mode toggle
+        use_live_mode = st.toggle(
+            "Live Mode (Rebuild Edges)",
+            value=False,
+            help="Allow rebuilding edges from live sources (e.g. Monarch API) instead of using cached/frozen data.",
+            key="use_live_mode_toggle",
+        )
+        st.session_state.use_live_mode = use_live_mode
+        if use_live_mode:
+            st.caption("⚡️ Live mode enabled")
+        else:
+            st.caption("❄️ Frozen mode (cached data)")
 
         # GNN Model Status
         pipeline = _get_pipeline(use_gliner=use_gliner)

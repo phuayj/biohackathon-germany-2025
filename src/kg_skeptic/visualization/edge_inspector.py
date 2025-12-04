@@ -30,6 +30,7 @@ class DbProvenance:
     db_version: str | None
     retrieved_at: str | None
     cache_ttl: int | None = None
+    record_hash: str | None = None
 
 
 @dataclass
@@ -310,6 +311,7 @@ def extract_edge_inspector_data(
     db_version_value = props.get("db_version")
     retrieved_value = props.get("retrieved_at")
     cache_ttl_raw = props.get("cache_ttl")
+    record_hash_value = props.get("record_hash")
 
     if edge_prov is not None:
         if not source_db_value:
@@ -320,6 +322,8 @@ def extract_edge_inspector_data(
             retrieved_value = edge_prov.retrieved_at
         if cache_ttl_raw is None and edge_prov.cache_ttl is not None:
             cache_ttl_raw = edge_prov.cache_ttl
+        if record_hash_value is None and hasattr(edge_prov, "record_hash"):
+            record_hash_value = edge_prov.record_hash
 
     cache_ttl_value: int | None
     if isinstance(cache_ttl_raw, (int, float)):
@@ -338,6 +342,7 @@ def extract_edge_inspector_data(
             db_version=str(db_version_value) if db_version_value else None,
             retrieved_at=str(retrieved_value) if retrieved_value else None,
             cache_ttl=cache_ttl_value,
+            record_hash=str(record_hash_value) if record_hash_value else None,
         )
 
     # Compute rule footprint

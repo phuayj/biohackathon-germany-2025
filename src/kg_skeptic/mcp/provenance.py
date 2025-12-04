@@ -41,6 +41,7 @@ class ToolProvenance:
     db_version: str = "unknown"
     retrieved_at: str = field(default_factory=_now_utc_iso)
     cache_ttl: int | None = None
+    record_hash: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -48,6 +49,7 @@ class ToolProvenance:
             "db_version": self.db_version,
             "retrieved_at": self.retrieved_at,
             "cache_ttl": self.cache_ttl,
+            "record_hash": self.record_hash,
         }
 
 

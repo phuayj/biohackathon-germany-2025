@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from pyvis.network import Network
 
 from kg_skeptic.mcp.kg import KGEdge
@@ -15,6 +16,8 @@ from kg_skeptic.visualization.color_schemes import (
     suspicion_to_color,
 )
 
+if TYPE_CHECKING:
+    from kg_skeptic.visualization.edge_inspector import DbProvenance
 
 EDGE_TYPE_MAP: dict[tuple[str, str], str] = {
     ("gene", "gene"): "G-G",
@@ -55,6 +58,7 @@ def build_pyvis_network(
     claim_object: str | None = None,
     edge_origins: dict[tuple[str, str, str], str] | None = None,
     selected_origins: set[str] | None = None,
+    edge_provenance: dict[tuple[str, str, str], DbProvenance] | None = None,
     height: str = "600px",
     width: str = "100%",
 ) -> Network:
@@ -71,6 +75,7 @@ def build_pyvis_network(
             such as "paper", "curated", or "agent".
         selected_origins: Optional filter set of allowed origin labels. When
             empty or None, all origins are shown.
+        edge_provenance: Optional mapping of (subj, pred, obj) -> DbProvenance
         height: HTML height string
         width: HTML width string
 
@@ -82,6 +87,7 @@ def build_pyvis_network(
     selected_edge_types = selected_edge_types or {"G-G", "G-Dis", "G-Phe", "G-Path", "Other"}
     edge_origins = edge_origins or {}
     selected_origins = selected_origins or set()
+    edge_provenance = edge_provenance or {}
 
     net = Network(
         height=height,
@@ -205,6 +211,20 @@ def build_pyvis_network(
         # Get status
         status = edge_statuses.get(edge_key, "unknown")
 
+        # Get provenance info
+        prov_info = edge_provenance.get(edge_key)
+        last_check = ""
+        db_ver = ""
+        if prov_info:
+            if prov_info.retrieved_at:
+                try:
+                    dt_str = prov_info.retrieved_at.split("T")[0]
+                    last_check = f"Last Check: {dt_str}"
+                except Exception:
+                    pass
+            if prov_info.db_version and prov_info.db_version != "unknown":
+                db_ver = f"DB Ver: {prov_info.db_version}"
+
         # Determine color (suspicion takes precedence if non-zero)
         if score > 0.0:
             color = suspicion_to_color(score)
@@ -233,6 +253,11 @@ def build_pyvis_network(
             f"Status: {status}",
             f"Origin: {origin}",
         ]
+        if last_check:
+            tooltip_lines.append(last_check)
+        if db_ver:
+            tooltip_lines.append(db_ver)
+
         tooltip = "<br>".join(tooltip_lines)
 
         net.add_edge(

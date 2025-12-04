@@ -164,14 +164,14 @@
 - [ ] Wire `live_edges_for_gene(gene_id)` wrapper that fans out to Reactome/GO/IntAct and returns edges with raw evidence.
 
 #### Neo4j Provenance Schema
-- [ ] Define Neo4j edge properties for provenance: `source_db`, `db_version`, `retrieved_at`, `cache_ttl`, record hash.
-- [ ] Add Neo4j merge patterns that capture versioning and timestamps on edges.
-- [ ] Add "Rebuild from sources" functionality to refetch a single edge live.
+- [x] Define Neo4j edge properties for provenance: `source_db`, `db_version`, `retrieved_at`, `cache_ttl`, record hash.
+- [x] Add Neo4j merge patterns that capture versioning and timestamps on edges.
+- [x] Add "Rebuild from sources" functionality to refetch a single edge live.
 
 #### Evidence Overlays
 - [ ] **Freshness overlay:** Gray gradient by age of newest PMID (darker = older).
 - [ ] **Multiplicity overlay:** Edge thickness proportional to number of independent sources.
-- [ ] Add `overlay_evidence(edge)` function that enriches edges with freshest_year, has_retraction, source_count.
+- [x] Add `overlay_evidence(edge)` function that enriches edges with freshest_year, has_retraction, source_count.
 
 #### Evidence-Driven Subgraph Construction
 - [x] Build subgraphs **from evidence outward**: PMIDs → extract entities → link to IDs → pull curated edges.
@@ -179,9 +179,9 @@
 - [x] UI toggle to filter subgraph by origin (show only paper-derived, curated, or all).
 
 #### Live vs Frozen Mode
-- [ ] Expose `use_live` flag in Streamlit sidebar as "Frozen graph" / "Live graph" toggle.
-- [ ] Show "last checked" badge on cached data with timestamp.
-- [ ] Add manual single-edge recheck button in Edge Inspector.
+- [x] Expose `use_live` flag in Streamlit sidebar as "Frozen graph" / "Live graph" toggle.
+- [x] Show "last checked" badge on cached data with timestamp.
+- [x] Add manual single-edge recheck button in Edge Inspector.
 
 ### What-If Demos
 - [ ] **Simulate retraction toggle:** Temporarily mark a PMID as retracted → watch edge turn red, score drop, PASS→FAIL.
@@ -263,7 +263,7 @@
 - [ ] Make NLI paper type classifiers data-driven: replace hardcoded REVIEW_INDICATORS, ANIMAL_STUDY_INDICATORS, HUMAN_STUDY_INDICATORS with configurable patterns or lightweight ML-based classification using MeSH terms/publication types.
 
 ### Integration Testing
-- [ ] Run `UV_CACHE_DIR=.uv-cache uv run pytest` to validate recent type-tightening changes around text NLI facts.
+- [x] Run `UV_CACHE_DIR=.uv-cache uv run pytest` to validate recent type-tightening changes around text NLI facts.
 - [ ] Measure hallucination-reduction when auditor guards a small LLM QA/KG agent.
 - [ ] Integration tests with demo bio-agent via MCP.
 - [ ] Surface curated KG support in the UI: add an Audit Card snippet that shows whether Monarch and/or DisGeNET back the gene–disease edge (including edge counts and which sources fired), and add non-live + e2e tests to exercise this path.

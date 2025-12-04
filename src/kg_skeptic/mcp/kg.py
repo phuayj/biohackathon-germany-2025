@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from builtins import object as _object
 from typing import Optional, Protocol, cast
@@ -21,6 +22,11 @@ from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
 
 from .provenance import ToolProvenance, make_live_provenance, make_static_provenance
+
+
+def _now_utc_iso() -> str:
+    """Return current UTC time in ISO‑8601 format."""
+    return datetime.now(timezone.utc).isoformat()
 
 
 class EdgeDirection(str, Enum):
@@ -611,17 +617,37 @@ class Neo4jBackend(KGBackend):
         records = self._iter_records(query, params)
 
         edges: list[KGEdge] = []
-        provenance = make_static_provenance(source_db="neo4j")
+        # Default provenance if not found on edge
+        default_provenance = make_static_provenance(source_db="neo4j")
+
         for rec in records:
             rel = rec.get("rel", {})
             props: dict[str, _object] = {}
             sources: list[str] = []
+
+            # Provenance fields to extract
+            prov_fields = {"source_db", "db_version", "retrieved_at", "cache_ttl", "record_hash"}
+
+            edge_provenance = default_provenance
+
             if isinstance(rel, dict):
-                props = {k: v for k, v in rel.items() if k not in {"predicate"}}
+                props = {
+                    k: v for k, v in rel.items() if k not in {"predicate"} and k not in prov_fields
+                }
                 # Extract publications as sources
                 pubs = rel.get("publications")
                 if isinstance(pubs, list):
                     sources = [str(p) for p in pubs if p]
+
+                # Extract provenance
+                if "source_db" in rel:
+                    edge_provenance = ToolProvenance(
+                        source_db=str(rel.get("source_db", "neo4j")),
+                        db_version=str(rel.get("db_version", "unknown")),
+                        retrieved_at=str(rel.get("retrieved_at", default_provenance.retrieved_at)),
+                        cache_ttl=rel.get("cache_ttl"),
+                        record_hash=str(rel.get("record_hash")) if rel.get("record_hash") else None,
+                    )
 
             # Use predicate property if available, else fall back to rel type
             rel_type = rec.get("rel_type", "")
@@ -640,7 +666,7 @@ class Neo4jBackend(KGBackend):
                 ),
                 properties=props,
                 sources=sources,
-                provenance=provenance,
+                provenance=edge_provenance,
             )
             edges.append(edge)
 
@@ -651,7 +677,7 @@ class Neo4jBackend(KGBackend):
             exists=len(edges) > 0,
             edges=edges,
             source="neo4j",
-            provenance=provenance,
+            provenance=default_provenance,
         )
 
     def ego(
@@ -741,12 +767,35 @@ class Neo4jBackend(KGBackend):
             rel_props = rec.get("rel_props", {})
             props: dict[str, _object] = {}
             sources: list[str] = []
+
+            # Provenance fields to extract
+            prov_fields = {"source_db", "db_version", "retrieved_at", "cache_ttl", "record_hash"}
+            edge_provenance = provenance
+
             if isinstance(rel_props, dict):
-                props = {k: v for k, v in rel_props.items() if k not in {"predicate"}}
+                props = {
+                    k: v
+                    for k, v in rel_props.items()
+                    if k not in {"predicate"} and k not in prov_fields
+                }
                 # Extract publications as sources
                 pubs = rel_props.get("publications")
                 if isinstance(pubs, list):
                     sources = [str(p) for p in pubs if p]
+
+                # Extract provenance
+                if "source_db" in rel_props:
+                    edge_provenance = ToolProvenance(
+                        source_db=str(rel_props.get("source_db", "neo4j")),
+                        db_version=str(rel_props.get("db_version", "unknown")),
+                        retrieved_at=str(rel_props.get("retrieved_at", provenance.retrieved_at)),
+                        cache_ttl=rel_props.get("cache_ttl"),
+                        record_hash=(
+                            str(rel_props.get("record_hash"))
+                            if rel_props.get("record_hash")
+                            else None
+                        ),
+                    )
 
             subj_id = str(rec.get("subject_id"))
             obj_id = str(rec.get("object_id"))
@@ -768,7 +817,7 @@ class Neo4jBackend(KGBackend):
                 ),
                 properties=props,
                 sources=sources,
-                provenance=provenance,
+                provenance=edge_provenance,
             )
             edges.append(edge)
 
@@ -784,6 +833,98 @@ class Neo4jBackend(KGBackend):
             source="neo4j",
             provenance=provenance,
         )
+
+    def upsert_edge(self, edge: KGEdge) -> None:
+        """Insert or update an edge in Neo4j.
+
+        This method merges the subject and object nodes (creating them if needed)
+        and then merges the relationship, updating its properties and provenance.
+        """
+        # Prepare properties
+        props = edge.properties.copy()
+        # Remove fields that are handled explicitly
+        for key in [
+            "predicate",
+            "source_db",
+            "db_version",
+            "retrieved_at",
+            "cache_ttl",
+            "record_hash",
+        ]:
+            props.pop(key, None)
+
+        # Prepare provenance
+        source_db = "unknown"
+        db_version = "unknown"
+        retrieved_at = _now_utc_iso()
+        cache_ttl = None
+        record_hash = None
+
+        if edge.provenance:
+            source_db = edge.provenance.source_db
+            db_version = edge.provenance.db_version
+            retrieved_at = edge.provenance.retrieved_at
+            cache_ttl = edge.provenance.cache_ttl
+            record_hash = edge.provenance.record_hash
+
+        query = """
+        MERGE (s:Node {id: $subject})
+        ON CREATE SET s.name = $subject_label
+        MERGE (o:Node {id: $object})
+        ON CREATE SET o.name = $object_label
+        MERGE (s)-[r:RELATION {predicate: $predicate}]->(o)
+        SET r += $properties,
+            r.publications = $publications,
+            r.source_db = $source_db,
+            r.db_version = $db_version,
+            r.retrieved_at = $retrieved_at,
+            r.cache_ttl = $cache_ttl,
+            r.record_hash = $record_hash
+        """
+
+        params = {
+            "subject": edge.subject,
+            "subject_label": edge.subject_label or edge.subject,
+            "object": edge.object,
+            "object_label": edge.object_label or edge.object,
+            "predicate": edge.predicate,
+            "properties": props,
+            "publications": edge.sources,
+            "source_db": source_db,
+            "db_version": db_version,
+            "retrieved_at": retrieved_at,
+            "cache_ttl": cache_ttl,
+            "record_hash": record_hash,
+        }
+
+        self.session.run(query, cast(dict[str, _object], params))
+
+    def rebuild_edge(
+        self,
+        subject: str,
+        object: str,
+        predicate: Optional[str],
+        source: KGBackend,
+    ) -> EdgeQueryResult:
+        """
+        Rebuild an edge in Neo4j by fetching from a source backend.
+
+        Args:
+            subject: Subject node ID
+            object: Object node ID
+            predicate: Optional predicate to filter
+            source: Source backend (e.g., MonarchBackend) to fetch from
+
+        Returns:
+            The result from the source backend
+        """
+        result = source.query_edge(subject, object, predicate)
+
+        if result.exists:
+            for edge in result.edges:
+                self.upsert_edge(edge)
+
+        return result
 
 
 class KGTool:

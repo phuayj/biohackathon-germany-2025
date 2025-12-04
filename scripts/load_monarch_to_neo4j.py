@@ -25,9 +25,11 @@ from __future__ import annotations
 import argparse
 import csv
 import gzip
+import hashlib
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 from urllib.request import urlretrieve
@@ -331,6 +333,7 @@ def load_edges(
     valid_node_ids: set[str],
     max_edges: int | None = None,
     filter_edges: bool = True,
+    db_version: str = "unknown",
 ) -> int:
     """Load edges into Neo4j."""
     print(f"Loading edges from {edges_path}...")
@@ -341,6 +344,7 @@ def load_edges(
     batch: list[dict[str, object]] = []
 
     start_time = time.time()
+    retrieved_at = datetime.now(timezone.utc).isoformat()
 
     for row in read_tsv(edges_path, max_edges):
         subject = row.get("subject", "")
@@ -359,11 +363,20 @@ def load_edges(
             skipped_predicate += 1
             continue
 
+        # Compute hash
+        content = f"{subject}|{predicate}|{obj}|monarch|{db_version}"
+        record_hash = hashlib.sha256(content.encode()).hexdigest()
+
         # Prepare edge data
         edge_data: dict[str, object] = {
             "subject": subject,
             "object": obj,
             "predicate": predicate,
+            "source_db": "monarch",
+            "db_version": db_version,
+            "retrieved_at": retrieved_at,
+            "cache_ttl": None,
+            "record_hash": record_hash,
         }
 
         # Add optional properties
@@ -410,7 +423,12 @@ def _insert_edges_batch(session: object, edges: list[dict[str, object]]) -> None
         MERGE (s)-[r:RELATION {predicate: edge.predicate}]->(o)
         SET r.primary_knowledge_source = edge.primary_knowledge_source,
             r.publications = edge.publications,
-            r.aggregator_knowledge_source = edge.aggregator_knowledge_source
+            r.aggregator_knowledge_source = edge.aggregator_knowledge_source,
+            r.source_db = edge.source_db,
+            r.db_version = edge.db_version,
+            r.retrieved_at = edge.retrieved_at,
+            r.cache_ttl = edge.cache_ttl,
+            r.record_hash = edge.record_hash
         """,
         edges=edges,
     )
@@ -513,6 +531,11 @@ def main() -> None:
         help="Clear existing data before loading",
     )
     parser.add_argument(
+        "--db-version",
+        default="unknown",
+        help="Version string for the dataset (default: unknown)",
+    )
+    parser.add_argument(
         "--data-dir",
         type=Path,
         default=DATA_DIR,
@@ -599,6 +622,7 @@ def main() -> None:
             valid_node_ids=node_ids,
             max_edges=max_rows,
             filter_edges=filter_data,
+            db_version=args.db_version,
         )
 
         # Verify
