@@ -1226,6 +1226,89 @@ def _synthesize_retracted_support_overrides(
     return overrides
 
 
+def _build_real_retracted_samples(
+    backend: "Neo4jBackend",
+    k_hops: int,
+    all_predicates: set[str],
+    oversample_factor: int = 1,
+) -> tuple[list[GraphSample], int, int]:
+    """Build training samples from real retracted support associations.
+
+    Args:
+        backend: Neo4j backend with retraction data.
+        k_hops: Hops for ego subgraph.
+        all_predicates: Set to track predicates (mutated).
+        oversample_factor: How many times to repeat each real example (for balancing).
+
+    Returns:
+        Tuple of (samples, total_pos, total_neg).
+    """
+    samples: list[GraphSample] = []
+    total_pos = 0
+    total_neg = 0
+
+    # Query associations with retracted support
+    retracted_assocs = backend.get_associations_with_retracted_support(limit=500)
+
+    if not retracted_assocs:
+        print("  No real retracted support associations found in Neo4j")
+        return [], 0, 0
+
+    print(f"  Found {len(retracted_assocs)} associations with retracted support")
+
+    for subject, predicate, obj, retracted_pmids in retracted_assocs:
+        # Build subgraph around this association
+        subgraph = build_pair_subgraph(backend, subject, obj, k=k_hops)
+        if not subgraph.edges:
+            continue
+
+        # Mark the specific edge as having real retracted support
+        edge_overrides: Dict[Tuple[str, str, str], Dict[str, object]] = {}
+        for edge in subgraph.edges:
+            if edge.subject == subject and edge.object == obj:
+                key = (edge.subject, edge.predicate, edge.object)
+                edge_overrides[key] = {
+                    "has_retracted_support": True,
+                    "retracted_pmids": retracted_pmids,
+                    "perturbation_type": "real_retracted_support",
+                    "is_perturbed_edge": 1.0,
+                }
+
+        if not edge_overrides:
+            # Edge not found in subgraph - try to add it explicitly
+            edge_overrides[(subject, predicate, obj)] = {
+                "has_retracted_support": True,
+                "retracted_pmids": retracted_pmids,
+                "perturbation_type": "real_retracted_support",
+                "is_perturbed_edge": 1.0,
+            }
+
+        perturbed_subgraph = _build_perturbed_subgraph(
+            subgraph,
+            edge_overrides=edge_overrides,
+        )
+
+        # Create sample (with oversampling)
+        for repeat in range(oversample_factor):
+            sample, pos, neg = _process_subgraph_to_sample(
+                perturbed_subgraph,
+                all_predicates,
+                {
+                    "kind": "real_retracted_support",
+                    "subject": subject,
+                    "object": obj,
+                    "retracted_pmids": retracted_pmids,
+                    "repeat": repeat,
+                },
+            )
+            if sample is not None:
+                samples.append(sample)
+                total_pos += pos
+                total_neg += neg
+
+    return samples, total_pos, total_neg
+
+
 def _process_subgraph_to_sample(
     subgraph: Subgraph,
     all_predicates: set[str],
@@ -1276,15 +1359,24 @@ def build_dataset(
     seed: int = 13,
     k_hops: int = 2,
     backend: KGBackend | None = None,
+    use_real_retractions: bool = True,
 ) -> tuple[list[GraphSample], Dict[str, int]]:
     """Construct a small graph-level dataset for training the suspicion GNN.
 
     The dataset mixes:
     - clean subgraphs built from the mini KG, and
     - perturbed variants with flipped directions, phenotype swaps, and
-      synthetic retracted-support annotations.
+      retracted-support annotations (real from Neo4j if available, else synthetic).
 
     Supports both InMemoryBackend (mini KG) and Neo4jBackend.
+
+    Args:
+        num_subgraphs: Target number of subgraphs to build.
+        seed: Random seed for reproducibility.
+        k_hops: Hops for ego subgraph extraction.
+        backend: KG backend (defaults to mini KG).
+        use_real_retractions: If True and using Neo4j, use real retracted support
+            associations instead of synthetic ones.
     """
     if backend is None:
         backend = load_mini_kg_backend()
@@ -1322,6 +1414,17 @@ def build_dataset(
     all_predicates: set[str] = set()
     total_pos = 0
     total_neg = 0
+
+    # Handle real retracted support if Neo4j backend and enabled
+    use_real_retracted = use_real_retractions and isinstance(backend, Neo4jBackend)
+
+    if use_real_retracted:
+        print("Querying real retracted support associations from Neo4j...")
+        # We'll add these samples after the main loop with proper balancing
+        # For now, just check if any exist
+        retracted_count_result = backend.count_retracted_publications()
+        total_pubs, retracted_pubs = retracted_count_result
+        print(f"  Publications checked: {total_pubs}, retracted: {retracted_pubs}")
 
     for subject, obj in selected_pairs:
         base_subgraph = build_pair_subgraph(backend, subject, obj, k=k_hops)
@@ -1380,22 +1483,25 @@ def build_dataset(
                 total_pos += pos
                 total_neg += neg
 
-        # Synthetic retracted-support annotations on a subset of edges.
-        retracted_overrides = _synthesize_retracted_support_overrides(base_subgraph, rng)
-        if retracted_overrides:
-            retract_subgraph = _build_perturbed_subgraph(
-                base_subgraph,
-                edge_overrides=retracted_overrides,
-            )
-            sample, pos, neg = _process_subgraph_to_sample(
-                retract_subgraph,
-                all_predicates,
-                {"kind": "perturbed_retracted_support", "subject": subject, "object": obj},
-            )
-            if sample is not None:
-                samples.append(sample)
-                total_pos += pos
-                total_neg += neg
+        # Retracted-support annotations: skip synthetic if using real retractions
+        # (we'll add real retracted samples after the loop with proper balancing)
+        if not use_real_retracted:
+            # Synthetic retracted-support annotations on a subset of edges.
+            retracted_overrides = _synthesize_retracted_support_overrides(base_subgraph, rng)
+            if retracted_overrides:
+                retract_subgraph = _build_perturbed_subgraph(
+                    base_subgraph,
+                    edge_overrides=retracted_overrides,
+                )
+                sample, pos, neg = _process_subgraph_to_sample(
+                    retract_subgraph,
+                    all_predicates,
+                    {"kind": "perturbed_retracted_support", "subject": subject, "object": obj},
+                )
+                if sample is not None:
+                    samples.append(sample)
+                    total_pos += pos
+                    total_neg += neg
 
         # Predicate swap perturbation
         pred_swap_edges = _synthesize_predicate_swap(base_subgraph, rng)
@@ -1447,6 +1553,58 @@ def build_dataset(
                 samples.append(sample)
                 total_pos += pos
                 total_neg += neg
+
+    # Add real retracted support samples with oversampling for balance
+    if use_real_retracted and isinstance(backend, Neo4jBackend):
+        # Count other perturbation samples to calculate oversample factor
+        # We want retracted samples to be roughly equal to other perturbation types
+        # Each pair generates ~6 perturbation samples, so target ~num_subgraphs samples
+        target_retracted_samples = max(1, len(selected_pairs))
+
+        print(f"Building real retracted support samples (target: {target_retracted_samples})...")
+        real_samples, real_pos, real_neg = _build_real_retracted_samples(
+            backend,
+            k_hops,
+            all_predicates,
+            oversample_factor=1,  # Start with 1x
+        )
+
+        if real_samples:
+            # Calculate oversample factor to balance
+            oversample_needed = max(1, target_retracted_samples // len(real_samples))
+            if oversample_needed > 1:
+                print(f"  Oversampling {len(real_samples)} real samples by {oversample_needed}x...")
+                oversampled: list[GraphSample] = []
+                for _ in range(oversample_needed):
+                    oversampled.extend(real_samples)
+                real_samples = oversampled[:target_retracted_samples]
+
+            samples.extend(real_samples)
+            total_pos += real_pos * oversample_needed
+            total_neg += real_neg * oversample_needed
+            print(f"  Added {len(real_samples)} real retracted support samples")
+        else:
+            print("  No real retracted samples found, falling back to synthetic...")
+            # Fall back to synthetic for the pairs we processed
+            for subject, obj in selected_pairs[: num_subgraphs // 4]:
+                base_subgraph = build_pair_subgraph(backend, subject, obj, k=k_hops)
+                if not base_subgraph.edges:
+                    continue
+                retracted_overrides = _synthesize_retracted_support_overrides(base_subgraph, rng)
+                if retracted_overrides:
+                    retract_subgraph = _build_perturbed_subgraph(
+                        base_subgraph,
+                        edge_overrides=retracted_overrides,
+                    )
+                    sample, pos, neg = _process_subgraph_to_sample(
+                        retract_subgraph,
+                        all_predicates,
+                        {"kind": "perturbed_retracted_support", "subject": subject, "object": obj},
+                    )
+                    if sample is not None:
+                        samples.append(sample)
+                        total_pos += pos
+                        total_neg += neg
 
     if not samples:
         raise RuntimeError("Failed to build any training samples.")
@@ -2019,6 +2177,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default="password",
         help="Neo4j password (default: password).",
     )
+    parser.add_argument(
+        "--use-real-retractions",
+        action="store_true",
+        default=True,
+        help="Use real retracted publications from Neo4j instead of synthetic (default: True).",
+    )
+    parser.add_argument(
+        "--no-real-retractions",
+        action="store_true",
+        help="Use synthetic retracted support instead of real data from Neo4j.",
+    )
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
@@ -2155,12 +2324,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                     except OSError as exc:
                         print(f"✖ Failed to save link prediction embeddings to {save_path}: {exc}")
 
+    # Determine whether to use real retractions
+    use_real_retractions = getattr(args, "use_real_retractions", True) and not getattr(
+        args, "no_real_retractions", False
+    )
+
     try:
         samples, predicate_to_index = build_dataset(
             num_subgraphs=args.num_subgraphs,
             seed=args.seed,
             k_hops=2,
             backend=backend,
+            use_real_retractions=use_real_retractions,
         )
     except RuntimeError as exc:
         print(f"✖ Failed to build dataset: {exc}", file=sys.stderr)

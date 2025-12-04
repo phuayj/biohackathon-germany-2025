@@ -40,6 +40,7 @@ RATE_LIMIT_DELAY_WITH_KEY = 0.1  # ~10 requests/sec with API key
 @dataclass
 class RetractionInfo:
     """Retraction information for a publication."""
+
     pmid: str
     retracted: bool
     retraction_pmid: Optional[str] = None  # PMID of the retraction notice
@@ -210,7 +211,7 @@ def update_retraction_status_batch(
 def batch_pmids(pmids: list[str], batch_size: int) -> Iterator[list[str]]:
     """Yield successive batches of PMIDs."""
     for i in range(0, len(pmids), batch_size):
-        yield pmids[i:i + batch_size]
+        yield pmids[i : i + batch_size]
 
 
 def enrich_retraction_status(

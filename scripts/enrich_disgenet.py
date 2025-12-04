@@ -21,15 +21,11 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
-import json
 import os
 import sys
 import time
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
-from urllib.error import HTTPError
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -44,6 +40,7 @@ from kg_skeptic.mcp.disgenet import DisGeNETTool, GeneDiseaseAssociation
 
 class RateLimitError(Exception):
     """Raised when API returns 429 Too Many Requests."""
+
     pass
 
 
@@ -76,20 +73,26 @@ def _query_with_backoff_impl(
 
             # Check for rate limiting indicators
             is_rate_limited = (
-                "429" in str(e) or
-                "too many requests" in error_msg or
-                "rate limit" in error_msg or
-                "quota" in error_msg
+                "429" in str(e)
+                or "too many requests" in error_msg
+                or "rate limit" in error_msg
+                or "quota" in error_msg
             )
 
             if is_rate_limited:
                 if attempt < max_retries:
-                    print(f"\n      Rate limited, waiting {delay:.1f}s (attempt {attempt + 1}/{max_retries})...", end="", flush=True)
+                    print(
+                        f"\n      Rate limited, waiting {delay:.1f}s (attempt {attempt + 1}/{max_retries})...",
+                        end="",
+                        flush=True,
+                    )
                     time.sleep(delay)
                     delay *= 2  # Exponential backoff
                     continue
                 else:
-                    raise RateLimitError(f"Max retries ({max_retries}) exceeded due to rate limiting")
+                    raise RateLimitError(
+                        f"Max retries ({max_retries}) exceeded due to rate limiting"
+                    )
 
             # Non-rate-limit error - don't retry
             last_error = e
@@ -264,7 +267,6 @@ def load_disgenet_associations(
 
     assoc_batch: list[dict[str, object]] = []
     disease_batch: list[dict[str, str]] = []
-    link_batch: list[dict[str, str]] = []
 
     seen_diseases: set[str] = set()
 
@@ -273,16 +275,16 @@ def load_disgenet_associations(
 
         # Create disease node data
         if disease_id not in seen_diseases:
-            disease_batch.append({
-                "id": disease_id,
-                "name": assoc.disease_id,  # We don't have the name from DisGeNET API
-            })
+            disease_batch.append(
+                {
+                    "id": disease_id,
+                    "name": assoc.disease_id,  # We don't have the name from DisGeNET API
+                }
+            )
             seen_diseases.add(disease_id)
 
         # Generate association ID
-        assoc_id = generate_association_id(
-            hgnc_id, predicate, disease_id, "disgenet", db_version
-        )
+        assoc_id = generate_association_id(hgnc_id, predicate, disease_id, "disgenet", db_version)
 
         # Create association data
         assoc_data = {
@@ -395,10 +397,12 @@ def load_disease_gene_associations(
 
         # Create gene node data
         if gene_node_id not in seen_genes:
-            gene_batch.append({
-                "id": gene_node_id,
-                "name": gene_node_id,
-            })
+            gene_batch.append(
+                {
+                    "id": gene_node_id,
+                    "name": gene_node_id,
+                }
+            )
             seen_genes.add(gene_node_id)
 
         # Generate association ID (gene is subject, disease is object)
@@ -538,6 +542,7 @@ def main() -> None:
     if not args.dry_run:
         try:
             from neo4j import GraphDatabase
+
             driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
             session = driver.session()
             print(f"Connected to Neo4j at {neo4j_uri}")
@@ -692,11 +697,11 @@ def main() -> None:
         if args.one_hop:
             print("Phase 2: One-hop enrichment was simulated")
     else:
-        print(f"Phase 1 - Gene→Disease:")
+        print("Phase 1 - Gene→Disease:")
         print(f"  Associations created: {total_assocs}")
         print(f"  Disease nodes created: {total_diseases}")
         if args.one_hop:
-            print(f"Phase 2 - Disease→Gene (one-hop):")
+            print("Phase 2 - Disease→Gene (one-hop):")
             print(f"  Associations created: {total_onehop_assocs}")
             print(f"  Gene nodes created: {total_onehop_genes}")
         print(f"Total associations: {total_assocs + total_onehop_assocs}")

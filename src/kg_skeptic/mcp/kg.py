@@ -30,6 +30,17 @@ def _now_utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _coerce_to_int(value: object) -> int:
+    """Best-effort conversion for Neo4j record values."""
+    if isinstance(value, (int, float, str)):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    return 0
+
+
 class EdgeDirection(str, Enum):
     """Direction of an edge."""
 
@@ -1405,6 +1416,63 @@ class Neo4jBackend(KGBackend):
                 gene_to_phenotypes.setdefault(gene, set()).add(phenotype)
 
         return sorted(phenotype_ids), phenotype_labels, gene_to_phenotypes
+
+    def get_associations_with_retracted_support(
+        self, limit: int = 100
+    ) -> list[tuple[str, str, str, list[str]]]:
+        """Get associations that are supported by retracted publications.
+
+        Returns:
+            List of tuples: (subject_id, predicate, object_id, [retracted_pmids])
+        """
+        results: list[tuple[str, str, str, list[str]]] = []
+
+        # Query associations linked to retracted publications
+        query = """
+        MATCH (s:Node)-[:SUBJECT_OF]->(a:Association)-[:OBJECT_OF]->(o:Node)
+        MATCH (a)-[:SUPPORTED_BY]->(p:Publication {retracted: true})
+        RETURN
+            s.id AS subject,
+            a.predicate AS predicate,
+            o.id AS object,
+            collect(p.id) AS retracted_pmids
+        LIMIT $limit
+        """
+
+        params: dict[str, _object] = {"limit": limit}
+
+        for rec in self._iter_records(query, params):
+            subject = str(rec.get("subject", ""))
+            predicate = str(rec.get("predicate", ""))
+            obj = str(rec.get("object", ""))
+            pmids_raw = rec.get("retracted_pmids", [])
+            pmids = [str(p) for p in pmids_raw] if isinstance(pmids_raw, list) else []
+
+            if subject and predicate and obj:
+                results.append((subject, predicate, obj, pmids))
+
+        return results
+
+    def count_retracted_publications(self) -> tuple[int, int]:
+        """Count total and retracted publications.
+
+        Returns:
+            Tuple of (total_checked, retracted_count)
+        """
+        query = """
+        MATCH (p:Publication)
+        WHERE p.retracted IS NOT NULL
+        RETURN
+            count(p) AS total,
+            sum(CASE WHEN p.retracted = true THEN 1 ELSE 0 END) AS retracted
+        """
+
+        for rec in self._iter_records(query, {}):
+            total = _coerce_to_int(rec.get("total", 0))
+            retracted = _coerce_to_int(rec.get("retracted", 0))
+            return total, retracted
+
+        return 0, 0
 
 
 class KGTool:
