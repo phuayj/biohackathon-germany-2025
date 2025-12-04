@@ -106,8 +106,13 @@ RELEVANT_PREDICATE_PREFIXES = {
 }
 
 
-def download_file(url: str, dest: Path, desc: str) -> None:
-    """Download a file with progress indication."""
+def download_file(
+    url: str, dest: Path, desc: str, max_retries: int = 3, initial_delay: float = 2.0
+) -> None:
+    """Download a file with progress indication and retry logic."""
+    import time
+    from urllib.error import ContentTooShortError, URLError
+
     print(f"Downloading {desc}...")
     print(f"  URL: {url}")
     print(f"  Destination: {dest}")
@@ -119,8 +124,29 @@ def download_file(url: str, dest: Path, desc: str) -> None:
             mb_total = total_size / (1024 * 1024)
             print(f"\r  Progress: {percent}% ({mb_downloaded:.1f}/{mb_total:.1f} MB)", end="")
 
-    urlretrieve(url, dest, reporthook=progress_hook)
-    print()  # New line after progress
+    delay = initial_delay
+    last_error: Exception | None = None
+
+    for attempt in range(max_retries):
+        try:
+            # Remove partial file if it exists
+            if dest.exists():
+                dest.unlink()
+            urlretrieve(url, dest, reporthook=progress_hook)
+            print()  # New line after progress
+            return  # Success
+        except (ContentTooShortError, URLError, OSError) as e:
+            last_error = e
+            print(f"\n  Download interrupted: {e}")
+            if attempt < max_retries - 1:
+                print(f"  Retrying in {delay:.1f}s (attempt {attempt + 2}/{max_retries})...")
+                time.sleep(delay)
+                delay *= 2  # Exponential backoff
+            else:
+                print(f"  All {max_retries} attempts failed")
+
+    if last_error:
+        raise last_error
 
 
 def download_monarch_kg(data_dir: Path, force: bool = False) -> tuple[Path, Path]:

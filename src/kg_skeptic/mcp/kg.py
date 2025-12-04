@@ -1284,6 +1284,128 @@ class Neo4jBackend(KGBackend):
 
         return edges
 
+    def sample_gene_disease_pairs(
+        self, limit: int = 100, predicate: Optional[str] = None
+    ) -> list[tuple[str, str]]:
+        """Sample gene-disease pairs from Neo4j for training.
+
+        Queries the graph for gene→disease edges (both direct and reified).
+        Returns unique (gene_id, disease_id) pairs.
+
+        Args:
+            limit: Maximum number of pairs to return
+            predicate: Optional predicate filter (e.g., 'biolink:gene_associated_with_condition')
+
+        Returns:
+            List of (gene_id, disease_id) tuples
+        """
+        pairs: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+
+        # Query 1: Direct RELATION edges between genes and diseases
+        if predicate:
+            predicate_filter = " AND r.predicate = $predicate"
+            params: dict[str, _object] = {"limit": limit * 2, "predicate": predicate}
+        else:
+            predicate_filter = ""
+            params = {"limit": limit * 2}
+
+        direct_query = f"""
+        MATCH (g:Node:Gene)-[r:RELATION]->(d:Node:Disease)
+        WHERE g.category = 'biolink:Gene' AND d.category = 'biolink:Disease'{predicate_filter}
+        RETURN DISTINCT g.id AS gene, d.id AS disease
+        LIMIT $limit
+        """
+
+        for rec in self._iter_records(direct_query, params):
+            gene = str(rec.get("gene", ""))
+            disease = str(rec.get("disease", ""))
+            if gene and disease and (gene, disease) not in seen:
+                pairs.append((gene, disease))
+                seen.add((gene, disease))
+
+        # Query 2: Reified associations
+        if predicate:
+            assoc_predicate_filter = " AND a.predicate = $predicate"
+        else:
+            assoc_predicate_filter = ""
+
+        reified_query = f"""
+        MATCH (g:Node)-[:SUBJECT_OF]->(a:Association)-[:OBJECT_OF]->(d:Node)
+        WHERE g.category = 'biolink:Gene' AND d.category = 'biolink:Disease'{assoc_predicate_filter}
+        RETURN DISTINCT g.id AS gene, d.id AS disease
+        LIMIT $limit
+        """
+
+        for rec in self._iter_records(reified_query, params):
+            gene = str(rec.get("gene", ""))
+            disease = str(rec.get("disease", ""))
+            if gene and disease and (gene, disease) not in seen:
+                pairs.append((gene, disease))
+                seen.add((gene, disease))
+
+        return pairs[:limit]
+
+    def collect_gene_phenotype_associations(
+        self, limit: int = 1000
+    ) -> tuple[list[str], dict[str, str], dict[str, set[str]]]:
+        """Collect gene-phenotype associations from Neo4j for perturbation training.
+
+        Returns:
+            Tuple of:
+            - phenotype_ids: List of unique phenotype IDs
+            - phenotype_labels: Dict mapping phenotype ID to label
+            - gene_to_phenotypes: Dict mapping gene ID to set of phenotype IDs
+        """
+        phenotype_ids: set[str] = set()
+        phenotype_labels: dict[str, str] = {}
+        gene_to_phenotypes: dict[str, set[str]] = {}
+
+        # Query gene-phenotype edges (both direct and reified)
+        params: dict[str, _object] = {"limit": limit}
+
+        # Query 1: Direct RELATION edges
+        direct_query = """
+        MATCH (g:Node)-[r:RELATION]->(p:Node)
+        WHERE g.category = 'biolink:Gene'
+        AND p.category = 'biolink:PhenotypicFeature'
+        RETURN g.id AS gene, p.id AS phenotype, p.name AS phenotype_label
+        LIMIT $limit
+        """
+
+        for rec in self._iter_records(direct_query, params):
+            gene = str(rec.get("gene", ""))
+            phenotype = str(rec.get("phenotype", ""))
+            label = rec.get("phenotype_label")
+
+            if gene and phenotype:
+                phenotype_ids.add(phenotype)
+                if isinstance(label, str):
+                    phenotype_labels[phenotype] = label
+                gene_to_phenotypes.setdefault(gene, set()).add(phenotype)
+
+        # Query 2: Reified associations (gene → phenotype)
+        reified_query = """
+        MATCH (g:Node)-[:SUBJECT_OF]->(a:Association)-[:OBJECT_OF]->(p:Node)
+        WHERE g.category = 'biolink:Gene'
+        AND p.category = 'biolink:PhenotypicFeature'
+        RETURN g.id AS gene, p.id AS phenotype, p.name AS phenotype_label
+        LIMIT $limit
+        """
+
+        for rec in self._iter_records(reified_query, params):
+            gene = str(rec.get("gene", ""))
+            phenotype = str(rec.get("phenotype", ""))
+            label = rec.get("phenotype_label")
+
+            if gene and phenotype:
+                phenotype_ids.add(phenotype)
+                if isinstance(label, str):
+                    phenotype_labels[phenotype] = label
+                gene_to_phenotypes.setdefault(gene, set()).add(phenotype)
+
+        return sorted(phenotype_ids), phenotype_labels, gene_to_phenotypes
+
 
 class KGTool:
     """

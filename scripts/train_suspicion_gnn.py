@@ -47,7 +47,7 @@ except ImportError:
 
 from kg_skeptic.error_types import ErrorType
 from kg_skeptic.mcp.mini_kg import iter_mini_kg_edges, load_mini_kg_backend
-from kg_skeptic.mcp.kg import InMemoryBackend, KGEdge, KGNode
+from kg_skeptic.mcp.kg import InMemoryBackend, KGBackend, KGEdge, KGNode, Neo4jBackend
 from kg_skeptic.pipeline import _category_from_id
 from kg_skeptic import subgraph as subgraph_module
 from kg_skeptic.subgraph import Subgraph, build_pair_subgraph
@@ -58,6 +58,34 @@ from kg_skeptic.suspicion_gnn import (
     SubgraphTensors,
     subgraph_to_tensors,
 )
+
+
+# ---------------------------------------------------------------------------
+# Neo4j Backend Loader
+# ---------------------------------------------------------------------------
+
+
+def load_neo4j_backend(uri: str, user: str, password: str) -> Neo4jBackend:
+    """Load a Neo4j backend for suspicion GNN training.
+
+    Args:
+        uri: Neo4j connection URI (e.g., bolt://localhost:7687)
+        user: Neo4j username
+        password: Neo4j password
+
+    Returns:
+        Neo4jBackend instance connected to the database
+    """
+    try:
+        from neo4j import GraphDatabase
+    except ImportError as e:
+        raise RuntimeError(
+            "neo4j package is required for Neo4j backend. Install with: pip install neo4j"
+        ) from e
+
+    driver = GraphDatabase.driver(uri, auth=(user, password))
+    session = driver.session()
+    return Neo4jBackend(session)
 
 
 # ---------------------------------------------------------------------------
@@ -1247,7 +1275,7 @@ def build_dataset(
     *,
     seed: int = 13,
     k_hops: int = 2,
-    backend: InMemoryBackend | None = None,
+    backend: KGBackend | None = None,
 ) -> tuple[list[GraphSample], Dict[str, int]]:
     """Construct a small graph-level dataset for training the suspicion GNN.
 
@@ -1255,19 +1283,39 @@ def build_dataset(
     - clean subgraphs built from the mini KG, and
     - perturbed variants with flipped directions, phenotype swaps, and
       synthetic retracted-support annotations.
+
+    Supports both InMemoryBackend (mini KG) and Neo4jBackend.
     """
     if backend is None:
         backend = load_mini_kg_backend()
 
-    all_pairs = list(_iter_unique_gene_disease_pairs())
+    # Get gene-disease pairs based on backend type
+    if isinstance(backend, Neo4jBackend):
+        # Use Neo4j's sample_gene_disease_pairs method
+        print(f"Sampling gene-disease pairs from Neo4j (limit={num_subgraphs * 2})...")
+        all_pairs = backend.sample_gene_disease_pairs(limit=num_subgraphs * 2)
+        print(f"  Found {len(all_pairs)} pairs")
+    else:
+        # Use mini KG iterator
+        all_pairs = list(_iter_unique_gene_disease_pairs())
+
     if not all_pairs:
-        raise RuntimeError("No gene–disease pairs found in mini KG.")
+        raise RuntimeError("No gene–disease pairs found in KG backend.")
 
     rng = random.Random(seed)
     rng.shuffle(all_pairs)
     selected_pairs = all_pairs[: max(1, min(num_subgraphs, len(all_pairs)))]
 
-    all_phenotype_ids, phenotype_labels, gene_to_phenotypes = _collect_global_phenotypes()
+    # Collect phenotype data based on backend type
+    if isinstance(backend, Neo4jBackend):
+        print("Collecting gene-phenotype associations from Neo4j...")
+        all_phenotype_ids, phenotype_labels, gene_to_phenotypes = (
+            backend.collect_gene_phenotype_associations(limit=5000)
+        )
+        print(f"  Found {len(all_phenotype_ids)} phenotypes, {len(gene_to_phenotypes)} genes")
+    else:
+        all_phenotype_ids, phenotype_labels, gene_to_phenotypes = _collect_global_phenotypes()
+
     hpo_sibling_map = _build_hpo_sibling_map(all_phenotype_ids)
 
     samples: list[GraphSample] = []
@@ -1949,6 +1997,28 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "Set to an empty string to disable saving."
         ),
     )
+    # Neo4j backend options
+    parser.add_argument(
+        "--neo4j-uri",
+        type=str,
+        default=None,
+        help=(
+            "Neo4j connection URI (e.g., bolt://localhost:7687). "
+            "If provided, uses Neo4j instead of the mini KG backend."
+        ),
+    )
+    parser.add_argument(
+        "--neo4j-user",
+        type=str,
+        default="neo4j",
+        help="Neo4j username (default: neo4j).",
+    )
+    parser.add_argument(
+        "--neo4j-password",
+        type=str,
+        default="password",
+        help="Neo4j password (default: password).",
+    )
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
@@ -2013,53 +2083,77 @@ def main(argv: Sequence[str] | None = None) -> int:
         if getattr(args, "pretrain_link_prediction", False):
             args.pretrain_epochs = min(args.pretrain_epochs, 1)
 
-    # Build a shared mini KG backend so optional pretraining and
-    # supervised training operate on the same node set.
-    backend = load_mini_kg_backend()
+    # Build backend: either Neo4j or the mini KG
+    use_neo4j = bool(getattr(args, "neo4j_uri", None))
+
+    if use_neo4j:
+        print(f"Connecting to Neo4j at {args.neo4j_uri}...")
+        try:
+            backend: KGBackend = load_neo4j_backend(
+                uri=args.neo4j_uri,
+                user=args.neo4j_user,
+                password=args.neo4j_password,
+            )
+            print("  Connected successfully")
+        except Exception as exc:
+            print(f"✖ Failed to connect to Neo4j: {exc}", file=sys.stderr)
+            return 1
+    else:
+        # Build a shared mini KG backend so optional pretraining and
+        # supervised training operate on the same node set.
+        backend = load_mini_kg_backend()
 
     # Optional self-supervised link prediction pretrain (GAE/GraphSAGE-style).
+    # Note: This requires InMemoryBackend with .nodes and .edges attributes.
     if getattr(args, "pretrain_link_prediction", False):
-        try:
-            embeddings = pretrain_link_prediction(
-                backend,
-                epochs=args.pretrain_epochs,
-                lr=args.pretrain_lr,
-                device=args.device,
-                seed=args.seed,
-                negative_ratio=1,
+        if use_neo4j:
+            print(
+                "⚠ Link prediction pretrain is not supported with Neo4j backend "
+                "(requires in-memory node/edge access). Skipping.",
+                file=sys.stderr,
             )
-        except RuntimeError as exc:
-            print(f"✖ Link prediction pretrain skipped: {exc}", file=sys.stderr)
-            embeddings = None
+        elif isinstance(backend, InMemoryBackend):
+            try:
+                embeddings = pretrain_link_prediction(
+                    backend,
+                    epochs=args.pretrain_epochs,
+                    lr=args.pretrain_lr,
+                    device=args.device,
+                    seed=args.seed,
+                    negative_ratio=1,
+                )
+            except RuntimeError as exc:
+                print(f"✖ Link prediction pretrain skipped: {exc}", file=sys.stderr)
+                embeddings = None
 
-        if embeddings:
-            for node_id, vec in embeddings.items():
-                node = backend.nodes.get(node_id)
-                if node is None:
-                    continue
-                props = node.properties
-                # Do not overwrite any existing embeddings coming from
-                # external pipelines; store under a separate key.
-                if "embedding" not in props:
-                    props["embedding"] = vec
+            if embeddings:
+                for node_id, vec in embeddings.items():
+                    node = backend.nodes.get(node_id)
+                    if node is None:
+                        continue
+                    props = node.properties
+                    # Do not overwrite any existing embeddings coming from
+                    # external pipelines; store under a separate key.
+                    if "embedding" not in props:
+                        props["embedding"] = vec
 
-            save_path = getattr(args, "save_pretrain_embeddings", "") or ""
-            if save_path:
-                try:
-                    path = Path(save_path)
-                    if path.parent and not path.parent.exists():
-                        path.parent.mkdir(parents=True, exist_ok=True)
-                    payload = {
-                        "embeddings": embeddings,
-                        "metadata": {
-                            "dim": len(next(iter(embeddings.values()))) if embeddings else 0,
-                            "num_nodes": len(embeddings),
-                        },
-                    }
-                    torch.save(payload, path)
-                    print(f"Saved link prediction embeddings to {path}")
-                except OSError as exc:
-                    print(f"✖ Failed to save link prediction embeddings to {save_path}: {exc}")
+                save_path = getattr(args, "save_pretrain_embeddings", "") or ""
+                if save_path:
+                    try:
+                        path = Path(save_path)
+                        if path.parent and not path.parent.exists():
+                            path.parent.mkdir(parents=True, exist_ok=True)
+                        payload = {
+                            "embeddings": embeddings,
+                            "metadata": {
+                                "dim": len(next(iter(embeddings.values()))) if embeddings else 0,
+                                "num_nodes": len(embeddings),
+                            },
+                        }
+                        torch.save(payload, path)
+                        print(f"Saved link prediction embeddings to {path}")
+                    except OSError as exc:
+                        print(f"✖ Failed to save link prediction embeddings to {save_path}: {exc}")
 
     try:
         samples, predicate_to_index = build_dataset(
