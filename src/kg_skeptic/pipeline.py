@@ -1784,8 +1784,8 @@ def _build_text_nli_facts(
                 p_support = 0.1
                 p_contradict = 0.8
             else:  # NEI
-                p_support = 0.3
-                p_contradict = 0.3
+                p_support = 0.0
+                p_contradict = 0.0
 
             sentence_result: SentenceNLIResult = {
                 "citation": record.identifier,
@@ -3081,7 +3081,16 @@ class SkepticPipeline:
                             description="NLI insufficient support gate: forces FAIL for causal claims with contradictions",
                         )
                     )
-                elif nli_n_support < 2 and nli_m_lit < 1.0 and verdict == "PASS":
+                elif (
+                    nli_n_support < 2
+                    and nli_m_lit < 1.0
+                    and verdict == "PASS"
+                    and not (
+                        nli_n_support == 0
+                        and nli_n_contradict == 0
+                        and evidence.get("has_multiple_sources")
+                    )
+                ):
                     verdict = "WARN"
                     evaluation.trace.add(
                         RuleTraceEntry(

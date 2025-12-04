@@ -146,23 +146,53 @@ def build_source_references(
 def compute_rule_footprint(
     edge: KGEdge,
     evaluation: RuleEvaluation,
+    sources: list[SourceReference] | None = None,
 ) -> list[RuleResult]:
     """Determine which rules passed/failed for this specific edge.
 
-    Note: This is a simplified implementation. In practice, rules operate
-    on the claim level, not individual edges. This returns the overall
-    rule results as context for the edge.
+    Filters the global rule trace to exclude evidence-related rules that
+    do not apply to this specific edge (e.g., do not show "Retracted citation"
+    if this edge's sources are clean).
 
     Args:
         edge: The KGEdge being inspected
         evaluation: The RuleEvaluation from the audit
+        sources: Optional list of source references for this edge
 
     Returns:
         List of RuleResult objects
     """
     results: list[RuleResult] = []
+    sources = sources or []
+
+    # Pre-calculate edge properties for filtering
+    has_retracted = any(s.status == "retracted" for s in sources)
+    has_concern = any(s.status == "concern" for s in sources)
+    source_count = len(sources)
 
     for entry in evaluation.trace.entries:
+        # Filter 1: Retraction gate
+        # Only show on the edge if it actually carries a retracted source.
+        if entry.rule_id == "retraction_gate" and not has_retracted:
+            continue
+
+        # Filter 2: Expression of concern
+        # Only show on the edge if it actually carries a concerned source.
+        if entry.rule_id == "expression_of_concern" and not has_concern:
+            continue
+
+        # Filter 3: Minimal evidence (fails if count <= 0)
+        # If this edge HAS sources, don't show the "no evidence" failure here,
+        # as it is confusing to see "No PMIDs supplied" next to a list of PMIDs.
+        if entry.rule_id == "minimal_evidence" and source_count > 0:
+            continue
+
+        # Filter 4: Multi-source bonus
+        # If this specific edge relies on a single source (or none), it shouldn't
+        # claim credit for the global multi-source bonus.
+        if entry.rule_id == "multi_source_bonus" and source_count < 2:
+            continue
+
         results.append(
             RuleResult(
                 rule_id=entry.rule_id,
@@ -311,7 +341,7 @@ def extract_edge_inspector_data(
         )
 
     # Compute rule footprint
-    rule_footprint = compute_rule_footprint(edge, evaluation)
+    rule_footprint = compute_rule_footprint(edge, evaluation, sources)
 
     # Generate patch suggestions
     patch_suggestions = generate_patch_suggestions(edge, sources, subgraph)
