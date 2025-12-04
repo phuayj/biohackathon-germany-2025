@@ -1,16 +1,26 @@
-"""GLiNER2-based named entity recognition for biomedical claims.
+"""Named entity recognition for biomedical claims.
 
-This module provides entity extraction using the GLiNER2 model, which supports
-custom entity types and runs efficiently on CPU.
+This module provides entity extraction using multiple NER backends:
+- GLiNER2: Zero-shot NER with custom entity types
+- Dictionary: Simple dictionary-based matching (fallback)
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum, auto
 from importlib import import_module
 from typing import Sequence
 
 from typing import Protocol, cast, Mapping
+
+
+class NERBackend(Enum):
+    """Available NER backend options."""
+
+    GLINER2 = auto()
+    PUBMEDBERT = auto()
+    DICTIONARY = auto()
 
 
 class GLiNER2Model(Protocol):
@@ -29,7 +39,7 @@ _gliner2_model: GLiNER2Model | None = None
 
 @dataclass
 class ExtractedEntity:
-    """An entity extracted by GLiNER2."""
+    """An entity extracted by a neural NER backend."""
 
     text: str
     label: str
@@ -166,9 +176,9 @@ class GLiNER2Extractor:
         """
         self.entity_types = list(entity_types) if entity_types else BIOMEDICAL_ENTITY_TYPES
         self.use_descriptions = use_descriptions
-        self._model: object | None = None
+        self._model: GLiNER2Model | None = None
 
-    def _ensure_model(self) -> object:
+    def _ensure_model(self) -> GLiNER2Model:
         """Ensure the model is loaded."""
         if self._model is None:
             self._model = _get_model()
@@ -217,3 +227,106 @@ class GLiNER2Extractor:
             if entity.label == entity_type:
                 return entity
         return None
+
+
+class DictionaryExtractor:
+    """Placeholder extractor for dictionary-based NER.
+
+    This extractor returns an empty list as the actual dictionary matching
+    is performed in the pipeline using the label_index.
+    """
+
+    def __init__(
+        self,
+        entity_types: Sequence[str] | None = None,
+    ) -> None:
+        """Initialize the extractor.
+
+        Args:
+            entity_types: Entity types to extract. Not used for dictionary matching.
+        """
+        self.entity_types = list(entity_types) if entity_types else BIOMEDICAL_ENTITY_TYPES
+
+    def extract(self, text: str) -> list[ExtractedEntity]:
+        """Return empty list - dictionary matching happens in pipeline.
+
+        Args:
+            text: The text (unused).
+
+        Returns:
+            Empty list.
+        """
+        _ = text  # Unused
+        return []
+
+    def extract_grouped(self, text: str) -> dict[str, list[ExtractedEntity]]:
+        """Return empty dict - dictionary matching happens in pipeline.
+
+        Args:
+            text: The text (unused).
+
+        Returns:
+            Empty dictionary.
+        """
+        _ = text  # Unused
+        return {}
+
+    def extract_first_of_type(self, text: str, entity_type: str) -> ExtractedEntity | None:
+        """Return None - dictionary matching happens in pipeline.
+
+        Args:
+            text: The text (unused).
+            entity_type: The entity type (unused).
+
+        Returns:
+            None.
+        """
+        _ = text, entity_type  # Unused
+        return None
+
+
+class PubMedBertExtractor:
+    """Placeholder extractor for a PubMedBERT-based NER model.
+
+    The current implementation returns no entities, causing the pipeline
+    to fall back to dictionary-based matching. This keeps the CLI
+    interface stable while avoiding a hard dependency on a specific
+    transformer model.
+    """
+
+    def __init__(self, entity_types: Sequence[str] | None = None) -> None:
+        self.entity_types = list(entity_types) if entity_types else BIOMEDICAL_ENTITY_TYPES
+
+    def extract(self, text: str) -> list[ExtractedEntity]:
+        _ = text  # Unused in the placeholder implementation
+        return []
+
+
+# Type alias for any NER extractor
+NERExtractor = GLiNER2Extractor | DictionaryExtractor | PubMedBertExtractor
+
+
+def get_extractor(
+    backend: NERBackend,
+    entity_types: Sequence[str] | None = None,
+) -> NERExtractor:
+    """Factory function to create an NER extractor for the specified backend.
+
+    Args:
+        backend: The NER backend to use.
+        entity_types: Entity types to extract.
+
+    Returns:
+        An NER extractor instance.
+
+    Raises:
+        ValueError: If an unknown backend is specified.
+    """
+    if backend is NERBackend.GLINER2:
+        return GLiNER2Extractor(entity_types=entity_types)
+    if backend is NERBackend.PUBMEDBERT:
+        # Placeholder: use a stub extractor that triggers dictionary fallback
+        return PubMedBertExtractor(entity_types=entity_types)
+    if backend is NERBackend.DICTIONARY:
+        return DictionaryExtractor(entity_types=entity_types)
+    raise ValueError(f"Unknown NER backend: {backend}")

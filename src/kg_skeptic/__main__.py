@@ -31,6 +31,7 @@ from typing import Mapping, Sequence, cast
 from kg_skeptic.app import DEMO_CLAIMS
 from kg_skeptic.models import Claim, EntityMention
 from kg_skeptic.pipeline import AuditResult, ClaimNormalizer, NormalizationResult, SkepticPipeline
+from kg_skeptic.ner import NERBackend
 from kg_skeptic.provenance import CitationProvenance
 from kg_skeptic.rules import RuleTraceEntry
 from kg_skeptic.subgraph import build_pair_subgraph, filter_subgraph_for_visualization
@@ -38,7 +39,7 @@ from kg_skeptic.visualization.edge_inspector import extract_edge_inspector_data
 from kg_skeptic.mcp.kg import KGEdge
 
 
-def _build_pipeline(use_gliner: bool) -> SkepticPipeline:
+def _build_pipeline(ner_backend: NERBackend) -> SkepticPipeline:
     """Construct a SkepticPipeline mirroring the Streamlit configuration.
 
     This follows the same environment-driven configuration as the
@@ -96,7 +97,7 @@ def _build_pipeline(use_gliner: bool) -> SkepticPipeline:
             driver = GraphDatabase.driver(uri, auth=(user, password))
             backend = Neo4jBackend(_DriverSessionWrapper(cast(_Neo4jDriverLike, driver)))
 
-    normalizer = ClaimNormalizer(kg_backend=backend, use_gliner=use_gliner)
+    normalizer = ClaimNormalizer(kg_backend=backend, ner_backend=ner_backend)
 
     # Mirror Streamlit app config for optional integrations.
     use_disgenet = bool(os.environ.get("DISGENET_API_KEY"))
@@ -757,12 +758,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "--no-gliner",
-        dest="use_gliner",
-        action="store_false",
-        help="Disable GLiNER2 NER (use dictionary-based matching only).",
+        "--ner-backend",
+        type=str,
+        choices=["gliner2", "pubmedbert", "dictionary"],
+        default="gliner2",
+        help="NER backend to use for entity extraction (default: gliner2).",
     )
-    parser.set_defaults(use_gliner=True)
 
     parser.add_argument(
         "--strict-ontology",
@@ -853,7 +854,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--demo-id/--demo-name/--demo-index, or use --list-demos.",
         )
 
-    use_gliner: bool = bool(args.use_gliner)
+    # Parse NER backend from CLI argument
+    ner_backend_map = {
+        "gliner2": NERBackend.GLINER2,
+        "pubmedbert": NERBackend.PUBMEDBERT,
+        "dictionary": NERBackend.DICTIONARY,
+    }
+    ner_backend = ner_backend_map[args.ner_backend]
 
     # Build audit payload mirroring how the Streamlit app calls the pipeline.
     audit_payload: Claim | Mapping[str, object]
@@ -871,7 +878,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         audit_payload = claim
 
-    pipeline = _build_pipeline(use_gliner=use_gliner)
+    pipeline = _build_pipeline(ner_backend=ner_backend)
 
     try:
         result = pipeline.run(audit_payload)

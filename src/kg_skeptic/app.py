@@ -22,6 +22,7 @@ from typing import Protocol, cast, Literal
 from kg_skeptic.feedback import append_claim_to_dataset
 from kg_skeptic.models import Claim, EntityMention
 from kg_skeptic.pipeline import AuditResult, ClaimNormalizer, SkepticPipeline
+from kg_skeptic.ner import NERBackend
 from kg_skeptic.mcp.kg import KGBackend, KGEdge, Neo4jBackend, MonarchBackend
 from kg_skeptic.mcp.mini_kg import load_mini_kg_backend
 from kg_skeptic.provenance import CitationProvenance
@@ -314,12 +315,12 @@ def _get_subgraph_backend() -> KGBackend:
     return cast(KGBackend, st.session_state[key])
 
 
-def _get_pipeline(use_gliner: bool = False) -> SkepticPipeline:
-    """Get or create a pipeline with the specified GLiNER2 setting."""
-    cache_key = f"pipeline_gliner_{use_gliner}"
+def _get_pipeline(ner_backend: NERBackend = NERBackend.DICTIONARY) -> SkepticPipeline:
+    """Get or create a pipeline with the specified NER backend setting."""
+    cache_key = f"pipeline_ner_{ner_backend.name}"
     if cache_key not in st.session_state:
         kg_backend = _get_kg_backend()
-        normalizer = ClaimNormalizer(kg_backend=kg_backend, use_gliner=use_gliner)
+        normalizer = ClaimNormalizer(kg_backend=kg_backend, ner_backend=ner_backend)
         # Enable DisGeNET-backed curated KG support in the core pipeline when
         # configured. The Streamlit app already exposes a separate DisGeNET
         # section in the UI; this flag also feeds DisGeNET signals into the
@@ -362,10 +363,10 @@ def render_entity_badge(entity: EntityMention) -> None:
     """Render an entity as a styled badge."""
     # Determine source badge
     source = entity.source
-    if source == "gliner+mini_kg":
-        source_badge = '<span style="background-color: #5c6bc0; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.7em; margin-left: 4px;">GLiNER+KG</span>'
-    elif source == "gliner":
-        source_badge = '<span style="background-color: #7e57c2; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.7em; margin-left: 4px;">GLiNER</span>'
+    if source == "gliner2+mini_kg":
+        source_badge = '<span style="background-color: #5c6bc0; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.7em; margin-left: 4px;">GLiNER2+KG</span>'
+    elif source == "gliner2":
+        source_badge = '<span style="background-color: #7e57c2; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.7em; margin-left: 4px;">GLiNER2</span>'
     elif source == "mini_kg":
         source_badge = '<span style="background-color: #26a69a; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.7em; margin-left: 4px;">KG</span>'
     else:
@@ -1437,13 +1438,16 @@ def main() -> None:
     # Sidebar settings
     with st.sidebar:
         st.header("Settings")
+
+        # NER Backend toggle (GLiNER2 vs Dictionary)
         use_gliner = st.toggle(
             "Use GLiNER2 NER",
             value=True,
             help="Enable GLiNER2 neural entity recognition for improved entity extraction from claims.",
         )
+        ner_backend = NERBackend.GLINER2 if use_gliner else NERBackend.DICTIONARY
         if use_gliner:
-            st.caption("🧠 Using GLiNER2 model for entity extraction")
+            st.caption("🧠 Using GLiNER2 zero-shot NER model")
         else:
             st.caption("📖 Using dictionary-based entity matching")
 
@@ -1469,7 +1473,7 @@ def main() -> None:
             st.caption("❄️ Frozen mode (cached data)")
 
         # GNN Model Status
-        pipeline = _get_pipeline(use_gliner=use_gliner)
+        pipeline = _get_pipeline(ner_backend=ner_backend)
         model_status = pipeline.get_suspicion_model_status()
         if model_status["loaded"]:
             if model_status["has_error_type_head"]:
@@ -1521,11 +1525,11 @@ def main() -> None:
         st.divider()
         st.caption("**Entity Source Legend:**")
         st.markdown(
-            '<span style="background-color: #5c6bc0; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.8em;">GLiNER+KG</span> Neural + KG normalized',
+            '<span style="background-color: #5c6bc0; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.8em;">GLiNER2+KG</span> GLiNER2 + KG normalized',
             unsafe_allow_html=True,
         )
         st.markdown(
-            '<span style="background-color: #7e57c2; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.8em;">GLiNER</span> Neural extraction only',
+            '<span style="background-color: #7e57c2; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.8em;">GLiNER2</span> GLiNER2 extraction only',
             unsafe_allow_html=True,
         )
         st.markdown(
@@ -1612,10 +1616,11 @@ def main() -> None:
         if st.button(
             "🔍 Audit Demo Claim", type="primary", use_container_width=True, key="demo_btn"
         ):
-            with st.spinner(
-                "Running audit..." + (" (loading GLiNER2 model...)" if use_gliner else "")
-            ):
-                pipeline = _get_pipeline(use_gliner=use_gliner)
+            loading_msg = "Running audit..."
+            if ner_backend != NERBackend.DICTIONARY:
+                loading_msg += f" (loading {ner_backend.name} model...)"
+            with st.spinner(loading_msg):
+                pipeline = _get_pipeline(ner_backend=ner_backend)
                 result = pipeline.run(selected_claim)
                 st.session_state.audit_run = True
                 st.session_state.result = result
@@ -1641,10 +1646,11 @@ def main() -> None:
                 # Parse evidence
                 evidence = [e.strip() for e in evidence_input.split(",") if e.strip()]
 
-                with st.spinner(
-                    "Running audit..." + (" (loading GLiNER2 model...)" if use_gliner else "")
-                ):
-                    pipeline = _get_pipeline(use_gliner=use_gliner)
+                loading_msg = "Running audit..."
+                if ner_backend != NERBackend.DICTIONARY:
+                    loading_msg += f" (loading {ner_backend.name} model...)"
+                with st.spinner(loading_msg):
+                    pipeline = _get_pipeline(ner_backend=ner_backend)
                     try:
                         result = pipeline.run(
                             {
@@ -1653,15 +1659,15 @@ def main() -> None:
                             }
                         )
                     except ValueError as exc:
-                        if use_gliner:
+                        if ner_backend != NERBackend.DICTIONARY:
                             st.error(
-                                "Could not normalize entities from the claim text even with GLiNER2. "
+                                f"Could not normalize entities from the claim text even with {ner_backend.name}. "
                                 "Try stating both the gene and disease explicitly so the model can pick them up."
                             )
                         else:
                             st.error(
                                 "Could not normalize entities from the claim text. "
-                                "Try adding clearer gene/disease names or enable GLiNER2 in Settings."
+                                "Try adding clearer gene/disease names or select a neural NER backend in Settings."
                             )
                         st.caption(f"Details: {exc}")
                         st.session_state.audit_run = False
@@ -1704,7 +1710,7 @@ def main() -> None:
                     modified_provenance.append(new_p)
 
                 # Re-evaluate
-                pipeline = _get_pipeline(use_gliner=st.session_state.get("use_gliner", True))
+                pipeline = _get_pipeline(ner_backend=ner_backend)
 
                 # We assume the normalization is valid.
                 # Note: This does not re-fetch provenance, just re-evaluates rules.

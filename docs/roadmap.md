@@ -9,7 +9,7 @@
 - [x] Define Skeptic report schema (claims, findings, suggested fixes) and example fixtures.
 - [x] Define claim schema in `agent/schemas.py` with subject/predicate/object/qualifiers/provenance.
 - [x] Establish deterministic test harness for rule-based checks.
-- [x] Achieve clean mypy strict type-check runs on the codebase (with typed Neo4j driver integration).
+- [x] Achieve clean mypy strict type-check runs on the codebase (with typed Neo4j driver integration and NER backend wiring, including PubMedBERT placeholder support).
 
 ### MCP Tools (Minimum Viable)
 - [x] `europepmc.search(query)` and `europepmc.fetch(pmid)` → title, abstract, DOI, MeSH, open access status, citations.

@@ -12,6 +12,7 @@ from kg_skeptic.pipeline import (
     SkepticPipeline,
     _build_text_nli_facts,
 )
+from kg_skeptic.ner import NERBackend
 from kg_skeptic.provenance import CitationProvenance, ProvenanceFetcher
 from kg_skeptic.models import Claim
 from kg_skeptic.mcp.ids import NormalizedID, IDType
@@ -397,21 +398,21 @@ class TestTextLevelNLI:
 
 
 class TestClaimNormalizerGLiNER:
-    """Tests for ClaimNormalizer with GLiNER2 integration."""
+    """Tests for ClaimNormalizer with NER backend integration."""
 
-    def test_normalizer_default_no_gliner(self) -> None:
-        """Test that GLiNER is disabled by default."""
+    def test_normalizer_default_dictionary(self) -> None:
+        """Test that Dictionary backend is used by default."""
         normalizer = ClaimNormalizer()
-        assert normalizer.use_gliner is False
+        assert normalizer.ner_backend == NERBackend.DICTIONARY
 
     def test_normalizer_gliner_enabled(self) -> None:
         """Test enabling GLiNER2 in normalizer."""
-        normalizer = ClaimNormalizer(use_gliner=True)
-        assert normalizer.use_gliner is True
+        normalizer = ClaimNormalizer(ner_backend=NERBackend.GLINER2)
+        assert normalizer.ner_backend == NERBackend.GLINER2
 
     def test_normalizer_dict_fallback_without_gliner(self) -> None:
         """Test dictionary-based entity extraction still works."""
-        normalizer = ClaimNormalizer(use_gliner=False)
+        normalizer = ClaimNormalizer(ner_backend=NERBackend.DICTIONARY)
         result = normalizer.normalize(
             {"text": "BRCA1 mutations cause breast cancer.", "evidence": []}
         )
@@ -419,8 +420,8 @@ class TestClaimNormalizerGLiNER:
         assert result.triple.subject is not None
         assert result.triple.object is not None
 
-    @patch("kg_skeptic.pipeline.GLiNER2Extractor")
-    def test_normalizer_gliner_extraction(self, mock_extractor_cls: MagicMock) -> None:
+    @patch("kg_skeptic.pipeline.get_extractor")
+    def test_normalizer_gliner_extraction(self, mock_get_extractor: MagicMock) -> None:
         """Test GLiNER2 entity extraction in normalizer."""
         # Setup mock extractor
         mock_extractor = MagicMock()
@@ -428,13 +429,13 @@ class TestClaimNormalizerGLiNER:
             MagicMock(text="BRCA1", label="gene", start=0, end=5, score=0.95),
             MagicMock(text="breast cancer", label="disease", start=20, end=33, score=0.88),
         ]
-        mock_extractor_cls.return_value = mock_extractor
+        mock_get_extractor.return_value = mock_extractor
 
-        normalizer = ClaimNormalizer(use_gliner=True)
+        normalizer = ClaimNormalizer(ner_backend=NERBackend.GLINER2)
         # Force extractor initialization
-        normalizer._gliner_extractor = mock_extractor
+        normalizer._ner_extractor = mock_extractor
 
-        gene, target = normalizer._pick_entities_from_text_gliner(
+        gene, target = normalizer._pick_entities_from_text_neural(
             "BRCA1 mutations cause breast cancer."
         )
         # Should extract entities using GLiNER2
@@ -442,11 +443,11 @@ class TestClaimNormalizerGLiNER:
         assert target is not None
 
     def test_normalizer_gliner_fallback_on_error(self) -> None:
-        """Test fallback to dictionary when GLiNER2 fails."""
-        normalizer = ClaimNormalizer(use_gliner=True)
-        # Mock the GLiNER extractor to raise an error
-        normalizer._gliner_extractor = MagicMock()
-        normalizer._gliner_extractor.extract.side_effect = RuntimeError("Model error")
+        """Test fallback to dictionary when neural NER fails."""
+        normalizer = ClaimNormalizer(ner_backend=NERBackend.GLINER2)
+        # Mock the NER extractor to raise an error
+        normalizer._ner_extractor = MagicMock()
+        normalizer._ner_extractor.extract.side_effect = RuntimeError("Model error")
 
         # Should fall back to dictionary matching
         result = normalizer.normalize(
@@ -457,7 +458,7 @@ class TestClaimNormalizerGLiNER:
 
     def test_normalizer_uses_ids_ancestors(self) -> None:
         """Test that ids.* ancestors are propagated into claim metadata."""
-        normalizer = ClaimNormalizer(use_gliner=False)
+        normalizer = ClaimNormalizer(ner_backend=NERBackend.DICTIONARY)
 
         # Stub ID normalizer tool with deterministic MONDO ancestors
         mock_tool = MagicMock()
@@ -499,7 +500,7 @@ class TestClaimNormalizerGLiNER:
 
     def test_normalizer_uses_hpo_ids_from_evidence(self) -> None:
         """Phenotype conflict claims should normalize via HPO IDs in evidence when NER misses."""
-        normalizer = ClaimNormalizer(use_gliner=False)
+        normalizer = ClaimNormalizer(ner_backend=NERBackend.DICTIONARY)
         result = normalizer.normalize(
             {
                 "text": "Hypertension conflicts with Hypotension (ontology sibling test).",
@@ -517,7 +518,7 @@ class TestClaimNormalizerPathways:
 
     def test_normalizer_uses_pathway_tool_for_go(self) -> None:
         """Pathway entities should be enriched via PathwayTool for GO IDs."""
-        normalizer = ClaimNormalizer(use_gliner=False)
+        normalizer = ClaimNormalizer(ner_backend=NERBackend.DICTIONARY)
 
         # Stub ID normalizer to avoid network calls
         mock_id_tool = MagicMock()
@@ -568,7 +569,7 @@ class TestClaimNormalizerPathways:
 
     def test_evidence_go_id_promotes_pathway_object(self) -> None:
         """GO IDs in evidence should be usable as pathway objects."""
-        normalizer = ClaimNormalizer(use_gliner=False)
+        normalizer = ClaimNormalizer(ner_backend=NERBackend.DICTIONARY)
 
         # Stub ID normalizer to avoid network calls
         mock_id_tool = MagicMock()
@@ -622,7 +623,7 @@ class TestPredicateInference:
 
     def test_gene_disease_claim_infers_canonical_predicate_and_qualifier(self) -> None:
         """Gene→disease text should yield canonical predicate and narrative qualifier."""
-        normalizer = ClaimNormalizer(use_gliner=False)
+        normalizer = ClaimNormalizer(ner_backend=NERBackend.DICTIONARY)
 
         # Stub ID normalizer to avoid network calls and keep entities unchanged.
         mock_tool = MagicMock()
@@ -663,7 +664,7 @@ class TestPredicateInference:
 
     def test_gene_disease_claim_without_mutation_has_no_variant_flag(self) -> None:
         """Gene→disease text without mutation terms should not set variant flag."""
-        normalizer = ClaimNormalizer(use_gliner=False)
+        normalizer = ClaimNormalizer(ner_backend=NERBackend.DICTIONARY)
 
         mock_tool = MagicMock()
         gene_norm = NormalizedID(
@@ -706,7 +707,7 @@ class TestClaimNormalizerGLiNERIntegration:
     def test_normalizer_real_gliner_extraction(self, tmp_path: Path) -> None:
         """Test normalization with real GLiNER2 model."""
         try:
-            normalizer = ClaimNormalizer(use_gliner=True)
+            normalizer = ClaimNormalizer(ner_backend=NERBackend.GLINER2)
             result = normalizer.normalize(
                 {
                     "text": "TP53 mutations are associated with various cancers.",

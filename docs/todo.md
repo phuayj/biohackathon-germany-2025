@@ -268,6 +268,7 @@
 
 ### Integration Testing
 - [x] Run `UV_CACHE_DIR=.uv-cache uv run pytest` to validate recent type-tightening changes around text NLI facts.
+- [x] Fix all ruff and mypy errors in the codebase and tighten NER backend typing (including PubMedBERT placeholder and Neo4j helpers) so that static checks pass without ignores.
 - [ ] Measure hallucination-reduction when auditor guards a small LLM QA/KG agent.
 - [ ] Integration tests with demo bio-agent via MCP.
 - [ ] Surface curated KG support in the UI: add an Audit Card snippet that shows whether Monarch and/or DisGeNET back the gene–disease edge (including edge counts and which sources fired), and add non-live + e2e tests to exercise this path.

@@ -26,7 +26,7 @@ from .models import Claim, EntityMention, Report
 from .mcp.mini_kg import load_mini_kg_backend
 from .provenance import CitationProvenance, ProvenanceFetcher
 from .rules import RuleEngine, RuleEvaluation, RuleTraceEntry
-from .ner import GLiNER2Extractor, ExtractedEntity
+from .ner import ExtractedEntity, NERBackend, NERExtractor, get_extractor
 
 if TYPE_CHECKING:
     from kg_skeptic.suspicion_gnn import RGCNSuspicionModel
@@ -400,7 +400,7 @@ class ClaimNormalizer:
         self,
         kg_backend: KGBackend | None = None,
         *,
-        use_gliner: bool = False,
+        ner_backend: NERBackend = NERBackend.DICTIONARY,
     ) -> None:
         # Underlying KG backend: by default we use the pre-seeded in-memory
         # mini KG slice, but callers can inject a Neo4jBackend or any other
@@ -411,23 +411,24 @@ class ClaimNormalizer:
         # Label index: for InMemoryBackend we can build a dictionary-based
         # lookup directly from the materialized edge list. For remote
         # backends (e.g., Neo4j/Monarch) we fall back to an empty index and
-        # rely on GLiNER + ids.* tools instead.
+        # rely on NER + ids.* tools instead.
         edges_for_index: Sequence[KGEdge] = []
         if isinstance(backend, InMemoryBackend):
             edges_for_index = backend.edges
         self.label_index = self._build_label_index(edges_for_index)
-        self.use_gliner = use_gliner
-        self._gliner_extractor: GLiNER2Extractor | None = None
+        self.ner_backend = ner_backend
+        self._ner_extractor: NERExtractor | None = None
         self._id_tool: IDNormalizerTool | None = None
         self._pathway_tool: PathwayTool | None = None
 
-    def _get_gliner_extractor(self) -> GLiNER2Extractor:
-        """Lazily initialize GLiNER2 extractor."""
-        if self._gliner_extractor is None:
-            self._gliner_extractor = GLiNER2Extractor(
+    def _get_ner_extractor(self) -> NERExtractor:
+        """Lazily initialize NER extractor based on configured backend."""
+        if self._ner_extractor is None:
+            self._ner_extractor = get_extractor(
+                self.ner_backend,
                 entity_types=["gene", "protein", "disease", "phenotype", "pathway"],
             )
-        return self._gliner_extractor
+        return self._ner_extractor
 
     def _get_id_tool(self) -> IDNormalizerTool:
         """Lazily initialize ID normalizer tool."""
@@ -514,17 +515,23 @@ class ClaimNormalizer:
             )
         return None
 
-    def _gliner_to_normalized(self, entity: ExtractedEntity) -> NormalizedEntity:
-        """Convert a GLiNER2 extracted entity to a NormalizedEntity."""
-        # Map GLiNER2 labels to our category system
+    def _ner_to_normalized(self, entity: ExtractedEntity) -> NormalizedEntity:
+        """Convert an NER-extracted entity to a NormalizedEntity."""
+        # Map NER labels to our category system
         label_map = {
             "gene": "gene",
             "protein": "gene",  # Treat proteins as genes for now
             "disease": "disease",
             "phenotype": "phenotype",
             "pathway": "pathway",
+            "drug": "drug",
+            "organism": "organism",
+            "cell_type": "cell_type",
         }
         category = label_map.get(entity.label, "unknown")
+
+        # Determine source prefix based on backend
+        backend_source = self.ner_backend.name.lower()
 
         # Try to resolve against mini KG first for better normalization
         text_lower = entity.text.lower()
@@ -536,17 +543,17 @@ class ClaimNormalizer:
                 category=kg_category,
                 ancestors=[kg_category] if kg_category != "unknown" else [],
                 mention=entity.text,
-                source="gliner+mini_kg",
+                source=f"{backend_source}+mini_kg",
             )
 
-        # Fall back to GLiNER2 category without KG normalization
+        # Fall back to NER category without KG normalization
         return NormalizedEntity(
-            id=f"gliner:{entity.text.lower().replace(' ', '_')}",
+            id=f"{backend_source}:{entity.text.lower().replace(' ', '_')}",
             label=entity.text,
             category=category,
             ancestors=[category] if category != "unknown" else [],
             mention=entity.text,
-            source="gliner",
+            source=backend_source,
         )
 
     def _enrich_with_ids_tool(self, entity: NormalizedEntity) -> NormalizedEntity:
@@ -654,21 +661,21 @@ class ClaimNormalizer:
             entity.ancestors = ["pathway"]
         return entity
 
-    def _pick_entities_from_text_gliner(
+    def _pick_entities_from_text_neural(
         self, text: str
     ) -> tuple[NormalizedEntity | None, NormalizedEntity | None]:
-        """Entity detection using GLiNER2 model.
+        """Entity detection using neural NER model (GLiNER2 or PubMedBERT).
 
         Returns entities in text order (subject first, object second) to preserve
-        the semantic structure of the claim. GLiNER returns entities sorted by
+        the semantic structure of the claim. NER models return entities sorted by
         their start position in the text.
         """
-        extractor = self._get_gliner_extractor()
+        extractor = self._get_ner_extractor()
         entities = extractor.extract(text)
 
         normalized_entities: list[NormalizedEntity] = []
         for entity in entities:
-            normalized = self._gliner_to_normalized(entity)
+            normalized = self._ner_to_normalized(entity)
             normalized_entities.append(normalized)
 
         # Return entities in text order: first entity is subject, second is object.
@@ -722,23 +729,27 @@ class ClaimNormalizer:
     ) -> tuple[NormalizedEntity | None, NormalizedEntity | None, dict[str, object]]:
         """Pick subject/object entities from text.
 
-        Uses GLiNER2 if enabled, otherwise falls back to dictionary matching.
-        If GLiNER2 fails or returns incomplete results, dictionary matching is used
-        as a fallback. A diagnostics dictionary is returned to surface which
-        strategies were attempted.
+        Uses the configured NER backend (GLiNER2, PubMedBERT, or Dictionary).
+        For neural backends, falls back to dictionary matching if NER fails or
+        returns incomplete results. A diagnostics dictionary is returned to
+        surface which strategies were attempted.
         """
+        use_neural = self.ner_backend in {NERBackend.GLINER2, NERBackend.PUBMEDBERT}
+        backend_name = self.ner_backend.name.lower()
+
         diagnostics: dict[str, object] = {
-            "used_gliner": self.use_gliner,
-            "gliner_pair_found": False,
-            "gliner_error": None,
+            "ner_backend": backend_name,
+            "neural_used": use_neural,
+            "neural_pair_found": False,
+            "neural_error": None,
             "dictionary_used": False,
             "dictionary_pair_found": False,
         }
 
-        if self.use_gliner:
+        if use_neural:
             try:
-                gene, target = self._pick_entities_from_text_gliner(text)
-                diagnostics["gliner_pair_found"] = bool(gene and target)
+                gene, target = self._pick_entities_from_text_neural(text)
+                diagnostics["neural_pair_found"] = bool(gene and target)
                 if gene is None or target is None:
                     dict_gene, dict_target = self._pick_entities_from_text_dict(text)
                     diagnostics["dictionary_used"] = True
@@ -747,8 +758,8 @@ class ClaimNormalizer:
                     target = target or dict_target
                 return gene, target, diagnostics
             except (ImportError, RuntimeError) as exc:
-                diagnostics["gliner_error"] = str(exc) or exc.__class__.__name__
-                # Fall back to dictionary matching if GLiNER2 fails
+                diagnostics["neural_error"] = str(exc) or exc.__class__.__name__
+                # Fall back to dictionary matching if neural NER fails
 
         dict_gene, dict_target = self._pick_entities_from_text_dict(text)
         diagnostics["dictionary_used"] = True
@@ -1059,12 +1070,13 @@ class ClaimNormalizer:
 
         if not subject or not obj:
             reasons: list[str] = []
-            if entity_diagnostics.get("used_gliner"):
-                gliner_error = entity_diagnostics.get("gliner_error")
-                if gliner_error:
-                    reasons.append(f"GLiNER2 error: {gliner_error}")
-                elif not entity_diagnostics.get("gliner_pair_found"):
-                    reasons.append("GLiNER2 did not find both a subject and a target")
+            ner_backend_name = entity_diagnostics.get("ner_backend", "unknown")
+            if entity_diagnostics.get("neural_used"):
+                neural_error = entity_diagnostics.get("neural_error")
+                if neural_error:
+                    reasons.append(f"NER ({ner_backend_name}) error: {neural_error}")
+                elif not entity_diagnostics.get("neural_pair_found"):
+                    reasons.append(f"NER ({ner_backend_name}) did not find both a subject and a target")
             if entity_diagnostics.get("dictionary_used"):
                 if not entity_diagnostics.get("dictionary_pair_found"):
                     reasons.append("dictionary/KG lookup did not match entities in the text")

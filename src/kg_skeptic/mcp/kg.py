@@ -858,7 +858,8 @@ class Neo4jBackend(KGBackend):
             "endNode(rel).name AS object_label, "
             "type(rel) AS rel_type, "
             "rel.predicate AS predicate_prop, "
-            "rel AS rel_props"
+            "rel AS rel_props "
+            "LIMIT 500"
         )
 
         params: dict[str, _object] = {
@@ -970,6 +971,7 @@ class Neo4jBackend(KGBackend):
 
         assoc_query = (
             "MATCH" + assoc_pattern + "WHERE n.id = $center "
+            "WITH DISTINCT a LIMIT 200 "
             "MATCH (s:Node)-[:SUBJECT_OF]->(a)-[:OBJECT_OF]->(o:Node) "
             "WHERE NOT s.category IN ['biolink:Association', 'biolink:Publication'] "
             "AND NOT o.category IN ['biolink:Association', 'biolink:Publication'] "

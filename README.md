@@ -174,6 +174,33 @@ A small synthetic dataset and training loop live in `scripts/train_suspicion_gnn
 
 The script builds 2-hop subgraphs from the mini KG, adds perturbed variants (direction flips, phenotype swaps, synthetic retracted support), and trains a tiny R-GCN to produce per-edge suspicion scores. The main pipeline and Streamlit UI will automatically pick up `data/suspicion_gnn/model.pt` when present.
 
+### Pre-building the HPO Sibling Map (Recommended)
+
+The GNN training requires HPO ontology information to detect phenotype sibling swaps. By default, it queries the OLS API for each HPO term, which is **very slow** (hours for large datasets). To avoid this:
+
+**Step 1: Build the HPO sibling map once**
+
+```bash
+uv run python scripts/build_hpo_sibling_map.py
+```
+
+This creates `data/hpo_sibling_map.json` (shows progress bar with ETA). Run once; reuse many times.
+
+**Step 2: Training automatically uses the cache**
+
+```bash
+# The training script automatically looks for data/hpo_sibling_map.json
+uv run python scripts/train_suspicion_gnn.py
+```
+
+**Alternative: Skip online lookups entirely**
+
+If you don't need precise HPO sibling detection, use the static fallback:
+
+```bash
+uv run python scripts/train_suspicion_gnn.py --skip-hpo-online
+```
+
 ### Citation Network Integration
 
 The GNN can learn citation-based suspicion patterns by including the PubMed citation network in subgraphs. This enables detection of suspicious edges supported by papers that cite retracted work.

@@ -204,13 +204,18 @@ def _compute_node_features(
         neighbor_count = len(neighbors)
         if neighbor_count < 2:
             clustering = 0.0
+        elif neighbor_count > 100:
+            # Skip expensive triangle counting for high-degree nodes to avoid
+            # O(d^2) explosion. High-degree nodes in KGs typically have low
+            # clustering anyway, so 0.0 is a reasonable approximation.
+            clustering = 0.0
         else:
             triangles = 0
-            for u in neighbors:
-                for v in neighbors:
-                    if u >= v:
-                        continue
-                    if v in undirected_adj.get(u, set()):
+            neighbor_list = list(neighbors)
+            for i, u in enumerate(neighbor_list):
+                u_neighbors = undirected_adj.get(u, set())
+                for v in neighbor_list[i + 1 :]:
+                    if v in u_neighbors:
                         triangles += 1
             if triangles > 0:
                 clustering = 2.0 * float(triangles) / float(neighbor_count * (neighbor_count - 1))

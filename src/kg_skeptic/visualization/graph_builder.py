@@ -115,7 +115,7 @@ def build_pyvis_network(
             },
             "stabilization": {
                 "enabled": true,
-                "iterations": 100
+                "iterations": 50
             }
         },
         "interaction": {

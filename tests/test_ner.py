@@ -1,4 +1,4 @@
-"""Tests for the GLiNER2 NER module."""
+"""Tests for the NER module (GLiNER2 and Dictionary backends)."""
 
 from __future__ import annotations
 
@@ -9,10 +9,13 @@ import pytest
 from kg_skeptic.ner import (
     BIOMEDICAL_ENTITY_TYPES,
     BIOMEDICAL_ENTITY_DESCRIPTIONS,
+    DictionaryExtractor,
     ExtractedEntity,
     GLiNER2Extractor,
+    NERBackend,
     extract_entities,
     extract_biomedical_entities,
+    get_extractor,
 )
 
 
@@ -226,3 +229,65 @@ class TestGLiNER2Integration:
             assert len(grouped) >= 1
         except ImportError:
             pytest.skip("GLiNER2 not installed")
+
+
+class TestNERBackend:
+    """Tests for the NERBackend enum."""
+
+    def test_enum_values(self) -> None:
+        """Test that all expected enum values exist."""
+        assert NERBackend.GLINER2
+        assert NERBackend.PUBMEDBERT
+        assert NERBackend.DICTIONARY
+
+    def test_enum_names(self) -> None:
+        """Test enum names for string formatting."""
+        assert NERBackend.GLINER2.name == "GLINER2"
+        assert NERBackend.PUBMEDBERT.name == "PUBMEDBERT"
+        assert NERBackend.DICTIONARY.name == "DICTIONARY"
+
+
+class TestDictionaryExtractor:
+    """Tests for the DictionaryExtractor class."""
+
+    def test_initialization(self) -> None:
+        """Test extractor initialization."""
+        extractor = DictionaryExtractor(entity_types=["gene", "disease"])
+        assert extractor.entity_types == ["gene", "disease"]
+
+    def test_extract_returns_empty_list(self) -> None:
+        """Test that extract always returns an empty list."""
+        extractor = DictionaryExtractor()
+        entities = extractor.extract("BRCA1 mutations cause breast cancer.")
+        assert entities == []
+
+    def test_extract_grouped_returns_empty_dict(self) -> None:
+        """Test that extract_grouped always returns an empty dict."""
+        extractor = DictionaryExtractor()
+        grouped = extractor.extract_grouped("BRCA1 mutations cause breast cancer.")
+        assert grouped == {}
+
+    def test_extract_first_of_type_returns_none(self) -> None:
+        """Test that extract_first_of_type always returns None."""
+        extractor = DictionaryExtractor()
+        result = extractor.extract_first_of_type("BRCA1 mutations.", "gene")
+        assert result is None
+
+
+class TestGetExtractor:
+    """Tests for the get_extractor factory function."""
+
+    def test_returns_gliner2_extractor(self) -> None:
+        """Test that GLINER2 backend returns GLiNER2Extractor."""
+        extractor = get_extractor(NERBackend.GLINER2)
+        assert isinstance(extractor, GLiNER2Extractor)
+
+    def test_returns_dictionary_extractor(self) -> None:
+        """Test that DICTIONARY backend returns DictionaryExtractor."""
+        extractor = get_extractor(NERBackend.DICTIONARY)
+        assert isinstance(extractor, DictionaryExtractor)
+
+    def test_passes_entity_types(self) -> None:
+        """Test that entity_types are passed to the extractor."""
+        extractor = get_extractor(NERBackend.GLINER2, entity_types=["gene", "disease"])
+        assert extractor.entity_types == ["gene", "disease"]

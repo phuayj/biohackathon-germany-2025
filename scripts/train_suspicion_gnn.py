@@ -483,12 +483,76 @@ def _build_hpo_sibling_map_fallback(phenotype_ids: Sequence[str]) -> Dict[str, l
     return sibling_map
 
 
-def _build_hpo_sibling_map(phenotype_ids: Sequence[str]) -> Dict[str, list[str]]:
+def _load_hpo_sibling_map_from_cache(
+    cache_path: str,
+    phenotype_ids: Sequence[str],
+) -> Dict[str, list[str]] | None:
+    """Load HPO sibling map from a pre-built cache file.
+
+    Returns None if cache doesn't exist or is invalid.
+    """
+    try:
+        import json
+        from pathlib import Path
+
+        path = Path(cache_path)
+        if not path.exists():
+            return None
+
+        with open(path) as f:
+            data = json.load(f)
+
+        cached_sibling_map = data.get("sibling_map", {})
+        if not cached_sibling_map:
+            return None
+
+        # Filter to only phenotypes in our current dataset
+        id_set = set(phenotype_ids)
+        sibling_map: Dict[str, list[str]] = {}
+        for hp_id, siblings in cached_sibling_map.items():
+            if hp_id in id_set:
+                filtered_siblings = [s for s in siblings if s in id_set]
+                if filtered_siblings:
+                    sibling_map[hp_id] = filtered_siblings
+
+        if sibling_map:
+            print(f"  Loaded {len(sibling_map)} phenotypes from cache: {cache_path}")
+            return sibling_map
+
+        return None
+    except Exception as e:
+        print(f"  Warning: Could not load HPO cache: {e}")
+        return None
+
+
+def _build_hpo_sibling_map(
+    phenotype_ids: Sequence[str],
+    *,
+    skip_online: bool = False,
+    cache_path: str | None = None,
+) -> Dict[str, list[str]]:
     """Build HPO-based sibling map using ontology ancestors when available.
 
     Two phenotypes are treated as siblings when they share at least one
     non-root HPO ancestor (per the external HPO ontology accessed via OLS).
+
+    Args:
+        phenotype_ids: List of HPO phenotype IDs
+        skip_online: If True, skip online OLS lookups and use static fallback
+        cache_path: Path to pre-built cache file (from build_hpo_sibling_map.py)
     """
+    # Try loading from cache first
+    if cache_path:
+        cached = _load_hpo_sibling_map_from_cache(cache_path, phenotype_ids)
+        if cached:
+            return cached
+        print("  Cache miss or invalid, building from scratch...")
+
+    # Skip online lookups if requested
+    if skip_online:
+        print("  Skipping online HPO lookups, using static fallback...")
+        return _build_hpo_sibling_map_fallback(phenotype_ids)
+
     try:
         from kg_skeptic.mcp.ids import IDNormalizerTool
     except Exception:
@@ -497,9 +561,14 @@ def _build_hpo_sibling_map(phenotype_ids: Sequence[str]) -> Dict[str, list[str]]
     tool = IDNormalizerTool()
     ancestor_map: Dict[str, set[str]] = {}
 
-    for hp_id in phenotype_ids:
+    total = len([hp for hp in phenotype_ids if hp.upper().startswith("HP:")])
+    print(f"  Querying OLS API for {total} HPO ancestors (this may be slow)...")
+
+    for i, hp_id in enumerate(phenotype_ids):
         if not hp_id.upper().startswith("HP:"):
             continue
+        if (i + 1) % 50 == 0:
+            print(f"    Progress: {i + 1}/{total}...", end="\r")
         try:
             norm = tool.normalize_hpo(hp_id)
         except Exception:
@@ -515,6 +584,8 @@ def _build_hpo_sibling_map(phenotype_ids: Sequence[str]) -> Dict[str, list[str]]
         ancestors.discard("HP:0000001")
         if ancestors:
             ancestor_map[hp_id] = ancestors
+
+    print()  # Clear progress line
 
     if not ancestor_map:
         return _build_hpo_sibling_map_fallback(phenotype_ids)
@@ -1369,6 +1440,8 @@ def build_dataset(
     backend: KGBackend | None = None,
     use_real_retractions: bool = True,
     include_publications: bool = True,
+    skip_hpo_online: bool = False,
+    hpo_sibling_map_path: str | None = None,
 ) -> tuple[list[GraphSample], Dict[str, int]]:
     """Construct a small graph-level dataset for training the suspicion GNN.
 
@@ -1420,7 +1493,11 @@ def build_dataset(
     else:
         all_phenotype_ids, phenotype_labels, gene_to_phenotypes = _collect_global_phenotypes()
 
-    hpo_sibling_map = _build_hpo_sibling_map(all_phenotype_ids)
+    hpo_sibling_map = _build_hpo_sibling_map(
+        all_phenotype_ids,
+        skip_online=skip_hpo_online,
+        cache_path=hpo_sibling_map_path,
+    )
 
     samples: list[GraphSample] = []
     all_predicates: set[str] = set()
@@ -2219,6 +2296,24 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Disable publication/citation network in subgraphs.",
     )
+    parser.add_argument(
+        "--skip-hpo-online",
+        action="store_true",
+        help=(
+            "Skip online HPO ancestor lookups (very slow) and use static sibling groups. "
+            "Recommended when OLS API is slow or unavailable."
+        ),
+    )
+    parser.add_argument(
+        "--hpo-sibling-map",
+        type=str,
+        default="data/hpo_sibling_map.json",
+        help=(
+            "Path to pre-built HPO sibling map JSON (from build_hpo_sibling_map.py). "
+            "Speeds up training by avoiding slow OLS API calls. "
+            "Default: data/hpo_sibling_map.json"
+        ),
+    )
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
@@ -2370,6 +2465,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             backend=backend,
             use_real_retractions=use_real_retractions,
             include_publications=include_publications,
+            skip_hpo_online=args.skip_hpo_online,
+            hpo_sibling_map_path=args.hpo_sibling_map,
         )
     except RuntimeError as exc:
         print(f"✖ Failed to build dataset: {exc}", file=sys.stderr)
