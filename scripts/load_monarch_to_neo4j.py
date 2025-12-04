@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Load Monarch KG data into Neo4j for KG-Skeptic.
+"""Load biomedical KG data into Neo4j for KG-Skeptic.
 
-This script downloads Monarch KGX files and loads them into a Neo4j database.
-The Monarch KG provides gene-disease associations, phenotypes, and other
-biomedical relationships in Biolink model format.
+This script downloads and loads multiple biomedical data sources into Neo4j:
+- Monarch KG: Gene-disease associations, phenotypes, biomedical relationships
+- HPO Annotations: Gene-to-phenotype and disease-to-phenotype associations
+- Reactome: Pathway-to-gene relationships
 
 Usage:
     # Set environment variables
@@ -11,8 +12,11 @@ Usage:
     export NEO4J_USER=neo4j
     export NEO4J_PASSWORD=your_password
 
-    # Run the loader
+    # Run the loader (all sources)
     python scripts/load_monarch_to_neo4j.py
+
+    # Load specific sources
+    python scripts/load_monarch_to_neo4j.py --sources monarch,hpo,reactome
 
     # Options
     python scripts/load_monarch_to_neo4j.py --help
@@ -39,8 +43,27 @@ MONARCH_KG_BASE_URL = "https://data.monarchinitiative.org/monarch-kg/latest"
 MONARCH_NODES_FILE = "monarch-kg_nodes.tsv"
 MONARCH_EDGES_FILE = "monarch-kg_edges.tsv"
 
-# Default data directory
+# HPO Annotations download URLs
+HPO_BASE_URL = "https://github.com/obophenotype/human-phenotype-ontology/releases/latest/download"
+HPO_GENES_TO_PHENOTYPE_FILE = "genes_to_phenotype.txt"
+HPO_PHENOTYPE_HPOA_FILE = "phenotype.hpoa"
+
+# Reactome download URLs
+REACTOME_BASE_URL = "https://reactome.org/download/current"
+REACTOME_NCBI_FILE = "NCBI2Reactome.txt"
+REACTOME_UNIPROT_FILE = "UniProt2Reactome.txt"
+
+# HGNC ID mapping (NCBIGene to HGNC)
+HGNC_MAPPING_URL = (
+    "https://storage.googleapis.com/public-download-files/hgnc/tsv/tsv/hgnc_complete_set.txt"
+)
+HGNC_MAPPING_FILE = "hgnc_complete_set.txt"
+
+# Default data directories
 DATA_DIR = Path(__file__).parent.parent / "data" / "monarch_kg"
+HPO_DATA_DIR = Path(__file__).parent.parent / "data" / "hpo"
+REACTOME_DATA_DIR = Path(__file__).parent.parent / "data" / "reactome"
+HGNC_DATA_DIR = Path(__file__).parent.parent / "data" / "hgnc"
 
 # Batch size for Neo4j transactions
 BATCH_SIZE = 5000
@@ -118,6 +141,88 @@ def download_monarch_kg(data_dir: Path, force: bool = False) -> tuple[Path, Path
     download_file(edges_url, edges_path, "Monarch KG edges")
 
     return nodes_path, edges_path
+
+
+def download_hpo_annotations(data_dir: Path, force: bool = False) -> tuple[Path, Path]:
+    """Download HPO annotation files if not present."""
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    genes_path = data_dir / HPO_GENES_TO_PHENOTYPE_FILE
+    hpoa_path = data_dir / HPO_PHENOTYPE_HPOA_FILE
+
+    if not force and genes_path.exists() and hpoa_path.exists():
+        print(f"Using existing HPO files in {data_dir}")
+        return genes_path, hpoa_path
+
+    genes_url = f"{HPO_BASE_URL}/{HPO_GENES_TO_PHENOTYPE_FILE}"
+    hpoa_url = f"{HPO_BASE_URL}/{HPO_PHENOTYPE_HPOA_FILE}"
+
+    download_file(genes_url, genes_path, "HPO genes to phenotype")
+    download_file(hpoa_url, hpoa_path, "HPO disease annotations")
+
+    return genes_path, hpoa_path
+
+
+def download_reactome(data_dir: Path, force: bool = False) -> tuple[Path, Path]:
+    """Download Reactome pathway files if not present."""
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    ncbi_path = data_dir / REACTOME_NCBI_FILE
+    uniprot_path = data_dir / REACTOME_UNIPROT_FILE
+
+    if not force and ncbi_path.exists() and uniprot_path.exists():
+        print(f"Using existing Reactome files in {data_dir}")
+        return ncbi_path, uniprot_path
+
+    ncbi_url = f"{REACTOME_BASE_URL}/{REACTOME_NCBI_FILE}"
+    uniprot_url = f"{REACTOME_BASE_URL}/{REACTOME_UNIPROT_FILE}"
+
+    download_file(ncbi_url, ncbi_path, "Reactome NCBI gene mappings")
+    download_file(uniprot_url, uniprot_path, "Reactome UniProt mappings")
+
+    return ncbi_path, uniprot_path
+
+
+def download_hgnc_mapping(data_dir: Path, force: bool = False) -> Path:
+    """Download HGNC ID mapping file if not present."""
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    mapping_path = data_dir / HGNC_MAPPING_FILE
+
+    if not force and mapping_path.exists():
+        print(f"Using existing HGNC mapping file in {data_dir}")
+        return mapping_path
+
+    download_file(HGNC_MAPPING_URL, mapping_path, "HGNC ID mappings")
+    return mapping_path
+
+
+def load_hgnc_mapping(mapping_path: Path) -> dict[str, str]:
+    """Load HGNC mapping file and return NCBIGene -> HGNC ID mapping.
+
+    The HGNC complete set has columns including:
+    - hgnc_id: HGNC ID (e.g., "HGNC:5")
+    - entrez_id: NCBI Gene ID (e.g., "1")
+
+    Returns:
+        Dict mapping NCBIGene:xxx -> HGNC:xxx
+    """
+    print(f"Loading HGNC ID mapping from {mapping_path}...")
+    ncbi_to_hgnc: dict[str, str] = {}
+
+    with mapping_path.open("r", encoding="utf-8") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        for row in reader:
+            hgnc_id = row.get("hgnc_id", "").strip()
+            entrez_id = row.get("entrez_id", "").strip()
+
+            if hgnc_id and entrez_id:
+                # Map NCBIGene:xxx -> HGNC:xxx
+                ncbi_key = f"NCBIGene:{entrez_id}"
+                ncbi_to_hgnc[ncbi_key] = hgnc_id
+
+    print(f"  Loaded {len(ncbi_to_hgnc):,} NCBIGene -> HGNC mappings")
+    return ncbi_to_hgnc
 
 
 def read_tsv(path: Path, max_rows: int | None = None) -> Iterator[dict[str, str]]:
@@ -434,6 +539,687 @@ def _insert_edges_batch(session: object, edges: list[dict[str, object]]) -> None
     )
 
 
+# ==============================================================================
+# HPO Annotations Loading
+# ==============================================================================
+
+
+def load_hpo_gene_phenotypes(
+    session: object,
+    genes_path: Path,
+    valid_node_ids: set[str],
+    max_rows: int | None = None,
+    db_version: str = "unknown",
+    ncbi_to_hgnc: dict[str, str] | None = None,
+) -> tuple[int, int, set[str]]:
+    """Load HPO gene-to-phenotype annotations.
+
+    The genes_to_phenotype.txt file has these columns:
+    - gene_id (NCBI Gene ID)
+    - gene_symbol
+    - hpo_id
+    - hpo_name
+    - frequency
+    - disease_id
+
+    Args:
+        ncbi_to_hgnc: Optional mapping of NCBIGene:xxx -> HGNC:xxx for ID normalization
+
+    Returns: (nodes_created, edges_created, new_node_ids)
+    """
+    print(f"Loading HPO gene-phenotype annotations from {genes_path}...")
+    if ncbi_to_hgnc:
+        print(f"  Using HGNC ID normalization ({len(ncbi_to_hgnc):,} mappings)")
+
+    nodes_created = 0
+    edges_created = 0
+    skipped_no_mapping = 0
+    new_node_ids: set[str] = set()
+    node_batch: list[dict[str, object]] = []
+    edge_batch: list[dict[str, object]] = []
+
+    start_time = time.time()
+    retrieved_at = datetime.now(timezone.utc).isoformat()
+
+    with genes_path.open("r", encoding="utf-8") as f:
+        # Skip comment lines
+        for line in f:
+            if not line.startswith("#"):
+                break
+
+        reader = csv.DictReader(
+            f,
+            delimiter="\t",
+            fieldnames=["gene_id", "gene_symbol", "hpo_id", "hpo_name", "frequency", "disease_id"],
+        )
+
+        for i, row in enumerate(reader):
+            if max_rows is not None and i >= max_rows:
+                break
+
+            gene_ncbi = row.get("gene_id", "").strip()
+            gene_symbol = row.get("gene_symbol", "").strip()
+            hpo_id = row.get("hpo_id", "").strip()
+            hpo_name = row.get("hpo_name", "").strip()
+            frequency = row.get("frequency", "").strip()
+            disease_id = row.get("disease_id", "").strip()
+
+            if not gene_ncbi or not hpo_id:
+                continue
+
+            # Normalize gene ID - prefer HGNC if mapping available
+            ncbi_id = (
+                f"NCBIGene:{gene_ncbi}" if not gene_ncbi.startswith("NCBIGene:") else gene_ncbi
+            )
+            if ncbi_to_hgnc and ncbi_id in ncbi_to_hgnc:
+                gene_id = ncbi_to_hgnc[ncbi_id]  # Use HGNC ID
+            else:
+                gene_id = ncbi_id  # Fall back to NCBIGene
+                if ncbi_to_hgnc:
+                    skipped_no_mapping += 1
+
+            # Create gene node only if not in valid_node_ids (i.e., not already in Monarch)
+            if gene_id not in valid_node_ids and gene_id not in new_node_ids:
+                node_batch.append(
+                    {
+                        "id": gene_id,
+                        "name": gene_symbol,
+                        "category": "biolink:Gene",
+                        "source_db": "hpo",
+                    }
+                )
+                new_node_ids.add(gene_id)
+
+            # Create phenotype node if not exists
+            if hpo_id not in valid_node_ids and hpo_id not in new_node_ids:
+                node_batch.append(
+                    {
+                        "id": hpo_id,
+                        "name": hpo_name,
+                        "category": "biolink:PhenotypicFeature",
+                        "source_db": "hpo",
+                    }
+                )
+                new_node_ids.add(hpo_id)
+
+            # Create edge (gene)-[has_phenotype]->(phenotype)
+            content = f"{gene_id}|biolink:has_phenotype|{hpo_id}|hpo|{db_version}"
+            record_hash = hashlib.sha256(content.encode()).hexdigest()
+
+            edge_batch.append(
+                {
+                    "subject": gene_id,
+                    "object": hpo_id,
+                    "predicate": "biolink:has_phenotype",
+                    "source_db": "hpo",
+                    "db_version": db_version,
+                    "retrieved_at": retrieved_at,
+                    "record_hash": record_hash,
+                    "frequency": frequency if frequency else None,
+                    "disease_id": disease_id if disease_id else None,
+                }
+            )
+
+            # Insert batches - always flush nodes before edges to ensure MATCH succeeds
+            if len(node_batch) >= BATCH_SIZE:
+                _insert_hpo_nodes_batch(session, node_batch)
+                nodes_created += len(node_batch)
+                node_batch = []
+
+            if len(edge_batch) >= BATCH_SIZE:
+                # Flush any pending nodes first - edges need nodes to exist
+                if node_batch:
+                    _insert_hpo_nodes_batch(session, node_batch)
+                    nodes_created += len(node_batch)
+                    node_batch = []
+                _insert_hpo_edges_batch(session, edge_batch)
+                edges_created += len(edge_batch)
+                elapsed = time.time() - start_time
+                rate = edges_created / elapsed if elapsed > 0 else 0
+                print(
+                    f"\r  Loaded {edges_created:,} HPO gene-phenotype edges ({rate:.0f}/s)...",
+                    end="",
+                )
+                edge_batch = []
+
+    # Insert remaining batches
+    if node_batch:
+        _insert_hpo_nodes_batch(session, node_batch)
+        nodes_created += len(node_batch)
+    if edge_batch:
+        _insert_hpo_edges_batch(session, edge_batch)
+        edges_created += len(edge_batch)
+
+    elapsed = time.time() - start_time
+    msg = f"\n  Loaded {nodes_created:,} HPO nodes and {edges_created:,} gene-phenotype edges in {elapsed:.1f}s"
+    if ncbi_to_hgnc and skipped_no_mapping > 0:
+        msg += f" ({skipped_no_mapping:,} genes without HGNC mapping)"
+    print(msg)
+    return nodes_created, edges_created, new_node_ids
+
+
+def load_hpo_disease_phenotypes(
+    session: object,
+    hpoa_path: Path,
+    valid_node_ids: set[str],
+    max_rows: int | None = None,
+    db_version: str = "unknown",
+) -> tuple[int, int, set[str]]:
+    """Load HPO disease-to-phenotype annotations from phenotype.hpoa.
+
+    The phenotype.hpoa file has these columns (tab-separated):
+    - database_id (e.g., OMIM:123456)
+    - disease_name
+    - qualifier (NOT or empty)
+    - hpo_id
+    - reference
+    - evidence
+    - onset
+    - frequency
+    - sex
+    - modifier
+    - aspect
+    - biocuration
+
+    Returns: (nodes_created, edges_created, new_node_ids)
+    """
+    print(f"Loading HPO disease-phenotype annotations from {hpoa_path}...")
+
+    nodes_created = 0
+    edges_created = 0
+    new_node_ids: set[str] = set()
+    node_batch: list[dict[str, object]] = []
+    edge_batch: list[dict[str, object]] = []
+
+    start_time = time.time()
+    retrieved_at = datetime.now(timezone.utc).isoformat()
+
+    with hpoa_path.open("r", encoding="utf-8") as f:
+        # Skip header/comment lines
+        header_line = None
+        for line in f:
+            if line.startswith("#"):
+                continue
+            header_line = line.strip()
+            break
+
+        if not header_line:
+            print("  Warning: Empty HPO disease annotations file")
+            return 0, 0, set()
+
+        # Parse header
+        headers = header_line.split("\t")
+        reader = csv.DictReader(f, delimiter="\t", fieldnames=headers)
+
+        for i, row in enumerate(reader):
+            if max_rows is not None and i >= max_rows:
+                break
+
+            disease_id = row.get("database_id", "").strip()
+            disease_name = row.get("disease_name", "").strip()
+            qualifier = row.get("qualifier", "").strip()
+            hpo_id = row.get("hpo_id", "").strip()
+            reference = row.get("reference", "").strip()
+            evidence = row.get("evidence", "").strip()
+            frequency = row.get("frequency", "").strip()
+
+            if not disease_id or not hpo_id:
+                continue
+
+            # Skip negated annotations
+            if qualifier == "NOT":
+                continue
+
+            # Normalize disease ID (OMIM:xxx -> MONDO equivalent if available)
+            # For now, keep original IDs
+            if disease_id.startswith("ORPHA:"):
+                disease_id = disease_id.replace("ORPHA:", "Orphanet:")
+
+            # Create disease node if not exists
+            if disease_id not in valid_node_ids and disease_id not in new_node_ids:
+                node_batch.append(
+                    {
+                        "id": disease_id,
+                        "name": disease_name,
+                        "category": "biolink:Disease",
+                        "source_db": "hpo",
+                    }
+                )
+                new_node_ids.add(disease_id)
+
+            # Create phenotype node if not exists
+            if hpo_id not in valid_node_ids and hpo_id not in new_node_ids:
+                node_batch.append(
+                    {
+                        "id": hpo_id,
+                        "name": "",  # Will be filled if we have it
+                        "category": "biolink:PhenotypicFeature",
+                        "source_db": "hpo",
+                    }
+                )
+                new_node_ids.add(hpo_id)
+
+            # Create edge (disease)-[has_phenotype]->(phenotype)
+            content = f"{disease_id}|biolink:has_phenotype|{hpo_id}|hpo|{db_version}"
+            record_hash = hashlib.sha256(content.encode()).hexdigest()
+
+            publications = []
+            if reference and reference.startswith("PMID:"):
+                publications = reference.split(";")
+
+            edge_batch.append(
+                {
+                    "subject": disease_id,
+                    "object": hpo_id,
+                    "predicate": "biolink:has_phenotype",
+                    "source_db": "hpo",
+                    "db_version": db_version,
+                    "retrieved_at": retrieved_at,
+                    "record_hash": record_hash,
+                    "publications": publications,
+                    "evidence": evidence if evidence else None,
+                    "frequency": frequency if frequency else None,
+                }
+            )
+
+            # Insert batches - always flush nodes before edges to ensure MATCH succeeds
+            if len(node_batch) >= BATCH_SIZE:
+                _insert_hpo_nodes_batch(session, node_batch)
+                nodes_created += len(node_batch)
+                node_batch = []
+
+            if len(edge_batch) >= BATCH_SIZE:
+                # Flush any pending nodes first - edges need nodes to exist
+                if node_batch:
+                    _insert_hpo_nodes_batch(session, node_batch)
+                    nodes_created += len(node_batch)
+                    node_batch = []
+                _insert_hpo_edges_batch(session, edge_batch)
+                edges_created += len(edge_batch)
+                elapsed = time.time() - start_time
+                rate = edges_created / elapsed if elapsed > 0 else 0
+                print(
+                    f"\r  Loaded {edges_created:,} HPO disease-phenotype edges ({rate:.0f}/s)...",
+                    end="",
+                )
+                edge_batch = []
+
+    # Insert remaining batches
+    if node_batch:
+        _insert_hpo_nodes_batch(session, node_batch)
+        nodes_created += len(node_batch)
+    if edge_batch:
+        _insert_hpo_edges_batch(session, edge_batch)
+        edges_created += len(edge_batch)
+
+    elapsed = time.time() - start_time
+    print(
+        f"\n  Loaded {nodes_created:,} HPO nodes and {edges_created:,} disease-phenotype edges in {elapsed:.1f}s"
+    )
+    return nodes_created, edges_created, new_node_ids
+
+
+def _insert_hpo_nodes_batch(session: object, nodes: list[dict[str, object]]) -> None:
+    """Insert a batch of HPO nodes into Neo4j."""
+    session.run(
+        """
+        UNWIND $nodes AS node
+        MERGE (n:Node {id: node.id})
+        ON CREATE SET n.name = node.name,
+                      n.category = node.category,
+                      n.source_db = node.source_db
+        """,
+        nodes=nodes,
+    )
+
+
+def _insert_hpo_edges_batch(session: object, edges: list[dict[str, object]]) -> None:
+    """Insert a batch of HPO edges into Neo4j."""
+    session.run(
+        """
+        UNWIND $edges AS edge
+        MATCH (s:Node {id: edge.subject})
+        MATCH (o:Node {id: edge.object})
+        MERGE (s)-[r:RELATION {predicate: edge.predicate, source_db: edge.source_db}]->(o)
+        SET r.db_version = edge.db_version,
+            r.retrieved_at = edge.retrieved_at,
+            r.record_hash = edge.record_hash,
+            r.publications = edge.publications,
+            r.evidence = edge.evidence,
+            r.frequency = edge.frequency
+        """,
+        edges=edges,
+    )
+
+
+# ==============================================================================
+# Reactome Pathway Loading
+# ==============================================================================
+
+
+def load_reactome_pathways(
+    session: object,
+    ncbi_path: Path,
+    valid_node_ids: set[str],
+    max_rows: int | None = None,
+    db_version: str = "unknown",
+    species_filter: str | None = "Homo sapiens",
+    ncbi_to_hgnc: dict[str, str] | None = None,
+) -> tuple[int, int, set[str]]:
+    """Load Reactome NCBI gene-to-pathway mappings.
+
+    The NCBI2Reactome.txt file has these columns (tab-separated, no header):
+    - NCBI Gene ID
+    - Reactome Pathway ID
+    - URL
+    - Pathway Name
+    - Evidence Code
+    - Species
+
+    Args:
+        ncbi_to_hgnc: Optional mapping of NCBIGene:xxx -> HGNC:xxx for ID normalization
+
+    Returns: (nodes_created, edges_created, new_node_ids)
+    """
+    print(f"Loading Reactome NCBI gene-pathway mappings from {ncbi_path}...")
+    if ncbi_to_hgnc:
+        print(f"  Using HGNC ID normalization ({len(ncbi_to_hgnc):,} mappings)")
+
+    nodes_created = 0
+    edges_created = 0
+    skipped_no_mapping = 0
+    new_node_ids: set[str] = set()
+    node_batch: list[dict[str, object]] = []
+    edge_batch: list[dict[str, object]] = []
+
+    start_time = time.time()
+    retrieved_at = datetime.now(timezone.utc).isoformat()
+
+    with ncbi_path.open("r", encoding="utf-8") as f:
+        reader = csv.reader(f, delimiter="\t")
+
+        for i, row in enumerate(reader):
+            if max_rows is not None and i >= max_rows:
+                break
+
+            if len(row) < 6:
+                continue
+
+            ncbi_gene_id, pathway_id, url, pathway_name, evidence, species = row[:6]
+
+            # Filter by species if requested
+            if species_filter and species != species_filter:
+                continue
+
+            if not ncbi_gene_id or not pathway_id:
+                continue
+
+            # Normalize gene ID - prefer HGNC if mapping available
+            ncbi_id = (
+                f"NCBIGene:{ncbi_gene_id}"
+                if not ncbi_gene_id.startswith("NCBIGene:")
+                else ncbi_gene_id
+            )
+            if ncbi_to_hgnc and ncbi_id in ncbi_to_hgnc:
+                gene_id = ncbi_to_hgnc[ncbi_id]  # Use HGNC ID
+            else:
+                gene_id = ncbi_id  # Fall back to NCBIGene
+                if ncbi_to_hgnc:
+                    skipped_no_mapping += 1
+
+            # Reactome IDs are like R-HSA-123456
+            reactome_id = pathway_id if pathway_id.startswith("R-") else f"REACT:{pathway_id}"
+
+            # Create gene node only if not in valid_node_ids (i.e., not already in Monarch)
+            if gene_id not in valid_node_ids and gene_id not in new_node_ids:
+                node_batch.append(
+                    {
+                        "id": gene_id,
+                        "name": "",
+                        "category": "biolink:Gene",
+                        "source_db": "reactome",
+                    }
+                )
+                new_node_ids.add(gene_id)
+
+            # Create pathway node if not exists
+            if reactome_id not in valid_node_ids and reactome_id not in new_node_ids:
+                node_batch.append(
+                    {
+                        "id": reactome_id,
+                        "name": pathway_name,
+                        "category": "biolink:Pathway",
+                        "source_db": "reactome",
+                        "species": species,
+                    }
+                )
+                new_node_ids.add(reactome_id)
+
+            # Create edge (gene)-[participates_in]->(pathway)
+            content = f"{gene_id}|biolink:participates_in|{reactome_id}|reactome|{db_version}"
+            record_hash = hashlib.sha256(content.encode()).hexdigest()
+
+            edge_batch.append(
+                {
+                    "subject": gene_id,
+                    "object": reactome_id,
+                    "predicate": "biolink:participates_in",
+                    "source_db": "reactome",
+                    "db_version": db_version,
+                    "retrieved_at": retrieved_at,
+                    "record_hash": record_hash,
+                    "evidence": evidence if evidence else None,
+                    "species": species,
+                }
+            )
+
+            # Insert batches - always flush nodes before edges to ensure MATCH succeeds
+            if len(node_batch) >= BATCH_SIZE:
+                _insert_reactome_nodes_batch(session, node_batch)
+                nodes_created += len(node_batch)
+                node_batch = []
+
+            if len(edge_batch) >= BATCH_SIZE:
+                # Flush any pending nodes first - edges need nodes to exist
+                if node_batch:
+                    _insert_reactome_nodes_batch(session, node_batch)
+                    nodes_created += len(node_batch)
+                    node_batch = []
+                _insert_reactome_edges_batch(session, edge_batch)
+                edges_created += len(edge_batch)
+                elapsed = time.time() - start_time
+                rate = edges_created / elapsed if elapsed > 0 else 0
+                print(
+                    f"\r  Loaded {edges_created:,} Reactome gene-pathway edges ({rate:.0f}/s)...",
+                    end="",
+                )
+                edge_batch = []
+
+    # Insert remaining batches
+    if node_batch:
+        _insert_reactome_nodes_batch(session, node_batch)
+        nodes_created += len(node_batch)
+    if edge_batch:
+        _insert_reactome_edges_batch(session, edge_batch)
+        edges_created += len(edge_batch)
+
+    elapsed = time.time() - start_time
+    msg = f"\n  Loaded {nodes_created:,} Reactome nodes and {edges_created:,} gene-pathway edges in {elapsed:.1f}s"
+    if ncbi_to_hgnc and skipped_no_mapping > 0:
+        msg += f" ({skipped_no_mapping:,} genes without HGNC mapping)"
+    print(msg)
+    return nodes_created, edges_created, new_node_ids
+
+
+def load_reactome_uniprot(
+    session: object,
+    uniprot_path: Path,
+    valid_node_ids: set[str],
+    max_rows: int | None = None,
+    db_version: str = "unknown",
+    species_filter: str | None = "Homo sapiens",
+) -> tuple[int, int, set[str]]:
+    """Load Reactome UniProt-to-pathway mappings.
+
+    The UniProt2Reactome.txt file has these columns (tab-separated, no header):
+    - UniProt ID
+    - Reactome Pathway ID
+    - URL
+    - Pathway Name
+    - Evidence Code
+    - Species
+
+    Returns: (nodes_created, edges_created, new_node_ids)
+    """
+    print(f"Loading Reactome UniProt-pathway mappings from {uniprot_path}...")
+
+    nodes_created = 0
+    edges_created = 0
+    new_node_ids: set[str] = set()
+    node_batch: list[dict[str, object]] = []
+    edge_batch: list[dict[str, object]] = []
+
+    start_time = time.time()
+    retrieved_at = datetime.now(timezone.utc).isoformat()
+
+    with uniprot_path.open("r", encoding="utf-8") as f:
+        reader = csv.reader(f, delimiter="\t")
+
+        for i, row in enumerate(reader):
+            if max_rows is not None and i >= max_rows:
+                break
+
+            if len(row) < 6:
+                continue
+
+            uniprot_id, pathway_id, url, pathway_name, evidence, species = row[:6]
+
+            # Filter by species if requested
+            if species_filter and species != species_filter:
+                continue
+
+            if not uniprot_id or not pathway_id:
+                continue
+
+            # Normalize IDs
+            protein_id = (
+                f"UniProtKB:{uniprot_id}" if not uniprot_id.startswith("UniProtKB:") else uniprot_id
+            )
+            reactome_id = pathway_id if pathway_id.startswith("R-") else f"REACT:{pathway_id}"
+
+            # Create protein node if not exists
+            if protein_id not in valid_node_ids and protein_id not in new_node_ids:
+                node_batch.append(
+                    {
+                        "id": protein_id,
+                        "name": uniprot_id,
+                        "category": "biolink:Protein",
+                        "source_db": "reactome",
+                    }
+                )
+                new_node_ids.add(protein_id)
+
+            # Create pathway node if not exists
+            if reactome_id not in valid_node_ids and reactome_id not in new_node_ids:
+                node_batch.append(
+                    {
+                        "id": reactome_id,
+                        "name": pathway_name,
+                        "category": "biolink:Pathway",
+                        "source_db": "reactome",
+                        "species": species,
+                    }
+                )
+                new_node_ids.add(reactome_id)
+
+            # Create edge (protein)-[participates_in]->(pathway)
+            content = f"{protein_id}|biolink:participates_in|{reactome_id}|reactome|{db_version}"
+            record_hash = hashlib.sha256(content.encode()).hexdigest()
+
+            edge_batch.append(
+                {
+                    "subject": protein_id,
+                    "object": reactome_id,
+                    "predicate": "biolink:participates_in",
+                    "source_db": "reactome",
+                    "db_version": db_version,
+                    "retrieved_at": retrieved_at,
+                    "record_hash": record_hash,
+                    "evidence": evidence if evidence else None,
+                    "species": species,
+                }
+            )
+
+            # Insert batches - always flush nodes before edges to ensure MATCH succeeds
+            if len(node_batch) >= BATCH_SIZE:
+                _insert_reactome_nodes_batch(session, node_batch)
+                nodes_created += len(node_batch)
+                node_batch = []
+
+            if len(edge_batch) >= BATCH_SIZE:
+                # Flush any pending nodes first - edges need nodes to exist
+                if node_batch:
+                    _insert_reactome_nodes_batch(session, node_batch)
+                    nodes_created += len(node_batch)
+                    node_batch = []
+                _insert_reactome_edges_batch(session, edge_batch)
+                edges_created += len(edge_batch)
+                elapsed = time.time() - start_time
+                rate = edges_created / elapsed if elapsed > 0 else 0
+                print(
+                    f"\r  Loaded {edges_created:,} Reactome protein-pathway edges ({rate:.0f}/s)...",
+                    end="",
+                )
+                edge_batch = []
+
+    # Insert remaining batches
+    if node_batch:
+        _insert_reactome_nodes_batch(session, node_batch)
+        nodes_created += len(node_batch)
+    if edge_batch:
+        _insert_reactome_edges_batch(session, edge_batch)
+        edges_created += len(edge_batch)
+
+    elapsed = time.time() - start_time
+    print(
+        f"\n  Loaded {nodes_created:,} Reactome nodes and {edges_created:,} protein-pathway edges in {elapsed:.1f}s"
+    )
+    return nodes_created, edges_created, new_node_ids
+
+
+def _insert_reactome_nodes_batch(session: object, nodes: list[dict[str, object]]) -> None:
+    """Insert a batch of Reactome nodes into Neo4j."""
+    session.run(
+        """
+        UNWIND $nodes AS node
+        MERGE (n:Node {id: node.id})
+        ON CREATE SET n.name = node.name,
+                      n.category = node.category,
+                      n.source_db = node.source_db,
+                      n.species = node.species
+        """,
+        nodes=nodes,
+    )
+
+
+def _insert_reactome_edges_batch(session: object, edges: list[dict[str, object]]) -> None:
+    """Insert a batch of Reactome edges into Neo4j."""
+    session.run(
+        """
+        UNWIND $edges AS edge
+        MATCH (s:Node {id: edge.subject})
+        MATCH (o:Node {id: edge.object})
+        MERGE (s)-[r:RELATION {predicate: edge.predicate, source_db: edge.source_db}]->(o)
+        SET r.db_version = edge.db_version,
+            r.retrieved_at = edge.retrieved_at,
+            r.record_hash = edge.record_hash,
+            r.evidence = edge.evidence,
+            r.species = edge.species
+        """,
+        edges=edges,
+    )
+
+
 def verify_load(session: object) -> dict[str, int]:
     """Verify the loaded data and return statistics."""
     print("Verifying loaded data...")
@@ -500,9 +1286,14 @@ def verify_load(session: object) -> dict[str, int]:
 def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Load Monarch KG into Neo4j for KG-Skeptic",
+        description="Load biomedical KG data into Neo4j for KG-Skeptic",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
+    )
+    parser.add_argument(
+        "--sources",
+        default="monarch,hpo,reactome",
+        help="Comma-separated list of sources to load: monarch,hpo,reactome (default: all)",
     )
     parser.add_argument(
         "--skip-download",
@@ -523,7 +1314,7 @@ def main() -> None:
     parser.add_argument(
         "--no-filter",
         action="store_true",
-        help="Don't filter nodes/edges (load everything)",
+        help="Don't filter Monarch nodes/edges (load everything)",
     )
     parser.add_argument(
         "--clear-db",
@@ -539,7 +1330,35 @@ def main() -> None:
         "--data-dir",
         type=Path,
         default=DATA_DIR,
-        help=f"Directory for KG files (default: {DATA_DIR})",
+        help=f"Directory for Monarch KG files (default: {DATA_DIR})",
+    )
+    parser.add_argument(
+        "--hpo-data-dir",
+        type=Path,
+        default=HPO_DATA_DIR,
+        help=f"Directory for HPO files (default: {HPO_DATA_DIR})",
+    )
+    parser.add_argument(
+        "--reactome-data-dir",
+        type=Path,
+        default=REACTOME_DATA_DIR,
+        help=f"Directory for Reactome files (default: {REACTOME_DATA_DIR})",
+    )
+    parser.add_argument(
+        "--hgnc-data-dir",
+        type=Path,
+        default=HGNC_DATA_DIR,
+        help=f"Directory for HGNC mapping files (default: {HGNC_DATA_DIR})",
+    )
+    parser.add_argument(
+        "--species",
+        default="Homo sapiens",
+        help="Species filter for Reactome (default: 'Homo sapiens', use 'all' for no filter)",
+    )
+    parser.add_argument(
+        "--no-id-normalization",
+        action="store_true",
+        help="Disable HGNC ID normalization for HPO/Reactome gene IDs",
     )
     parser.add_argument(
         "--neo4j-uri",
@@ -558,6 +1377,15 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+
+    # Parse sources
+    sources = {s.strip().lower() for s in args.sources.split(",")}
+    valid_sources = {"monarch", "hpo", "reactome"}
+    invalid_sources = sources - valid_sources
+    if invalid_sources:
+        print(f"Error: Invalid sources: {invalid_sources}")
+        print(f"  Valid sources: {valid_sources}")
+        sys.exit(1)
 
     # Validate Neo4j credentials
     if not args.neo4j_password:
@@ -584,16 +1412,28 @@ def main() -> None:
         print(f"Error connecting to Neo4j: {e}")
         sys.exit(1)
 
-    # Download files
-    if args.skip_download:
-        nodes_path = args.data_dir / MONARCH_NODES_FILE
-        edges_path = args.data_dir / MONARCH_EDGES_FILE
-        if not nodes_path.exists() or not edges_path.exists():
-            print(f"Error: Files not found in {args.data_dir}")
-            print("  Run without --skip-download to download files")
-            sys.exit(1)
-    else:
-        nodes_path, edges_path = download_monarch_kg(args.data_dir, force=args.force_download)
+    # Track all node IDs for edge creation
+    all_node_ids: set[str] = set()
+    max_rows = args.sample
+    filter_data = not args.no_filter
+    species_filter = None if args.species.lower() == "all" else args.species
+
+    # Load HGNC ID mapping for normalization (if enabled and HPO/Reactome are being loaded)
+    ncbi_to_hgnc: dict[str, str] | None = None
+    if not args.no_id_normalization and ({"hpo", "reactome"} & sources):
+        print("\n" + "=" * 60)
+        print("Loading ID Normalization Mapping...")
+        print("=" * 60)
+        if args.skip_download:
+            hgnc_path = args.hgnc_data_dir / HGNC_MAPPING_FILE
+            if not hgnc_path.exists():
+                print(f"Warning: HGNC mapping file not found: {hgnc_path}")
+                print("  Gene IDs will not be normalized to HGNC")
+            else:
+                ncbi_to_hgnc = load_hgnc_mapping(hgnc_path)
+        else:
+            hgnc_path = download_hgnc_mapping(args.hgnc_data_dir, force=args.force_download)
+            ncbi_to_hgnc = load_hgnc_mapping(hgnc_path)
 
     # Load data
     with driver.session() as session:
@@ -604,34 +1444,145 @@ def main() -> None:
         if args.clear_db:
             clear_database(session)
 
-        # Load nodes
-        max_rows = args.sample
-        filter_data = not args.no_filter
+        # ==================== MONARCH KG ====================
+        if "monarch" in sources:
+            print("\n" + "=" * 60)
+            print("Loading Monarch KG...")
+            print("=" * 60)
 
-        node_count, node_ids = load_nodes(
-            session,
-            nodes_path,
-            max_nodes=max_rows,
-            filter_nodes=filter_data,
-        )
+            # Download/locate Monarch files
+            if args.skip_download:
+                nodes_path = args.data_dir / MONARCH_NODES_FILE
+                edges_path = args.data_dir / MONARCH_EDGES_FILE
+                if not nodes_path.exists() or not edges_path.exists():
+                    print(f"Error: Monarch files not found in {args.data_dir}")
+                    print("  Run without --skip-download to download files")
+                    sys.exit(1)
+            else:
+                nodes_path, edges_path = download_monarch_kg(
+                    args.data_dir, force=args.force_download
+                )
 
-        # Load edges
-        load_edges(
-            session,
-            edges_path,
-            valid_node_ids=node_ids,
-            max_edges=max_rows,
-            filter_edges=filter_data,
-            db_version=args.db_version,
-        )
+            # Load Monarch nodes
+            node_count, node_ids = load_nodes(
+                session,
+                nodes_path,
+                max_nodes=max_rows,
+                filter_nodes=filter_data,
+            )
+            all_node_ids.update(node_ids)
 
-        # Verify
+            # Load Monarch edges
+            load_edges(
+                session,
+                edges_path,
+                valid_node_ids=all_node_ids,
+                max_edges=max_rows,
+                filter_edges=filter_data,
+                db_version=args.db_version,
+            )
+
+        # ==================== HPO ANNOTATIONS ====================
+        if "hpo" in sources:
+            print("\n" + "=" * 60)
+            print("Loading HPO Annotations...")
+            print("=" * 60)
+
+            # Download/locate HPO files
+            if args.skip_download:
+                genes_path = args.hpo_data_dir / HPO_GENES_TO_PHENOTYPE_FILE
+                hpoa_path = args.hpo_data_dir / HPO_PHENOTYPE_HPOA_FILE
+                if not genes_path.exists():
+                    print(f"Warning: HPO genes file not found: {genes_path}")
+                    genes_path = None
+                if not hpoa_path.exists():
+                    print(f"Warning: HPO disease annotations file not found: {hpoa_path}")
+                    hpoa_path = None
+            else:
+                genes_path, hpoa_path = download_hpo_annotations(
+                    args.hpo_data_dir, force=args.force_download
+                )
+
+            # Load HPO gene-phenotype annotations
+            if genes_path and genes_path.exists():
+                nodes_created, edges_created, new_ids = load_hpo_gene_phenotypes(
+                    session,
+                    genes_path,
+                    valid_node_ids=all_node_ids,
+                    max_rows=max_rows,
+                    db_version=args.db_version,
+                    ncbi_to_hgnc=ncbi_to_hgnc,
+                )
+                all_node_ids.update(new_ids)
+
+            # Load HPO disease-phenotype annotations
+            if hpoa_path and hpoa_path.exists():
+                nodes_created, edges_created, new_ids = load_hpo_disease_phenotypes(
+                    session,
+                    hpoa_path,
+                    valid_node_ids=all_node_ids,
+                    max_rows=max_rows,
+                    db_version=args.db_version,
+                )
+                all_node_ids.update(new_ids)
+
+        # ==================== REACTOME PATHWAYS ====================
+        if "reactome" in sources:
+            print("\n" + "=" * 60)
+            print("Loading Reactome Pathways...")
+            print("=" * 60)
+
+            # Download/locate Reactome files
+            if args.skip_download:
+                ncbi_path = args.reactome_data_dir / REACTOME_NCBI_FILE
+                uniprot_path = args.reactome_data_dir / REACTOME_UNIPROT_FILE
+                if not ncbi_path.exists():
+                    print(f"Warning: Reactome NCBI file not found: {ncbi_path}")
+                    ncbi_path = None
+                if not uniprot_path.exists():
+                    print(f"Warning: Reactome UniProt file not found: {uniprot_path}")
+                    uniprot_path = None
+            else:
+                ncbi_path, uniprot_path = download_reactome(
+                    args.reactome_data_dir, force=args.force_download
+                )
+
+            # Load Reactome NCBI gene-pathway mappings
+            if ncbi_path and ncbi_path.exists():
+                nodes_created, edges_created, new_ids = load_reactome_pathways(
+                    session,
+                    ncbi_path,
+                    valid_node_ids=all_node_ids,
+                    max_rows=max_rows,
+                    db_version=args.db_version,
+                    species_filter=species_filter,
+                    ncbi_to_hgnc=ncbi_to_hgnc,
+                )
+                all_node_ids.update(new_ids)
+
+            # Load Reactome UniProt-pathway mappings
+            if uniprot_path and uniprot_path.exists():
+                nodes_created, edges_created, new_ids = load_reactome_uniprot(
+                    session,
+                    uniprot_path,
+                    valid_node_ids=all_node_ids,
+                    max_rows=max_rows,
+                    db_version=args.db_version,
+                    species_filter=species_filter,
+                )
+                all_node_ids.update(new_ids)
+
+        # Verify final state
+        print("\n" + "=" * 60)
+        print("Verification")
+        print("=" * 60)
         stats = verify_load(session)
 
     driver.close()
 
     print("\n" + "=" * 60)
     print("Load complete!")
+    print(f"  Sources loaded: {', '.join(sorted(sources))}")
     print(f"  Total nodes: {stats['total_nodes']:,}")
     print(f"  Total edges: {stats['total_edges']:,}")
     print("=" * 60)

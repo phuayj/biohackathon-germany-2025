@@ -64,6 +64,26 @@ streamlit run src/kg_skeptic/app.py
 
 By default the app uses a pre-seeded in-memory mini KG for fast, offline checks.
 
+### Command-line CLI (same info as UI)
+
+For fast debugging and automated checks, you can run the same audit logic from the terminal. The CLI uses the same pipeline and produces the same verdicts, rule traces, and evidence summaries as the Streamlit UI.
+
+```bash
+# List demo claims (from fixtures)
+uv run python -m kg_skeptic --list-demos
+
+# Audit a demo claim by fixture ID (e.g. REAL_D01)
+uv run python -m kg_skeptic --demo-id REAL_D01
+
+# Audit a custom free-text claim with evidence identifiers
+uv run python -m kg_skeptic \
+  --claim-text "TP53 mutations are associated with lung cancer." \
+  --evidence PMID:12345 PMID:67890
+
+# Optional: JSON output for diffing / automation
+uv run python -m kg_skeptic --demo-id REAL_D01 --format json
+```
+
 ### Enabling Curated KG Signals
 
 You can enhance the audit with external curated knowledge sources. These provide "positive evidence" signals (e.g., verifying a gene-disease link exists in DisGeNET) which can help a claim PASS even if it lacks multiple citations.

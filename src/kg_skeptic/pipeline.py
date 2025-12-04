@@ -3184,7 +3184,6 @@ class SkepticPipeline:
             suspicion=suspicion,
         )
 
-
     def run(self, audit_payload: AuditPayload) -> AuditResult:
         """Run the skeptic on a normalized audit payload."""
         normalization = self.normalizer.normalize(audit_payload)

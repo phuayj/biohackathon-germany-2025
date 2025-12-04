@@ -1473,14 +1473,14 @@ def main() -> None:
 
         # We need the current result to populate the multiselect
         current_result = st.session_state.get("result")
-        
+
         # Initialize simulated_retractions if not present
         if "simulated_retractions" not in st.session_state:
             st.session_state.simulated_retractions = []
 
         if current_result and hasattr(current_result, "provenance"):
             all_citations = sorted(list({p.identifier for p in current_result.provenance}))
-            
+
             selected_retractions = st.multiselect(
                 "Select citations to retract:",
                 options=all_citations,
@@ -1650,21 +1650,21 @@ def main() -> None:
     # Show results if audit has been run
     if st.session_state.audit_run:
         st.divider()
-        
+
         result = st.session_state.result
-        
+
         # Apply What-If Scenarios
         # 1. Retraction Simulation
         simulated_retractions = st.session_state.get("simulated_retractions", [])
-        
+
         # 2. Ontology Strictness
         strictness_setting = st.session_state.get("ontology_strictness", "")
         is_strict = strictness_setting.startswith("Strict")
-        
+
         display_result = result
-        
+
         # Only re-evaluate if we have overrides AND the necessary data (normalization)
-        if (simulated_retractions or is_strict):
+        if simulated_retractions or is_strict:
             if hasattr(result, "normalization") and result.normalization:
                 # Clone provenance and apply retractions
                 modified_provenance = []
@@ -1675,22 +1675,27 @@ def main() -> None:
                         # Reset db_provenance status if it was carrying the status?
                         # No, status is on CitationProvenance.
                     modified_provenance.append(new_p)
-                
+
                 # Re-evaluate
                 pipeline = _get_pipeline(use_gliner=st.session_state.get("use_gliner", True))
-                
+
                 # We assume the normalization is valid.
                 # Note: This does not re-fetch provenance, just re-evaluates rules.
                 new_result = pipeline.evaluate_audit(
-                    result.normalization, 
-                    modified_provenance,
-                    audit_payload=None
+                    result.normalization, modified_provenance, audit_payload=None
                 )
-                 
+
                 # Apply Ontology Strictness Override (Verdict Change)
                 if is_strict:
                     # Check if sibling conflict rule fired
-                    sibling_entry = next((e for e in new_result.evaluation.trace.entries if e.rule_id == "gate:sibling_conflict"), None)
+                    sibling_entry = next(
+                        (
+                            e
+                            for e in new_result.evaluation.trace.entries
+                            if e.rule_id == "gate:sibling_conflict"
+                        ),
+                        None,
+                    )
                     if sibling_entry:
                         new_result.verdict = "FAIL"
                         new_result.evaluation.trace.add(
@@ -1698,15 +1703,15 @@ def main() -> None:
                                 rule_id="gate:strict_ontology",
                                 score=0.0,
                                 because="because strict mode is enabled and sibling conflict detected (Strict Mode override: WARN → FAIL)",
-                                description="Strict ontology gate: forces FAIL on sibling conflict"
+                                description="Strict ontology gate: forces FAIL on sibling conflict",
                             )
                         )
-                
+
                 display_result = new_result
             else:
-                 # If result doesn't have normalization (e.g. old object), we can't apply scenarios easily
-                 # without re-running normalization which might be slow/different.
-                 pass
+                # If result doesn't have normalization (e.g. old object), we can't apply scenarios easily
+                # without re-running normalization which might be slow/different.
+                pass
 
         render_audit_card(
             display_result,
