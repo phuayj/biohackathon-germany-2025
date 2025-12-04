@@ -292,6 +292,33 @@ def create_neo4j_schema(session: object) -> None:
     """
     )
 
+    # Create index on Association label for reified associations
+    print("  Creating index on Association label...")
+    session.run(
+        """
+        CREATE INDEX association_label_index IF NOT EXISTS
+        FOR (n:Association) ON (n.id)
+    """
+    )
+
+    # Create index on Publication label
+    print("  Creating index on Publication label...")
+    session.run(
+        """
+        CREATE INDEX publication_label_index IF NOT EXISTS
+        FOR (n:Publication) ON (n.id)
+    """
+    )
+
+    # Create index on Association predicate for filtered queries
+    print("  Creating index on Association predicate...")
+    session.run(
+        """
+        CREATE INDEX association_predicate_index IF NOT EXISTS
+        FOR (n:Association) ON (n.predicate)
+    """
+    )
+
     print("  Schema created successfully")
 
 
@@ -352,6 +379,70 @@ def filter_edge(row: dict[str, str]) -> bool:
         if predicate == prefix:
             return True
     return False
+
+
+def generate_association_id(
+    subject: str,
+    predicate: str,
+    object_id: str,
+    source_db: str,
+    db_version: str,
+) -> str:
+    """Generate a deterministic association ID using SHA-256 hash.
+
+    The association ID is deterministic so that reloading the same data
+    produces the same association nodes (idempotent loading).
+
+    Args:
+        subject: Subject node ID (e.g., "HGNC:1100")
+        predicate: Biolink predicate (e.g., "biolink:gene_associated_with_condition")
+        object_id: Object node ID (e.g., "MONDO:0007254")
+        source_db: Source database (e.g., "monarch", "hpo")
+        db_version: Database version string
+
+    Returns:
+        Association ID in format "assoc:<16-char-hash>"
+    """
+    # Canonical ordering ensures same inputs always produce same hash
+    content = f"{subject}|{predicate}|{object_id}|{source_db}|{db_version}"
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+    return f"assoc:{digest}"
+
+
+def parse_list_literal(value: str) -> list[str]:
+    """Parse a Python list literal string into actual list.
+
+    Monarch KG stores lists as Python repr strings like "['PMID:123', 'PMID:456']".
+    This function safely parses them.
+
+    Args:
+        value: String that may be a Python list literal
+
+    Returns:
+        List of strings extracted from the literal
+    """
+    if not value:
+        return []
+
+    value = value.strip()
+
+    # Handle Python list literal format: ['item1', 'item2']
+    if value.startswith("[") and value.endswith("]"):
+        import ast
+
+        try:
+            parsed = ast.literal_eval(value)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if item]
+        except (ValueError, SyntaxError):
+            pass
+
+    # Fallback: pipe-separated
+    if "|" in value:
+        return [p.strip() for p in value.split("|") if p.strip()]
+
+    # Single value
+    return [value] if value else []
 
 
 def load_nodes(
@@ -439,14 +530,30 @@ def load_edges(
     max_edges: int | None = None,
     filter_edges: bool = True,
     db_version: str = "unknown",
-) -> int:
-    """Load edges into Neo4j."""
+) -> tuple[int, int, int]:
+    """Load edges into Neo4j.
+
+    Edges with publications are reified as Association nodes with SUPPORTED_BY
+    links to Publication nodes. Edges without publications use direct RELATION edges.
+
+    Returns:
+        Tuple of (direct_edges_loaded, associations_created, publications_created)
+    """
     print(f"Loading edges from {edges_path}...")
 
-    loaded = 0
+    direct_edges_loaded = 0
+    associations_created = 0
+    publications_created = 0
     skipped_predicate = 0
     skipped_nodes = 0
-    batch: list[dict[str, object]] = []
+
+    # Batches for direct edges (no publications)
+    direct_edge_batch: list[dict[str, object]] = []
+
+    # Batches for reified associations (edges with publications)
+    association_batch: list[dict[str, object]] = []
+    all_pmids: set[str] = set()  # Track unique PMIDs
+    pub_links: list[dict[str, str]] = []  # (assoc_id, pmid) pairs
 
     start_time = time.time()
     retrieved_at = datetime.now(timezone.utc).isoformat()
@@ -472,48 +579,111 @@ def load_edges(
         content = f"{subject}|{predicate}|{obj}|monarch|{db_version}"
         record_hash = hashlib.sha256(content.encode()).hexdigest()
 
-        # Prepare edge data
-        edge_data: dict[str, object] = {
-            "subject": subject,
-            "object": obj,
-            "predicate": predicate,
-            "source_db": "monarch",
-            "db_version": db_version,
-            "retrieved_at": retrieved_at,
-            "cache_ttl": None,
-            "record_hash": record_hash,
-        }
+        # Extract publications (Monarch KG uses Python list literal format)
+        pubs: list[str] = parse_list_literal(row.get("publications", ""))
 
-        # Add optional properties
-        if row.get("primary_knowledge_source"):
-            edge_data["primary_knowledge_source"] = row["primary_knowledge_source"]
-        if row.get("publications"):
-            pubs = row["publications"].split("|") if row["publications"] else []
-            edge_data["publications"] = pubs
-        if row.get("aggregator_knowledge_source"):
-            edge_data["aggregator_knowledge_source"] = row["aggregator_knowledge_source"]
+        # Decide: reify (has publications) or direct edge (no publications)
+        if pubs:
+            # Reified association pattern
+            assoc_id = generate_association_id(subject, predicate, obj, "monarch", db_version)
 
-        batch.append(edge_data)
+            association_data: dict[str, object] = {
+                "assoc_id": assoc_id,
+                "subject": subject,
+                "object": obj,
+                "predicate": predicate,
+                "source_db": "monarch",
+                "db_version": db_version,
+                "retrieved_at": retrieved_at,
+                "record_hash": record_hash,
+                "primary_knowledge_source": row.get("primary_knowledge_source"),
+                "aggregator_knowledge_source": row.get("aggregator_knowledge_source"),
+                "evidence": None,
+                "frequency": None,
+            }
+            association_batch.append(association_data)
 
-        if len(batch) >= BATCH_SIZE:
-            _insert_edges_batch(session, batch)
-            loaded += len(batch)
+            # Collect publications and links
+            for pmid in pubs:
+                all_pmids.add(pmid)
+                pub_links.append({"assoc_id": assoc_id, "pmid": pmid})
+
+        else:
+            # Direct RELATION edge (no publications)
+            edge_data: dict[str, object] = {
+                "subject": subject,
+                "object": obj,
+                "predicate": predicate,
+                "source_db": "monarch",
+                "db_version": db_version,
+                "retrieved_at": retrieved_at,
+                "cache_ttl": None,
+                "record_hash": record_hash,
+                "publications": None,
+                "primary_knowledge_source": row.get("primary_knowledge_source"),
+                "aggregator_knowledge_source": row.get("aggregator_knowledge_source"),
+            }
+            direct_edge_batch.append(edge_data)
+
+        # Flush batches when they reach BATCH_SIZE
+        if len(direct_edge_batch) >= BATCH_SIZE:
+            _insert_edges_batch(session, direct_edge_batch)
+            direct_edges_loaded += len(direct_edge_batch)
+            direct_edge_batch = []
+
+        if len(association_batch) >= BATCH_SIZE:
+            # First insert publications (so they exist for linking)
+            batch_pmids = list(all_pmids)
+            if batch_pmids:
+                _insert_publications_batch(session, batch_pmids)
+                publications_created += len(batch_pmids)
+                all_pmids.clear()
+
+            # Insert associations
+            _insert_associations_batch(session, association_batch)
+            associations_created += len(association_batch)
+            association_batch = []
+
+            # Link associations to publications
+            if pub_links:
+                _link_publications_batch(session, pub_links)
+                pub_links = []
+
             elapsed = time.time() - start_time
-            rate = loaded / elapsed if elapsed > 0 else 0
-            print(f"\r  Loaded {loaded:,} edges ({rate:.0f}/s)...", end="")
-            batch = []
+            total = direct_edges_loaded + associations_created
+            rate = total / elapsed if elapsed > 0 else 0
+            print(
+                f"\r  Loaded {total:,} edges "
+                f"({direct_edges_loaded:,} direct, {associations_created:,} reified) "
+                f"({rate:.0f}/s)...",
+                end="",
+            )
 
-    # Insert remaining batch
-    if batch:
-        _insert_edges_batch(session, batch)
-        loaded += len(batch)
+    # Flush remaining batches
+    if direct_edge_batch:
+        _insert_edges_batch(session, direct_edge_batch)
+        direct_edges_loaded += len(direct_edge_batch)
+
+    if all_pmids:
+        _insert_publications_batch(session, list(all_pmids))
+        publications_created += len(all_pmids)
+
+    if association_batch:
+        _insert_associations_batch(session, association_batch)
+        associations_created += len(association_batch)
+
+    if pub_links:
+        _link_publications_batch(session, pub_links)
 
     elapsed = time.time() - start_time
+    total = direct_edges_loaded + associations_created
     print(
-        f"\n  Loaded {loaded:,} edges in {elapsed:.1f}s "
+        f"\n  Loaded {total:,} edges in {elapsed:.1f}s "
+        f"({direct_edges_loaded:,} direct, {associations_created:,} reified, "
+        f"{publications_created:,} publications) "
         f"(skipped {skipped_predicate:,} by predicate, {skipped_nodes:,} missing nodes)"
     )
-    return loaded
+    return direct_edges_loaded, associations_created, publications_created
 
 
 def _insert_edges_batch(session: object, edges: list[dict[str, object]]) -> None:
@@ -536,6 +706,80 @@ def _insert_edges_batch(session: object, edges: list[dict[str, object]]) -> None
             r.record_hash = edge.record_hash
         """,
         edges=edges,
+    )
+
+
+# ==============================================================================
+# Reified Association and Publication Batch Insert Functions
+# ==============================================================================
+
+
+def _insert_associations_batch(session: object, associations: list[dict[str, object]]) -> None:
+    """Insert a batch of reified Association nodes with SUBJECT_OF/OBJECT_OF edges.
+
+    This creates the reified pattern:
+    (subject)-[:SUBJECT_OF]->(Association)-[:OBJECT_OF]->(object)
+
+    Used for edges that have publication evidence (PMIDs).
+    """
+    session.run(
+        """
+        UNWIND $associations AS a
+        MATCH (s:Node {id: a.subject})
+        MATCH (o:Node {id: a.object})
+        MERGE (assoc:Node:Association {id: a.assoc_id})
+        ON CREATE SET
+            assoc.category = 'biolink:Association',
+            assoc.predicate = a.predicate,
+            assoc.subject_id = a.subject,
+            assoc.object_id = a.object,
+            assoc.source_db = a.source_db,
+            assoc.db_version = a.db_version,
+            assoc.retrieved_at = a.retrieved_at,
+            assoc.record_hash = a.record_hash,
+            assoc.primary_knowledge_source = a.primary_knowledge_source,
+            assoc.aggregator_knowledge_source = a.aggregator_knowledge_source,
+            assoc.evidence = a.evidence,
+            assoc.frequency = a.frequency
+        MERGE (s)-[:SUBJECT_OF]->(assoc)
+        MERGE (assoc)-[:OBJECT_OF]->(o)
+        """,
+        associations=associations,
+    )
+
+
+def _insert_publications_batch(session: object, pmids: list[str]) -> None:
+    """Insert a batch of Publication nodes.
+
+    Creates Publication nodes with minimal metadata (just PMID as ID/name).
+    Enrichment with titles/authors can be done later via CrossRef/PubMed.
+    """
+    session.run(
+        """
+        UNWIND $pmids AS pmid
+        MERGE (p:Node:Publication {id: pmid})
+        ON CREATE SET
+            p.category = 'biolink:Publication',
+            p.name = pmid
+        """,
+        pmids=pmids,
+    )
+
+
+def _link_publications_batch(session: object, links: list[dict[str, str]]) -> None:
+    """Create SUPPORTED_BY edges from Association nodes to Publication nodes.
+
+    Args:
+        links: List of dicts with 'assoc_id' and 'pmid' keys
+    """
+    session.run(
+        """
+        UNWIND $links AS link
+        MATCH (a:Association {id: link.assoc_id})
+        MATCH (p:Publication {id: link.pmid})
+        MERGE (a)-[:SUPPORTED_BY]->(p)
+        """,
+        links=links,
     )
 
 
@@ -704,7 +948,7 @@ def load_hpo_disease_phenotypes(
     valid_node_ids: set[str],
     max_rows: int | None = None,
     db_version: str = "unknown",
-) -> tuple[int, int, set[str]]:
+) -> tuple[int, int, int, int, set[str]]:
     """Load HPO disease-to-phenotype annotations from phenotype.hpoa.
 
     The phenotype.hpoa file has these columns (tab-separated):
@@ -721,15 +965,25 @@ def load_hpo_disease_phenotypes(
     - aspect
     - biocuration
 
-    Returns: (nodes_created, edges_created, new_node_ids)
+    Edges with PMID references are reified as Association nodes with SUPPORTED_BY
+    links to Publication nodes. Edges without PMIDs use direct RELATION edges.
+
+    Returns: (nodes_created, direct_edges, associations_created, publications_created, new_node_ids)
     """
     print(f"Loading HPO disease-phenotype annotations from {hpoa_path}...")
 
     nodes_created = 0
-    edges_created = 0
+    direct_edges_created = 0
+    associations_created = 0
+    publications_created = 0
     new_node_ids: set[str] = set()
+
+    # Batches
     node_batch: list[dict[str, object]] = []
-    edge_batch: list[dict[str, object]] = []
+    direct_edge_batch: list[dict[str, object]] = []
+    association_batch: list[dict[str, object]] = []
+    all_pmids: set[str] = set()
+    pub_links: list[dict[str, str]] = []
 
     start_time = time.time()
     retrieved_at = datetime.now(timezone.utc).isoformat()
@@ -745,7 +999,7 @@ def load_hpo_disease_phenotypes(
 
         if not header_line:
             print("  Warning: Empty HPO disease annotations file")
-            return 0, 0, set()
+            return 0, 0, 0, 0, set()
 
         # Parse header
         headers = header_line.split("\t")
@@ -799,28 +1053,60 @@ def load_hpo_disease_phenotypes(
                 )
                 new_node_ids.add(hpo_id)
 
-            # Create edge (disease)-[has_phenotype]->(phenotype)
+            # Compute hash
             content = f"{disease_id}|biolink:has_phenotype|{hpo_id}|hpo|{db_version}"
             record_hash = hashlib.sha256(content.encode()).hexdigest()
 
-            publications = []
+            # Extract publications from reference field
+            publications: list[str] = []
             if reference and reference.startswith("PMID:"):
-                publications = reference.split(";")
+                publications = [p.strip() for p in reference.split(";") if p.strip()]
 
-            edge_batch.append(
-                {
-                    "subject": disease_id,
-                    "object": hpo_id,
-                    "predicate": "biolink:has_phenotype",
-                    "source_db": "hpo",
-                    "db_version": db_version,
-                    "retrieved_at": retrieved_at,
-                    "record_hash": record_hash,
-                    "publications": publications,
-                    "evidence": evidence if evidence else None,
-                    "frequency": frequency if frequency else None,
-                }
-            )
+            # Decide: reify (has publications) or direct edge (no publications)
+            if publications:
+                # Reified association pattern
+                assoc_id = generate_association_id(
+                    disease_id, "biolink:has_phenotype", hpo_id, "hpo", db_version
+                )
+
+                association_batch.append(
+                    {
+                        "assoc_id": assoc_id,
+                        "subject": disease_id,
+                        "object": hpo_id,
+                        "predicate": "biolink:has_phenotype",
+                        "source_db": "hpo",
+                        "db_version": db_version,
+                        "retrieved_at": retrieved_at,
+                        "record_hash": record_hash,
+                        "primary_knowledge_source": None,
+                        "aggregator_knowledge_source": None,
+                        "evidence": evidence if evidence else None,
+                        "frequency": frequency if frequency else None,
+                    }
+                )
+
+                # Collect publications and links
+                for pmid in publications:
+                    all_pmids.add(pmid)
+                    pub_links.append({"assoc_id": assoc_id, "pmid": pmid})
+
+            else:
+                # Direct RELATION edge (no publications)
+                direct_edge_batch.append(
+                    {
+                        "subject": disease_id,
+                        "object": hpo_id,
+                        "predicate": "biolink:has_phenotype",
+                        "source_db": "hpo",
+                        "db_version": db_version,
+                        "retrieved_at": retrieved_at,
+                        "record_hash": record_hash,
+                        "publications": None,
+                        "evidence": evidence if evidence else None,
+                        "frequency": frequency if frequency else None,
+                    }
+                )
 
             # Insert batches - always flush nodes before edges to ensure MATCH succeeds
             if len(node_batch) >= BATCH_SIZE:
@@ -828,35 +1114,84 @@ def load_hpo_disease_phenotypes(
                 nodes_created += len(node_batch)
                 node_batch = []
 
-            if len(edge_batch) >= BATCH_SIZE:
-                # Flush any pending nodes first - edges need nodes to exist
+            if len(direct_edge_batch) >= BATCH_SIZE:
+                # Flush any pending nodes first
                 if node_batch:
                     _insert_hpo_nodes_batch(session, node_batch)
                     nodes_created += len(node_batch)
                     node_batch = []
-                _insert_hpo_edges_batch(session, edge_batch)
-                edges_created += len(edge_batch)
+                _insert_hpo_edges_batch(session, direct_edge_batch)
+                direct_edges_created += len(direct_edge_batch)
+                direct_edge_batch = []
+
+            if len(association_batch) >= BATCH_SIZE:
+                # Flush any pending nodes first
+                if node_batch:
+                    _insert_hpo_nodes_batch(session, node_batch)
+                    nodes_created += len(node_batch)
+                    node_batch = []
+
+                # Insert publications first
+                batch_pmids = list(all_pmids)
+                if batch_pmids:
+                    _insert_publications_batch(session, batch_pmids)
+                    publications_created += len(batch_pmids)
+                    all_pmids.clear()
+
+                # Insert associations
+                _insert_associations_batch(session, association_batch)
+                associations_created += len(association_batch)
+                association_batch = []
+
+                # Link associations to publications
+                if pub_links:
+                    _link_publications_batch(session, pub_links)
+                    pub_links = []
+
                 elapsed = time.time() - start_time
-                rate = edges_created / elapsed if elapsed > 0 else 0
+                total = direct_edges_created + associations_created
+                rate = total / elapsed if elapsed > 0 else 0
                 print(
-                    f"\r  Loaded {edges_created:,} HPO disease-phenotype edges ({rate:.0f}/s)...",
+                    f"\r  Loaded {total:,} HPO disease-phenotype edges "
+                    f"({direct_edges_created:,} direct, {associations_created:,} reified) "
+                    f"({rate:.0f}/s)...",
                     end="",
                 )
-                edge_batch = []
 
     # Insert remaining batches
     if node_batch:
         _insert_hpo_nodes_batch(session, node_batch)
         nodes_created += len(node_batch)
-    if edge_batch:
-        _insert_hpo_edges_batch(session, edge_batch)
-        edges_created += len(edge_batch)
+
+    if direct_edge_batch:
+        _insert_hpo_edges_batch(session, direct_edge_batch)
+        direct_edges_created += len(direct_edge_batch)
+
+    if all_pmids:
+        _insert_publications_batch(session, list(all_pmids))
+        publications_created += len(all_pmids)
+
+    if association_batch:
+        _insert_associations_batch(session, association_batch)
+        associations_created += len(association_batch)
+
+    if pub_links:
+        _link_publications_batch(session, pub_links)
 
     elapsed = time.time() - start_time
+    total = direct_edges_created + associations_created
     print(
-        f"\n  Loaded {nodes_created:,} HPO nodes and {edges_created:,} disease-phenotype edges in {elapsed:.1f}s"
+        f"\n  Loaded {nodes_created:,} HPO nodes and {total:,} disease-phenotype edges "
+        f"({direct_edges_created:,} direct, {associations_created:,} reified, "
+        f"{publications_created:,} publications) in {elapsed:.1f}s"
     )
-    return nodes_created, edges_created, new_node_ids
+    return (
+        nodes_created,
+        direct_edges_created,
+        associations_created,
+        publications_created,
+        new_node_ids,
+    )
 
 
 def _insert_hpo_nodes_batch(session: object, nodes: list[dict[str, object]]) -> None:
@@ -1517,7 +1852,13 @@ def main() -> None:
 
             # Load HPO disease-phenotype annotations
             if hpoa_path and hpoa_path.exists():
-                nodes_created, edges_created, new_ids = load_hpo_disease_phenotypes(
+                (
+                    nodes_created,
+                    direct_edges,
+                    associations_created,
+                    publications_created,
+                    new_ids,
+                ) = load_hpo_disease_phenotypes(
                     session,
                     hpoa_path,
                     valid_node_ids=all_node_ids,

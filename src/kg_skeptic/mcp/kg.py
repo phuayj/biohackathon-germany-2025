@@ -15,6 +15,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from collections.abc import Iterable, Mapping
 from builtins import object as _object
 from typing import Optional, Protocol, cast
 from urllib.parse import quote
@@ -538,12 +539,19 @@ class Neo4jBackend(KGBackend):
         self, query: str, parameters: Optional[dict[str, object]] = None
     ) -> list[dict[str, _object]]:
         records_raw = self.session.run(query, parameters or {})
-        if not isinstance(records_raw, list):
+        # Neo4j driver returns a Result object (iterable of Record objects).
+        # For tests we also accept lists of mapping-like items.
+        # Check if it's iterable; if not, return empty list.
+        if records_raw is None:
             return []
-        # Neo4j driver returns an iterable of Record objects; for tests we
-        # accept any iterable of mapping‑like items.
+
+        if not isinstance(records_raw, Iterable):
+            return []
+
+        iterable_records = cast(Iterable[object], records_raw)
+
         results: list[dict[str, _object]] = []
-        for rec in records_raw:
+        for rec in iterable_records:
             if isinstance(rec, dict):
                 results.append(rec)
             else:
@@ -556,9 +564,10 @@ class Neo4jBackend(KGBackend):
                     mapping = dict(rec.data())
                 elif hasattr(rec, "keys") and callable(getattr(rec, "keys")):
                     # Fallback for record-like objects with keys() method
-                    for key in rec.keys():
+                    mapping_like = cast(Mapping[str, _object], rec)
+                    for key in mapping_like.keys():
                         try:
-                            mapping[key] = rec[key]
+                            mapping[key] = mapping_like[key]
                         except (KeyError, TypeError):
                             pass
                 else:
@@ -583,29 +592,20 @@ class Neo4jBackend(KGBackend):
     ) -> EdgeQueryResult:
         """Query for edges between subject and object in Neo4j.
 
+        Supports two patterns:
+        1. Direct RELATION edges: (s)-[r:RELATION]->(o)
+        2. Reified associations: (s)-[:SUBJECT_OF]->(a:Association)-[:OBJECT_OF]->(o)
+           with publications via (a)-[:SUPPORTED_BY]->(pub:Publication)
+
         Nodes are matched by their ``id`` property (CURIE). Predicates
         are derived from either:
         - The relationship type (legacy schema)
         - The ``predicate`` property on RELATION type edges (Monarch KG schema)
+        - The ``predicate`` property on Association nodes (reified schema)
         """
-        # Build predicate filter - check both rel type and predicate property
-        if predicate:
-            where_predicate = " AND (type(r) = $predicate OR r.predicate = $predicate)"
-        else:
-            where_predicate = ""
-
-        query = (
-            "MATCH (s)-[r]->(o) "
-            "WHERE s.id = $subject AND o.id = $object"
-            f"{where_predicate} "
-            "RETURN s.id AS subject, "
-            "s.name AS subject_label, "
-            "o.id AS object, "
-            "o.name AS object_label, "
-            "type(r) AS rel_type, "
-            "r.predicate AS predicate_prop, "
-            "r AS rel"
-        )
+        edges: list[KGEdge] = []
+        default_provenance = make_static_provenance(source_db="neo4j")
+        prov_fields = {"source_db", "db_version", "retrieved_at", "cache_ttl", "record_hash"}
 
         params: dict[str, _object] = {
             "subject": subject,
@@ -614,30 +614,43 @@ class Neo4jBackend(KGBackend):
         if predicate is not None:
             params["predicate"] = predicate
 
-        records = self._iter_records(query, params)
+        # ----------------------------------------------------------------
+        # Query 1: Direct RELATION edges (no publications or legacy)
+        # ----------------------------------------------------------------
+        if predicate:
+            where_predicate = " AND (type(r) = $predicate OR r.predicate = $predicate)"
+        else:
+            where_predicate = ""
 
-        edges: list[KGEdge] = []
-        # Default provenance if not found on edge
-        default_provenance = make_static_provenance(source_db="neo4j")
+        direct_query = (
+            "MATCH (s)-[r]->(o) "
+            "WHERE s.id = $subject AND o.id = $object "
+            "AND NOT type(r) IN ['SUBJECT_OF', 'OBJECT_OF', 'SUPPORTED_BY']"
+            f"{where_predicate} "
+            "RETURN s.id AS subject, "
+            "s.name AS subject_label, "
+            "o.id AS object, "
+            "o.name AS object_label, "
+            "type(r) AS rel_type, "
+            "r.predicate AS predicate_prop, "
+            "r AS rel, "
+            "'direct' AS pattern"
+        )
 
-        for rec in records:
+        for rec in self._iter_records(direct_query, params):
             rel = rec.get("rel", {})
-            props: dict[str, _object] = {}
-            sources: list[str] = []
-
-            # Provenance fields to extract
-            prov_fields = {"source_db", "db_version", "retrieved_at", "cache_ttl", "record_hash"}
-
+            rel_properties: dict[str, _object] = {}
+            rel_sources: list[str] = []
             edge_provenance = default_provenance
 
             if isinstance(rel, dict):
-                props = {
+                rel_properties = {
                     k: v for k, v in rel.items() if k not in {"predicate"} and k not in prov_fields
                 }
-                # Extract publications as sources
+                # Extract publications as sources (for legacy edges with publications property)
                 pubs = rel.get("publications")
                 if isinstance(pubs, list):
-                    sources = [str(p) for p in pubs if p]
+                    rel_sources = [str(p) for p in pubs if p]
 
                 # Extract provenance
                 if "source_db" in rel:
@@ -649,7 +662,6 @@ class Neo4jBackend(KGBackend):
                         record_hash=str(rel.get("record_hash")) if rel.get("record_hash") else None,
                     )
 
-            # Use predicate property if available, else fall back to rel type
             rel_type = rec.get("rel_type", "")
             pred_prop = rec.get("predicate_prop")
             actual_predicate = pred_prop if pred_prop else rel_type
@@ -664,8 +676,83 @@ class Neo4jBackend(KGBackend):
                 object_label=(
                     str(rec["object_label"]) if isinstance(rec.get("object_label"), str) else None
                 ),
-                properties=props,
-                sources=sources,
+                properties=rel_properties,
+                sources=rel_sources,
+                provenance=edge_provenance,
+            )
+            edges.append(edge)
+
+        # ----------------------------------------------------------------
+        # Query 2: Reified associations with publications
+        # (s)-[:SUBJECT_OF]->(a:Association)-[:OBJECT_OF]->(o)
+        # (a)-[:SUPPORTED_BY]->(pub:Publication)
+        # ----------------------------------------------------------------
+        if predicate:
+            assoc_where = " AND a.predicate = $predicate"
+        else:
+            assoc_where = ""
+
+        assoc_query = (
+            "MATCH (s:Node {id: $subject})-[:SUBJECT_OF]->(a:Association)-[:OBJECT_OF]->(o:Node {id: $object}) "
+            f"WHERE true{assoc_where} "
+            "OPTIONAL MATCH (a)-[:SUPPORTED_BY]->(pub:Publication) "
+            "RETURN s.id AS subject, "
+            "s.name AS subject_label, "
+            "o.id AS object, "
+            "o.name AS object_label, "
+            "a.predicate AS predicate_prop, "
+            "a AS assoc, "
+            "collect(pub.id) AS publications, "
+            "'reified' AS pattern"
+        )
+
+        for rec in self._iter_records(assoc_query, params):
+            assoc = rec.get("assoc", {})
+            assoc_properties: dict[str, _object] = {}
+            assoc_sources: list[str] = []
+            edge_provenance = default_provenance
+
+            if isinstance(assoc, dict):
+                assoc_properties = {
+                    k: v
+                    for k, v in assoc.items()
+                    if k not in {"predicate", "subject_id", "object_id", "id", "category"}
+                    and k not in prov_fields
+                }
+
+                # Extract provenance from association node
+                if "source_db" in assoc:
+                    edge_provenance = ToolProvenance(
+                        source_db=str(assoc.get("source_db", "neo4j")),
+                        db_version=str(assoc.get("db_version", "unknown")),
+                        retrieved_at=str(
+                            assoc.get("retrieved_at", default_provenance.retrieved_at)
+                        ),
+                        cache_ttl=assoc.get("cache_ttl"),
+                        record_hash=(
+                            str(assoc.get("record_hash")) if assoc.get("record_hash") else None
+                        ),
+                    )
+
+            # Get publications from the SUPPORTED_BY links
+            pubs = rec.get("publications", [])
+            if isinstance(pubs, list):
+                assoc_sources = [str(p) for p in pubs if p]
+
+            actual_predicate = rec.get("predicate_prop", "")
+
+            edge = KGEdge(
+                subject=str(rec.get("subject", subject)),
+                predicate=str(actual_predicate),
+                object=str(rec.get("object", object)),
+                subject_label=(
+                    str(rec["subject_label"]) if isinstance(rec.get("subject_label"), str) else None
+                ),
+                object_label=(
+                    str(rec["object_label"]) if isinstance(rec.get("object_label"), str) else None
+                ),
+                properties=assoc_properties,
+                sources=assoc_sources,
                 provenance=edge_provenance,
             )
             edges.append(edge)
@@ -691,6 +778,12 @@ class Neo4jBackend(KGBackend):
 
         This uses a simple variable‑length path query and then flattens
         the resulting nodes/relations into KGNode/KGEdge objects.
+
+        Supports both:
+        - Direct RELATION edges
+        - Reified associations: (s)-[:SUBJECT_OF]->(a:Association)-[:OBJECT_OF]->(o)
+          Association and Publication nodes are filtered from results;
+          reified associations are presented as logical edges.
         """
         provenance = make_static_provenance(source_db="neo4j")
         if k <= 0:
@@ -702,6 +795,11 @@ class Neo4jBackend(KGBackend):
                 source="neo4j",
                 provenance=provenance,
             )
+
+        # Structural relationship types used for reification (to filter out)
+        structural_rel_types = {"SUBJECT_OF", "OBJECT_OF", "SUPPORTED_BY"}
+        # Categories to filter out from node results
+        internal_categories = {"biolink:Association", "biolink:Publication"}
 
         # Inline hop count into the pattern to avoid using a Cypher
         # parameter inside the variable-length relationship, which can
@@ -739,9 +837,21 @@ class Neo4jBackend(KGBackend):
 
         nodes: dict[str, KGNode] = {}
         edges: list[KGEdge] = []
+        prov_fields = {"source_db", "db_version", "retrieved_at", "cache_ttl", "record_hash"}
 
         for rec in records:
+            # Skip structural relationship types
+            rel_type = rec.get("rel_type", "")
+            if rel_type in structural_rel_types:
+                continue
+
             node_id_val = rec.get("node_id")
+            node_category = rec.get("node_category", "")
+
+            # Skip Association and Publication nodes
+            if node_category in internal_categories:
+                continue
+
             if isinstance(node_id_val, str):
                 raw_node_props = rec.get("node_props", {})
                 node_props: dict[str, _object] = {}
@@ -755,25 +865,18 @@ class Neo4jBackend(KGBackend):
                             if isinstance(rec.get("node_label"), str)
                             else None
                         ),
-                        category=(
-                            str(rec.get("node_category"))
-                            if isinstance(rec.get("node_category"), str)
-                            else None
-                        ),
+                        category=(str(node_category) if isinstance(node_category, str) else None),
                         properties=node_props,
                         provenance=provenance,
                     )
 
             rel_props = rec.get("rel_props", {})
-            props: dict[str, _object] = {}
-            sources: list[str] = []
-
-            # Provenance fields to extract
-            prov_fields = {"source_db", "db_version", "retrieved_at", "cache_ttl", "record_hash"}
+            rel_properties: dict[str, _object] = {}
+            rel_sources: list[str] = []
             edge_provenance = provenance
 
             if isinstance(rel_props, dict):
-                props = {
+                rel_properties = {
                     k: v
                     for k, v in rel_props.items()
                     if k not in {"predicate"} and k not in prov_fields
@@ -781,7 +884,7 @@ class Neo4jBackend(KGBackend):
                 # Extract publications as sources
                 pubs = rel_props.get("publications")
                 if isinstance(pubs, list):
-                    sources = [str(p) for p in pubs if p]
+                    rel_sources = [str(p) for p in pubs if p]
 
                 # Extract provenance
                 if "source_db" in rel_props:
@@ -801,7 +904,6 @@ class Neo4jBackend(KGBackend):
             obj_id = str(rec.get("object_id"))
 
             # Use predicate property if available, else fall back to rel type
-            rel_type = rec.get("rel_type", "")
             pred_prop = rec.get("predicate_prop")
             actual_predicate = pred_prop if pred_prop else rel_type
 
@@ -815,8 +917,112 @@ class Neo4jBackend(KGBackend):
                 object_label=(
                     str(rec["object_label"]) if isinstance(rec.get("object_label"), str) else None
                 ),
-                properties=props,
-                sources=sources,
+                properties=rel_properties,
+                sources=rel_sources,
+                provenance=edge_provenance,
+            )
+            edges.append(edge)
+
+        # ----------------------------------------------------------------
+        # Query 2: Find reified associations within k hops and add as edges
+        # We use k*2 hops because (node)-[:SUBJECT_OF]->(assoc)-[:OBJECT_OF]->(neighbor)
+        # counts as 2 hops in the graph but 1 logical hop.
+        # ----------------------------------------------------------------
+        assoc_hop_range = f"1..{int(k) * 2}"
+        if direction is EdgeDirection.OUTGOING:
+            assoc_pattern = f" (n)-[*{assoc_hop_range}]->(a:Association) "
+        elif direction is EdgeDirection.INCOMING:
+            assoc_pattern = f" (n)<-[*{assoc_hop_range}]-(a:Association) "
+        else:
+            assoc_pattern = f" (n)-[*{assoc_hop_range}]-(a:Association) "
+
+        assoc_query = (
+            "MATCH" + assoc_pattern + "WHERE n.id = $center "
+            "MATCH (s:Node)-[:SUBJECT_OF]->(a)-[:OBJECT_OF]->(o:Node) "
+            "WHERE NOT s.category IN ['biolink:Association', 'biolink:Publication'] "
+            "AND NOT o.category IN ['biolink:Association', 'biolink:Publication'] "
+            "OPTIONAL MATCH (a)-[:SUPPORTED_BY]->(pub:Publication) "
+            "RETURN DISTINCT "
+            "s.id AS subject_id, "
+            "s.name AS subject_label, "
+            "o.id AS object_id, "
+            "o.name AS object_label, "
+            "a.predicate AS predicate_prop, "
+            "a AS assoc_props, "
+            "collect(pub.id) AS publications"
+        )
+
+        for rec in self._iter_records(assoc_query, params):
+            assoc_props = rec.get("assoc_props", {})
+            assoc_properties: dict[str, _object] = {}
+            assoc_sources: list[str] = []
+            edge_provenance = provenance
+
+            if isinstance(assoc_props, dict):
+                assoc_properties = {
+                    k: v
+                    for k, v in assoc_props.items()
+                    if k not in {"predicate", "subject_id", "object_id", "id", "category"}
+                    and k not in prov_fields
+                }
+
+                # Extract provenance from association node
+                if "source_db" in assoc_props:
+                    edge_provenance = ToolProvenance(
+                        source_db=str(assoc_props.get("source_db", "neo4j")),
+                        db_version=str(assoc_props.get("db_version", "unknown")),
+                        retrieved_at=str(assoc_props.get("retrieved_at", provenance.retrieved_at)),
+                        cache_ttl=assoc_props.get("cache_ttl"),
+                        record_hash=(
+                            str(assoc_props.get("record_hash"))
+                            if assoc_props.get("record_hash")
+                            else None
+                        ),
+                    )
+
+            # Get publications from the SUPPORTED_BY links
+            pubs = rec.get("publications", [])
+            if isinstance(pubs, list):
+                assoc_sources = [str(p) for p in pubs if p]
+
+            subj_id = str(rec.get("subject_id"))
+            obj_id = str(rec.get("object_id"))
+            actual_predicate = rec.get("predicate_prop", "")
+
+            # Add subject and object nodes if not already present
+            if subj_id not in nodes:
+                nodes[subj_id] = KGNode(
+                    id=subj_id,
+                    label=(
+                        str(rec["subject_label"])
+                        if isinstance(rec.get("subject_label"), str)
+                        else None
+                    ),
+                    provenance=provenance,
+                )
+            if obj_id not in nodes:
+                nodes[obj_id] = KGNode(
+                    id=obj_id,
+                    label=(
+                        str(rec["object_label"])
+                        if isinstance(rec.get("object_label"), str)
+                        else None
+                    ),
+                    provenance=provenance,
+                )
+
+            edge = KGEdge(
+                subject=subj_id,
+                predicate=str(actual_predicate),
+                object=obj_id,
+                subject_label=(
+                    str(rec["subject_label"]) if isinstance(rec.get("subject_label"), str) else None
+                ),
+                object_label=(
+                    str(rec["object_label"]) if isinstance(rec.get("object_label"), str) else None
+                ),
+                properties=assoc_properties,
+                sources=assoc_sources,
                 provenance=edge_provenance,
             )
             edges.append(edge)
@@ -925,6 +1131,158 @@ class Neo4jBackend(KGBackend):
                 self.upsert_edge(edge)
 
         return result
+
+    def get_publications_for_edge(
+        self,
+        subject: str,
+        object: str,
+        predicate: Optional[str] = None,
+    ) -> list[str]:
+        """Get all PMIDs supporting an edge between subject and object.
+
+        Searches both:
+        1. Direct RELATION edges with publications property
+        2. Reified associations with SUPPORTED_BY links to Publication nodes
+
+        Args:
+            subject: Subject node ID
+            object: Object node ID
+            predicate: Optional predicate to filter
+
+        Returns:
+            List of PMID strings (e.g., ["PMID:12345678", "PMID:23456789"])
+        """
+        pmids: set[str] = set()
+
+        params: dict[str, _object] = {
+            "subject": subject,
+            "object": object,
+        }
+        if predicate is not None:
+            params["predicate"] = predicate
+
+        # Query 1: Direct RELATION edges with publications property
+        if predicate:
+            where_predicate = " AND (r.predicate = $predicate)"
+        else:
+            where_predicate = ""
+
+        direct_query = (
+            "MATCH (s:Node {id: $subject})-[r:RELATION]->(o:Node {id: $object}) "
+            f"WHERE r.publications IS NOT NULL{where_predicate} "
+            "RETURN r.publications AS publications"
+        )
+
+        for rec in self._iter_records(direct_query, params):
+            pubs = rec.get("publications", [])
+            if isinstance(pubs, list):
+                for p in pubs:
+                    if p:
+                        pmids.add(str(p))
+
+        # Query 2: Reified associations with SUPPORTED_BY links
+        if predicate:
+            assoc_where = " AND a.predicate = $predicate"
+        else:
+            assoc_where = ""
+
+        assoc_query = (
+            "MATCH (s:Node {id: $subject})-[:SUBJECT_OF]->(a:Association)-[:OBJECT_OF]->(o:Node {id: $object}) "
+            f"WHERE true{assoc_where} "
+            "MATCH (a)-[:SUPPORTED_BY]->(pub:Publication) "
+            "RETURN pub.id AS pmid"
+        )
+
+        for rec in self._iter_records(assoc_query, params):
+            pmid = rec.get("pmid")
+            if pmid:
+                pmids.add(str(pmid))
+
+        return sorted(pmids)
+
+    def get_edges_by_publication(self, pmid: str) -> list[KGEdge]:
+        """Find all edges supported by a specific publication.
+
+        Searches reified associations that have SUPPORTED_BY links to the
+        given Publication node.
+
+        Args:
+            pmid: Publication ID (e.g., "PMID:12345678")
+
+        Returns:
+            List of KGEdge objects for edges supported by this publication
+        """
+        edges: list[KGEdge] = []
+        default_provenance = make_static_provenance(source_db="neo4j")
+        prov_fields = {"source_db", "db_version", "retrieved_at", "cache_ttl", "record_hash"}
+
+        query = (
+            "MATCH (pub:Publication {id: $pmid})<-[:SUPPORTED_BY]-(a:Association) "
+            "MATCH (s:Node)-[:SUBJECT_OF]->(a)-[:OBJECT_OF]->(o:Node) "
+            "OPTIONAL MATCH (a)-[:SUPPORTED_BY]->(all_pubs:Publication) "
+            "RETURN s.id AS subject, "
+            "s.name AS subject_label, "
+            "o.id AS object, "
+            "o.name AS object_label, "
+            "a.predicate AS predicate, "
+            "a AS assoc_props, "
+            "collect(DISTINCT all_pubs.id) AS all_publications"
+        )
+
+        params: dict[str, _object] = {"pmid": pmid}
+
+        for rec in self._iter_records(query, params):
+            assoc_props = rec.get("assoc_props", {})
+            props: dict[str, _object] = {}
+            sources: list[str] = []
+            edge_provenance = default_provenance
+
+            if isinstance(assoc_props, dict):
+                props = {
+                    k: v
+                    for k, v in assoc_props.items()
+                    if k not in {"predicate", "subject_id", "object_id", "id", "category"}
+                    and k not in prov_fields
+                }
+
+                # Extract provenance from association node
+                if "source_db" in assoc_props:
+                    edge_provenance = ToolProvenance(
+                        source_db=str(assoc_props.get("source_db", "neo4j")),
+                        db_version=str(assoc_props.get("db_version", "unknown")),
+                        retrieved_at=str(
+                            assoc_props.get("retrieved_at", default_provenance.retrieved_at)
+                        ),
+                        cache_ttl=assoc_props.get("cache_ttl"),
+                        record_hash=(
+                            str(assoc_props.get("record_hash"))
+                            if assoc_props.get("record_hash")
+                            else None
+                        ),
+                    )
+
+            # Get all publications for this association
+            all_pubs = rec.get("all_publications", [])
+            if isinstance(all_pubs, list):
+                sources = [str(p) for p in all_pubs if p]
+
+            edge = KGEdge(
+                subject=str(rec.get("subject", "")),
+                predicate=str(rec.get("predicate", "")),
+                object=str(rec.get("object", "")),
+                subject_label=(
+                    str(rec["subject_label"]) if isinstance(rec.get("subject_label"), str) else None
+                ),
+                object_label=(
+                    str(rec["object_label"]) if isinstance(rec.get("object_label"), str) else None
+                ),
+                properties=props,
+                sources=sources,
+                provenance=edge_provenance,
+            )
+            edges.append(edge)
+
+        return edges
 
 
 class KGTool:
