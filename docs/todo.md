@@ -258,10 +258,11 @@
 - [x] UI: badges, copy-to-clipboard JSON, "Not medical advice" banner.
 - [ ] Anonymized audit logs for reproducibility.
 - [ ] Improve negation detection beyond hard-coded phrases (data-driven patterns or lightweight NLP cues) alongside variant cue hardening.
-- [ ] **Gene function polarity rule:** Add `gene_function_predicate_mismatch` rule to catch semantically misleading claims like "TP53 causes cancer" (tumor suppressors don't cause disease—their dysfunction does). Requires:
-  - New data source for gene function classification (oncogene vs tumor_suppressor vs both vs unknown). Options: COSMIC Cancer Gene Census, OncoKB, or curated list.
-  - New fact: `gene.function_class` with values `"oncogene" | "tumor_suppressor" | "both" | "unknown"`.
-  - Rule logic: If `gene.function_class == "tumor_suppressor"` and predicate polarity is positive (causes/increases), flag as WARN with suggestion to rephrase as "dysfunction of X causes Y" or "loss of X causes Y".
+- [x] **Gene function polarity rule:** Add `tumor_suppressor_positive_predicate` rule to catch semantically misleading claims like "TP53 causes cancer" (tumor suppressors don't cause disease—their dysfunction does). Implemented with:
+  - COSMIC Cancer Gene Census v103 data source for gene function classification (`src/kg_skeptic/mcp/cosmic.py`)
+  - New fact group `gene.*` with `function_class`, `is_tumor_suppressor`, `is_oncogene`, `is_cancer_gene`
+  - Rule fires when `gene.is_tumor_suppressor == true` AND `conflicts.claim_predicate_polarity == "positive"`, flagging as WARN with rephrasing suggestion
+  - Added `cosmic_cancer_gene_bonus` (+0.2) for validated cancer genes
 - [ ] Refine variant-context detection beyond simple mutation keywords (e.g., better patterns/NER for `has_variant_context` on GeneToDiseaseAssociation edges).
 - [x] Tighten Edge Inspector rule footprint to only show truly edge/evidence-level rules (type/ontology/NLI gates stay at claim level) and ensure wording is edge-specific.
 - [x] Attach explicit evidence/source identifiers to Neo4j/BioCypher edges where possible so Edge Inspector can surface PMIDs/DOIs/GO/Reactome IDs instead of "Sources: (none)".

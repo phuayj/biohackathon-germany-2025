@@ -1,8 +1,8 @@
 # Day 2 rule set: evidence-aware, ontology-aware scoring
 rules:
   - id: type_domain_range_valid
-    description: Domain/range matches expected biomedical categories
-    weight: 0.8
+    description: Domain/range matches expected biomedical categories (baseline requirement)
+    weight: 0.0
     when:
       all:
         - fact: type.domain_valid
@@ -11,7 +11,7 @@ rules:
         - fact: type.range_valid
           op: equals
           value: true
-    because: "because the subject ({type.domain_category}) -> object ({type.range_category}) relation is allowed"
+    because: "because the subject ({type.domain_category}) -> object ({type.range_category}) relation is structurally valid (baseline)"
 
   - id: type_domain_range_violation
     description: Domain/range invalid for predicate
@@ -103,14 +103,33 @@ rules:
     because: "because the predicate was inferred with hedging language ({extraction.hedging_terms}) and no supporting citations"
 
   - id: multi_source_bonus
-    description: Reward multiple independent sources
-    weight: 0.3
+    description: Reward multiple independent sources (fallback when NLI unavailable)
+    weight: 0.2
     when:
       all:
         - fact: evidence.has_multiple_sources
           op: equals
           value: true
-    because: "because the claim cites multiple sources ({claim.citation_count})"
+        - fact: text_nli.checked
+          op: equals
+          value: false
+    because: "because the claim cites multiple sources ({claim.citation_count}) but abstracts were unavailable for NLI verification"
+
+  - id: multi_source_unverified_penalty
+    description: Multiple citations provided but none verified as supporting
+    weight: -0.3
+    when:
+      all:
+        - fact: evidence.has_multiple_sources
+          op: equals
+          value: true
+        - fact: text_nli.checked
+          op: equals
+          value: true
+        - fact: text_nli.n_support
+          op: equals
+          value: 0
+    because: "because {claim.citation_count} citations were provided but none actually support the claim (N_sup = 0)"
 
   - id: minimal_evidence
     description: Require at least one supporting citation
@@ -287,3 +306,30 @@ rules:
           op: equals
           value: false
     because: "because no abstracts were available for text-level NLI verification (neutral signal)"
+
+  # ---------------------------------------------------------------------------
+  # Gene Function Polarity Rules (COSMIC Cancer Gene Census)
+  # ---------------------------------------------------------------------------
+
+  - id: tumor_suppressor_positive_predicate
+    description: Tumor suppressor gene with positive causal predicate (likely misleading)
+    weight: -0.6
+    when:
+      all:
+        - fact: gene.is_tumor_suppressor
+          op: equals
+          value: true
+        - fact: conflicts.claim_predicate_polarity
+          op: equals
+          value: "positive"
+    because: "because {gene.gene_symbol} is a tumor suppressor (COSMIC CGC) but the claim uses a positive predicate — tumor suppressors don't directly cause disease; their dysfunction/loss does. Consider rephrasing to 'loss of {gene.gene_symbol}' or 'dysfunction of {gene.gene_symbol}'"
+
+  - id: cosmic_cancer_gene_bonus
+    description: Gene is in COSMIC Cancer Gene Census (validated cancer gene)
+    weight: 0.2
+    when:
+      all:
+        - fact: gene.is_cancer_gene
+          op: equals
+          value: true
+    because: "because {gene.gene_symbol} is in the COSMIC Cancer Gene Census (validated cancer gene)"

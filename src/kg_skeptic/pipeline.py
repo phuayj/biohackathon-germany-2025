@@ -22,6 +22,7 @@ from kg_skeptic.mcp.disgenet import DisGeNETTool
 from kg_skeptic.mcp.kg import EdgeQueryResult, InMemoryBackend, KGBackend, KGEdge, KGTool
 from kg_skeptic.mcp.semmed import LiteratureTriple, SemMedDBTool
 from kg_skeptic.mcp.indra import INDRATool
+from kg_skeptic.mcp.cosmic import COSMICTool
 from .models import Claim, EntityMention, Report
 from .mcp.mini_kg import load_mini_kg_backend
 from .provenance import CitationProvenance, ProvenanceFetcher
@@ -154,6 +155,8 @@ POSITIVE_POLARITY_MARKERS: tuple[str, ...] = (
     "enhances",
     "contribute",
     "contributes",
+    "cause",
+    "causes",
 )
 
 NEGATIVE_POLARITY_MARKERS: tuple[str, ...] = (
@@ -192,6 +195,8 @@ CANONICAL_PREDICATE_MAP: dict[str, str] = {
     "enhances": "enhances",
     "contribute": "contributes",
     "contributes": "contributes",
+    "cause": "causes",
+    "causes": "causes",
     "decrease": "decreases",
     "decreases": "decreases",
     "inhibit": "inhibits",
@@ -2780,6 +2785,45 @@ class SkepticPipeline:
 
         return facts
 
+    def _build_gene_facts(self, triple: NormalizedTriple) -> dict[str, object]:
+        """Build gene function facts using COSMIC Cancer Gene Census.
+
+        This provides gene function classification (oncogene vs tumor suppressor)
+        to enable semantic validation of causality predicates.
+        """
+        facts: dict[str, object] = {
+            "cosmic_checked": False,
+            "is_cancer_gene": False,
+            "function_class": "unknown",
+            "is_tumor_suppressor": False,
+            "is_oncogene": False,
+            "gene_symbol": "",
+        }
+
+        # Only process if subject is a gene
+        if triple.subject.category != "gene":
+            return facts
+
+        gene_symbol = triple.subject.label
+        facts["gene_symbol"] = gene_symbol
+
+        try:
+            cosmic_tool = COSMICTool()
+            gene_info = cosmic_tool.lookup_gene(gene_symbol)
+
+            facts["cosmic_checked"] = True
+
+            if gene_info is not None:
+                facts["is_cancer_gene"] = True
+                facts["function_class"] = gene_info.function_class.value
+                facts["is_tumor_suppressor"] = gene_info.is_tumor_suppressor
+                facts["is_oncogene"] = gene_info.is_oncogene
+        except Exception:
+            # COSMIC lookup failed - leave defaults
+            pass
+
+        return facts
+
     def _build_structured_literature_facts(self, triple: NormalizedTriple) -> dict[str, object]:
         """Best-effort structured literature facts from SemMedDB / INDRA.
 
@@ -2889,6 +2933,8 @@ class SkepticPipeline:
         facts["curated_kg"] = self._build_curated_kg_facts(normalization.triple)
         # Attach structured literature signals (SemMedDB / INDRA triples).
         facts["literature"] = self._build_structured_literature_facts(normalization.triple)
+        # Attach gene function classification (COSMIC Cancer Gene Census).
+        facts["gene"] = self._build_gene_facts(normalization.triple)
         evaluation = self.engine.evaluate(facts)
         score = sum(evaluation.features.values())
         verdict = self._verdict_for_score(score)

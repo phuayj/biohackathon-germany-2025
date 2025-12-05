@@ -7,6 +7,7 @@ This module provides adapters for querying external biomedical data sources:
 - IDs: Normalize biomedical identifiers (HGNC, UniProt, MONDO, HPO)
 - KG: Query knowledge graph edges and ego networks
 - SemMedDB / INDRA: Structured literature triples (subject–predicate–object)
+- COSMIC: Cancer Gene Census gene function classification (oncogene vs TSG)
 """
 
 from .europepmc import EuropePMCTool
@@ -19,6 +20,7 @@ from .disgenet import DisGeNETTool, GeneDiseaseAssociation
 from .provenance import ToolProvenance
 from .semmed import SemMedDBTool, LiteratureTriple
 from .indra import INDRATool
+from .cosmic import COSMICTool, GeneFunction, GeneFunctionClass
 
 __all__ = [
     "EuropePMCTool",
@@ -37,4 +39,7 @@ __all__ = [
     "INDRATool",
     "LiteratureTriple",
     "ToolProvenance",
+    "COSMICTool",
+    "GeneFunction",
+    "GeneFunctionClass",
 ]
