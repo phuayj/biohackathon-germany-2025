@@ -1399,17 +1399,26 @@ def main() -> None:
     with st.sidebar:
         st.header("Settings")
 
-        # NER Backend toggle (GLiNER2 vs Dictionary)
-        use_gliner = st.toggle(
-            "Use GLiNER2 NER",
-            value=True,
-            help="Enable GLiNER2 neural entity recognition for improved entity extraction from claims.",
+        # NER Backend selection
+        ner_option = st.radio(
+            "NER Model",
+            options=["GLiNER2 (fast)", "OpenMed (accurate)", "Dictionary (fallback)"],
+            index=0,
+            help="Select the NER model for entity extraction from claims.",
+            horizontal=True,
         )
-        ner_backend = NERBackend.GLINER2 if use_gliner else NERBackend.DICTIONARY
-        if use_gliner:
-            st.caption("🧠 Using GLiNER2 zero-shot NER model")
+        ner_backend_map = {
+            "GLiNER2 (fast)": NERBackend.GLINER2,
+            "OpenMed (accurate)": NERBackend.PUBMEDBERT,
+            "Dictionary (fallback)": NERBackend.DICTIONARY,
+        }
+        ner_backend = ner_backend_map[ner_option]
+        if ner_backend == NERBackend.GLINER2:
+            st.caption("🧠 GLiNER2 zero-shot NER (fast, general-purpose)")
+        elif ner_backend == NERBackend.PUBMEDBERT:
+            st.caption("🔬 OpenMed NER (accurate, biomedical-specialized)")
         else:
-            st.caption("📖 Using dictionary-based entity matching")
+            st.caption("📖 Dictionary-based entity matching")
 
         kg_backend = _get_kg_backend()
         if isinstance(kg_backend, Neo4jBackend):

@@ -1,7 +1,8 @@
 """Named entity recognition for biomedical claims.
 
 This module provides entity extraction using multiple NER backends:
-- GLiNER2: Zero-shot NER with custom entity types
+- GLiNER2: Zero-shot NER with custom entity types (fast)
+- PubMedBERT: OpenMed NER model for high-accuracy biomedical extraction (accurate)
 - Dictionary: Simple dictionary-based matching (fallback)
 """
 
@@ -10,9 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum, auto
 from importlib import import_module
-from typing import Sequence
-
-from typing import Protocol, cast, Mapping
+from typing import Mapping, Protocol, Sequence, cast
 
 
 class NERBackend(Enum):
@@ -31,6 +30,12 @@ class GLiNER2Model(Protocol):
         text: str,
         entity_spec: dict[str, str] | list[str],
     ) -> Mapping[str, object]: ...
+
+
+class TokenClassificationPipeline(Protocol):
+    """Protocol for the HuggingFace token-classification pipeline we rely on."""
+
+    def __call__(self, text: str) -> Sequence[Mapping[str, object]]: ...
 
 
 # Lazy import to avoid heavy model loading at module import time
@@ -56,6 +61,14 @@ BIOMEDICAL_ENTITY_TYPES: list[str] = [
     "cell_type",
     "organism",
     "anatomical_structure",
+    # Extended types from OpenMed NER model
+    "tissue",
+    "cellular_component",
+    "anatomical_system",
+    "pathological_formation",
+    "multi_tissue_structure",
+    "developing_anatomical_structure",
+    "immaterial_anatomical_entity",
 ]
 
 # Enhanced entity type descriptions for better extraction accuracy
@@ -69,6 +82,14 @@ BIOMEDICAL_ENTITY_DESCRIPTIONS: dict[str, str] = {
     "cell_type": "Cell types like T cells, neurons, or hepatocytes",
     "organism": "Organism names like human, mouse, or E. coli",
     "anatomical_structure": "Body parts or anatomical structures like heart, brain, or liver",
+    # Extended types from OpenMed NER model
+    "tissue": "Tissue types like epithelium, muscle tissue, or connective tissue",
+    "cellular_component": "Cell parts like mitochondria, nucleus, or cell membrane",
+    "anatomical_system": "Body systems like cardiovascular system, nervous system, or immune system",
+    "pathological_formation": "Abnormal structures like tumors, lesions, or cysts",
+    "multi_tissue_structure": "Structures spanning multiple tissues like blood vessels or nerves",
+    "developing_anatomical_structure": "Embryonic or developmental structures",
+    "immaterial_anatomical_entity": "Anatomical spaces or cavities like pleural cavity or lumen",
 }
 
 
@@ -84,6 +105,54 @@ def _get_model() -> GLiNER2Model:
         except ImportError as e:
             raise ImportError("GLiNER2 is not installed. Install with: pip install gliner2") from e
     return _gliner2_model
+
+
+# OpenMed NER model configuration
+OPENMED_MODEL_NAME = "OpenMed/OpenMed-NER-OncologyDetect-MultiMed-568M"
+_openmed_pipeline: TokenClassificationPipeline | None = None
+
+# Mapping from OpenMed labels to our entity types
+# OpenMed uses different naming conventions; we map to our standardized types
+OPENMED_LABEL_MAP: dict[str, str] = {
+    # Direct mappings to existing types
+    "Gene_or_gene_product": "gene",
+    "Amino_acid": "protein",
+    "Cancer": "disease",
+    "Cell": "cell_type",
+    "Organ": "anatomical_structure",
+    "Organism": "organism",
+    "Simple_chemical": "drug",
+    # Extended types (pass through with normalized names)
+    "Tissue": "tissue",
+    "Cellular_component": "cellular_component",
+    "Anatomical_system": "anatomical_system",
+    "Pathological_formation": "pathological_formation",
+    "Multi-tissue_structure": "multi_tissue_structure",
+    "Developing_anatomical_structure": "developing_anatomical_structure",
+    "Immaterial_anatomical_entity": "immaterial_anatomical_entity",
+}
+
+
+def _get_openmed_pipeline() -> TokenClassificationPipeline:
+    """Lazily load the OpenMed NER pipeline."""
+    global _openmed_pipeline
+    if _openmed_pipeline is None:
+        try:
+            from transformers import pipeline as hf_pipeline
+
+            _openmed_pipeline = cast(
+                TokenClassificationPipeline,
+                hf_pipeline(
+                    task="token-classification",
+                    model=OPENMED_MODEL_NAME,
+                    aggregation_strategy="simple",
+                ),
+            )
+        except ImportError as e:
+            raise ImportError(
+                "transformers is not installed. Install with: pip install transformers"
+            ) from e
+    return _openmed_pipeline
 
 
 def extract_entities(
@@ -286,20 +355,93 @@ class DictionaryExtractor:
 
 
 class PubMedBertExtractor:
-    """Placeholder extractor for a PubMedBERT-based NER model.
+    """NER extractor using the OpenMed biomedical NER model.
 
-    The current implementation returns no entities, causing the pipeline
-    to fall back to dictionary-based matching. This keeps the CLI
-    interface stable while avoiding a hard dependency on a specific
-    transformer model.
+    Uses the OpenMed/OpenMed-NER-OncologyDetect-MultiMed-568M model which
+    is trained on biomedical text and provides high-accuracy entity
+    extraction for oncology and general biomedical entities.
     """
 
     def __init__(self, entity_types: Sequence[str] | None = None) -> None:
+        """Initialize the extractor.
+
+        Args:
+            entity_types: Entity types to extract. Defaults to BIOMEDICAL_ENTITY_TYPES.
+        """
         self.entity_types = list(entity_types) if entity_types else BIOMEDICAL_ENTITY_TYPES
+        self._pipeline: TokenClassificationPipeline | None = None
+
+    def _ensure_pipeline(self) -> TokenClassificationPipeline:
+        """Ensure the model pipeline is loaded."""
+        if self._pipeline is None:
+            self._pipeline = _get_openmed_pipeline()
+        return self._pipeline
 
     def extract(self, text: str) -> list[ExtractedEntity]:
-        _ = text  # Unused in the placeholder implementation
-        return []
+        """Extract entities from text using the OpenMed NER model.
+
+        Args:
+            text: The text to extract entities from.
+
+        Returns:
+            List of extracted entities with their labels mapped to
+            the standardized entity types.
+        """
+        pipeline = self._ensure_pipeline()
+        # Run the pipeline - returns sequence of mappings with
+        # keys like entity_group, word, score, start, end.
+        raw_entities = pipeline(text)
+
+        entities: list[ExtractedEntity] = []
+        for entity in raw_entities:
+            # Get the entity group/label from the model output
+            raw_label_obj = entity.get("entity_group")
+            raw_label = raw_label_obj if isinstance(raw_label_obj, str) else ""
+            # Map to our standardized label
+            mapped_label = OPENMED_LABEL_MAP.get(raw_label, raw_label.lower())
+
+            # Only include if the mapped label is in our requested entity types
+            if mapped_label in self.entity_types:
+                word_obj = entity.get("word")
+                if isinstance(word_obj, str):
+                    entity_text = word_obj.strip()
+                    if entity_text:
+                        entities.append(ExtractedEntity(text=entity_text, label=mapped_label))
+
+        return entities
+
+    def extract_grouped(self, text: str) -> dict[str, list[ExtractedEntity]]:
+        """Extract entities grouped by type.
+
+        Args:
+            text: The text to extract entities from.
+
+        Returns:
+            Dictionary mapping entity types to lists of entities.
+        """
+        entities = self.extract(text)
+        grouped: dict[str, list[ExtractedEntity]] = {}
+        for entity in entities:
+            if entity.label not in grouped:
+                grouped[entity.label] = []
+            grouped[entity.label].append(entity)
+        return grouped
+
+    def extract_first_of_type(self, text: str, entity_type: str) -> ExtractedEntity | None:
+        """Extract the first entity of a specific type.
+
+        Args:
+            text: The text to extract from.
+            entity_type: The type of entity to find.
+
+        Returns:
+            The first matching entity, or None if not found.
+        """
+        entities = self.extract(text)
+        for entity in entities:
+            if entity.label == entity_type:
+                return entity
+        return None
 
 
 # Type alias for any NER extractor
@@ -325,7 +467,7 @@ def get_extractor(
     if backend is NERBackend.GLINER2:
         return GLiNER2Extractor(entity_types=entity_types)
     if backend is NERBackend.PUBMEDBERT:
-        # Placeholder: use a stub extractor that triggers dictionary fallback
+        # Uses OpenMed NER model for high-accuracy biomedical entity extraction
         return PubMedBertExtractor(entity_types=entity_types)
     if backend is NERBackend.DICTIONARY:
         return DictionaryExtractor(entity_types=entity_types)
