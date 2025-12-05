@@ -2404,9 +2404,16 @@ class SkepticPipeline:
             return {}
 
         # The Day 3 prototype is trained on the mini KG slice; for now we
-        # restrict inference to the in-memory backend used there.
+        # use the in-memory backend for GNN inference even when the main
+        # backend is Neo4j or another type.
         if not isinstance(backend, InMemoryBackend):
-            return {}
+            # Try to load the mini KG backend for GNN inference
+            try:
+                from kg_skeptic.mcp.mini_kg import load_mini_kg_backend
+
+                backend = load_mini_kg_backend()
+            except Exception:
+                return {}
 
         bundle = self._get_suspicion_model()
         if bundle is None:
@@ -2590,11 +2597,23 @@ class SkepticPipeline:
         rows_sorted = sorted(rows, key=lambda r: r["score"], reverse=True)
         top_edges = rows_sorted[:10]
 
+        # Include ALL edge scores for visualization (edges should change color based on GNN predictions)
+        all_edge_scores: list[dict[str, object]] = [
+            {
+                "subject": r["subject"],
+                "predicate": r["predicate"],
+                "object": r["object"],
+                "score": r["score"],
+            }
+            for r in rows
+        ]
+
         result: dict[str, object] = {
             "subject_id": triple.subject.id,
             "object_id": triple.object.id,
             "model_path": (str(self._suspicion_model_path) if self._suspicion_model_path else None),
             "top_edges": top_edges,
+            "all_edge_scores": all_edge_scores,
         }
 
         # Serialize error type predictions with string keys for JSON compatibility.

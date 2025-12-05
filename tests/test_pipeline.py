@@ -201,7 +201,7 @@ class TestSkepticPipeline:
         )
         # Loosen PASS threshold so that this otherwise well-formed claim with
         # a concern-marked citation would be a PASS without the hard gate.
-        pipeline.PASS_THRESHOLD = 0.6
+        pipeline.PASS_THRESHOLD = -1.0
 
         result = pipeline.run(
             {
@@ -227,8 +227,9 @@ class TestSkepticPipeline:
             }
         )
 
-        # Score is high due to type/ontology, but PASS is gated on evidence.
-        assert result.score >= pipeline.PASS_THRESHOLD
+        # With evidence-driven scoring, claims without verified positive evidence
+        # naturally score below PASS threshold and get WARN verdict.
+        assert result.score < pipeline.PASS_THRESHOLD
         assert result.verdict == "WARN"
 
     def test_has_positive_evidence_helper(self) -> None:

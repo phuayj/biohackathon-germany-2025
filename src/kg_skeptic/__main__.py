@@ -534,9 +534,10 @@ def _print_subgraph(
     suspicion_raw = result.suspicion or result.report.stats.get("suspicion", {})
     suspicion_scores_for_filter: dict[tuple[str, str, str], float] = {}
     if isinstance(suspicion_raw, Mapping):
-        top_edges = suspicion_raw.get("top_edges", [])
-        if isinstance(top_edges, list):
-            for item in top_edges:
+        # Prefer all_edge_scores for complete coverage, fallback to top_edges
+        edge_scores = suspicion_raw.get("all_edge_scores") or suspicion_raw.get("top_edges", [])
+        if isinstance(edge_scores, list):
+            for item in edge_scores:
                 if not isinstance(item, Mapping):
                     continue
                 key = (
@@ -592,9 +593,10 @@ def _print_subgraph(
     suspicion_raw = result.suspicion or result.report.stats.get("suspicion", {})
     suspicion_scores: dict[tuple[str, str, str], float] = {}
     if isinstance(suspicion_raw, Mapping):
-        top_edges = suspicion_raw.get("top_edges", [])
-        if isinstance(top_edges, list):
-            for item in top_edges:
+        # Prefer all_edge_scores for complete coverage, fallback to top_edges
+        edge_scores = suspicion_raw.get("all_edge_scores") or suspicion_raw.get("top_edges", [])
+        if isinstance(edge_scores, list):
+            for item in edge_scores:
                 if not isinstance(item, Mapping):
                     continue
                 key = (

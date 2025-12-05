@@ -852,11 +852,11 @@ def render_subgraph_visualization(
     if "claim_relevant_only" not in st.session_state:
         st.session_state.claim_relevant_only = True
 
-    # Build suspicion scores dict
+    # Build suspicion scores dict from all_edge_scores (includes ALL edges, not just top 10)
     suspicion_scores: dict[tuple[str, str, str], float] = {}
-    top_edges = suspicion.get("top_edges", [])
-    if isinstance(top_edges, list):
-        for item in top_edges:
+    all_edge_scores = suspicion.get("all_edge_scores", [])
+    if isinstance(all_edge_scores, list):
+        for item in all_edge_scores:
             if isinstance(item, Mapping):
                 edge_key = (
                     str(item.get("subject", "")),
@@ -867,6 +867,21 @@ def render_subgraph_visualization(
                     suspicion_scores[edge_key] = float(item.get("score", 0.0))
                 except (TypeError, ValueError):
                     pass
+    # Fallback to top_edges for backward compatibility with older audit results
+    if not suspicion_scores:
+        top_edges = suspicion.get("top_edges", [])
+        if isinstance(top_edges, list):
+            for item in top_edges:
+                if isinstance(item, Mapping):
+                    edge_key = (
+                        str(item.get("subject", "")),
+                        str(item.get("predicate", "")),
+                        str(item.get("object", "")),
+                    )
+                    try:
+                        suspicion_scores[edge_key] = float(item.get("score", 0.0))
+                    except (TypeError, ValueError):
+                        pass
 
     # Build edge status and origin dicts from provenance and edge metadata.
     edge_statuses: dict[tuple[str, str, str], str] = {}
@@ -1003,8 +1018,19 @@ def render_subgraph_visualization(
         if claim_relevant_only
         else ""
     )
+    # Count how many display edges have GNN scores
+    edges_with_scores = sum(
+        1
+        for e in display_subgraph.edges
+        if suspicion_scores.get((e.subject, e.predicate, e.object), 0.0) > 0.0
+    )
+    gnn_label = (
+        f" | GNN scores: {edges_with_scores}/{len(display_subgraph.edges)}"
+        if suspicion_scores
+        else ""
+    )
     st.caption(
-        f"Nodes: {len(display_subgraph.nodes)} | Edges: {len(display_subgraph.edges)} | k={subgraph.k_hops}{total_label}"
+        f"Nodes: {len(display_subgraph.nodes)} | Edges: {len(display_subgraph.edges)} | k={subgraph.k_hops}{total_label}{gnn_label}"
     )
 
     # Edge origin filter
