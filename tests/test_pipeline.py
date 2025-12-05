@@ -10,6 +10,7 @@ from kg_skeptic.pipeline import (
     NormalizedEntity,
     NormalizedTriple,
     SkepticPipeline,
+    NormalizationResult,
     _build_text_nli_facts,
 )
 from kg_skeptic.ner import NERBackend
@@ -228,9 +229,11 @@ class TestSkepticPipeline:
         )
 
         # With evidence-driven scoring, claims without verified positive evidence
-        # naturally score below PASS threshold and get WARN verdict.
-        assert result.score < pipeline.PASS_THRESHOLD
+        # should not receive a clean PASS verdict. The positive-evidence gate
+        # should downgrade to WARN even if the raw score would otherwise PASS.
         assert result.verdict == "WARN"
+        trace_ids = {entry.rule_id for entry in result.evaluation.trace.entries}
+        assert "gate:positive_evidence_required" in trace_ids
 
     def test_has_positive_evidence_helper(self) -> None:
         """Positive evidence helper should reflect multi-source or curated KG support."""
@@ -396,6 +399,330 @@ class TestTextLevelNLI:
         example0 = refute_examples[0]
         assert example0["citation"] == "PMID:67890"
         assert "not associated" in example0["sentence"]
+
+
+class TestVerdictGates:
+    """Tests for score-independent verdict gates in SkepticPipeline.evaluate_audit."""
+
+    class _DummyTrace:
+        def __init__(self) -> None:
+            self.entries: list[object] = []
+
+        def add(self, entry: object) -> None:
+            self.entries.append(entry)
+
+    class _DummyEngine:
+        def __init__(self, base_score: float) -> None:
+            self._features = {"base": base_score}
+
+        def evaluate(self, facts: dict[str, object]) -> object:  # pragma: no cover - tiny shim
+            class _DummyEvaluation:
+                def __init__(self, features: dict[str, float], trace_cls: type) -> None:
+                    self.features = dict(features)
+                    self.trace = trace_cls()
+
+            return _DummyEvaluation(self._features, TestVerdictGates._DummyTrace)
+
+    @staticmethod
+    def _make_minimal_normalization() -> NormalizationResult:
+        claim = Claim(id="c1", text="Test claim.", evidence=[], metadata={})
+        subject = NormalizedEntity(id="S:1", label="S", category="gene", ancestors=[])
+        obj = NormalizedEntity(id="O:1", label="O", category="disease", ancestors=[])
+        triple = NormalizedTriple(
+            subject=subject,
+            predicate="biolink:related_to",
+            object=obj,
+            qualifiers={},
+        )
+        return NormalizationResult(claim=claim, triple=triple, citations=[])
+
+    @staticmethod
+    def _base_facts() -> dict[str, object]:
+        """Baseline facts representing a clean, supported association claim."""
+        return {
+            "claim": {
+                "predicate": "biolink:related_to",
+                "citations": [],
+                "citation_count": 0,
+            },
+            "type": {
+                "domain_category": "gene",
+                "range_category": "disease",
+                "domain_valid": True,
+                "range_valid": True,
+                "is_self_referential": False,
+                "is_spurious_self_referential": False,
+            },
+            "ontology": {
+                "is_sibling_conflict": False,
+            },
+            "evidence": {
+                "retracted": [],
+                "concerns": [],
+                "clean": [],
+                "retracted_count": 0,
+                "concern_count": 0,
+                "clean_count": 0,
+                "has_multiple_sources": True,
+            },
+            "curated_kg": {
+                "disgenet_checked": False,
+                "disgenet_support": False,
+                "monarch_checked": False,
+                "monarch_support": False,
+                "curated_kg_match": False,
+            },
+            "conflicts": {
+                "self_negation_conflict": False,
+                "opposite_predicate_same_context": False,
+            },
+            "extraction": {
+                "predicate_provided": True,
+                "predicate_is_fallback": False,
+                "has_hedging_language": False,
+                "hedging_terms": [],
+                "citation_count": 0,
+                "is_low_confidence": False,
+            },
+            "tissue": {
+                "is_mismatch": False,
+                "mismatch_details": "",
+            },
+            "text_nli": {
+                "checked": False,
+                "sentence_count": 0,
+                "support_count": 0,
+                "refute_count": 0,
+                "nei_count": 0,
+                "support_examples": [],
+                "refute_examples": [],
+                "nei_examples": [],
+                "s_pos_total": 0.0,
+                "s_neg_total": 0.0,
+                "m_lit": 0.0,
+                "n_support": 0,
+                "n_contradict": 0,
+                "paper_aggregates": [],
+                "claim_predicate_class": "association",
+                "predicate_mismatch_count": 0,
+                "claim_is_hedged": False,
+                "hedging_terms": [],
+            },
+        }
+
+    def _run_with_facts(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        facts: dict[str, object],
+        base_score: float = 1.0,
+    ) -> tuple[str, list[object]]:
+        """Helper to run evaluate_audit with synthetic facts."""
+        from kg_skeptic import pipeline as pipeline_mod
+
+        def fake_build_rule_facts(triple, provenance, *, claim=None, context_conflicts=None):
+            _ = triple, provenance, claim, context_conflicts
+            return facts
+
+        monkeypatch.setattr(pipeline_mod, "build_rule_facts", fake_build_rule_facts)
+
+        pipeline = SkepticPipeline(config={"use_suspicion_gnn": False})
+        pipeline.engine = self._DummyEngine(base_score=base_score)
+
+        normalization = self._make_minimal_normalization()
+        result = pipeline.evaluate_audit(normalization, provenance=[], audit_payload={})
+        trace_entries = getattr(result.evaluation.trace, "entries", [])
+        return result.verdict, trace_entries
+
+    def test_type_violation_forces_fail(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        facts = self._base_facts()
+        type_info = facts["type"]
+        assert isinstance(type_info, dict)
+        type_info["domain_valid"] = False
+
+        verdict, trace_entries = self._run_with_facts(monkeypatch, facts)
+        assert verdict == "FAIL"
+        rule_ids = [getattr(e, "rule_id", None) for e in trace_entries]
+        assert "gate:type_violation" in rule_ids
+
+    def test_spurious_self_referential_forces_fail(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        facts = self._base_facts()
+        type_info = facts["type"]
+        assert isinstance(type_info, dict)
+        type_info["is_spurious_self_referential"] = True
+
+        verdict, trace_entries = self._run_with_facts(monkeypatch, facts)
+        assert verdict == "FAIL"
+        rule_ids = [getattr(e, "rule_id", None) for e in trace_entries]
+        assert "gate:spurious_self_referential" in rule_ids
+
+    def test_sibling_conflict_downgrades_pass_to_warn(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        facts = self._base_facts()
+        ontology = facts["ontology"]
+        assert isinstance(ontology, dict)
+        ontology["is_sibling_conflict"] = True
+
+        verdict, trace_entries = self._run_with_facts(monkeypatch, facts)
+        assert verdict == "WARN"
+        rule_ids = [getattr(e, "rule_id", None) for e in trace_entries]
+        assert "gate:sibling_conflict" in rule_ids
+
+    def test_tissue_mismatch_downgrades_pass_to_warn(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        facts = self._base_facts()
+        tissue = facts["tissue"]
+        assert isinstance(tissue, dict)
+        tissue["is_mismatch"] = True
+        tissue["mismatch_details"] = "claimed UBERON:0000955 but evidence suggests UBERON:0002107"
+
+        verdict, trace_entries = self._run_with_facts(monkeypatch, facts)
+        assert verdict == "WARN"
+        rule_ids = [getattr(e, "rule_id", None) for e in trace_entries]
+        assert "gate:tissue_mismatch" in rule_ids
+
+    def test_self_negation_gate_forces_fail(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        facts = self._base_facts()
+        conflicts = facts["conflicts"]
+        assert isinstance(conflicts, dict)
+        conflicts["self_negation_conflict"] = True
+
+        verdict, trace_entries = self._run_with_facts(monkeypatch, facts)
+        assert verdict == "FAIL"
+        rule_ids = [getattr(e, "rule_id", None) for e in trace_entries]
+        assert "gate:self_negation" in rule_ids
+
+    def test_opposite_predicate_gate_forces_fail(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        facts = self._base_facts()
+        conflicts = facts["conflicts"]
+        assert isinstance(conflicts, dict)
+        conflicts["opposite_predicate_same_context"] = True
+
+        verdict, trace_entries = self._run_with_facts(monkeypatch, facts)
+        assert verdict == "FAIL"
+        rule_ids = [getattr(e, "rule_id", None) for e in trace_entries]
+        assert "gate:opposite_predicate" in rule_ids
+
+    def test_low_confidence_gate_forces_fail(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        facts = self._base_facts()
+        extraction = facts["extraction"]
+        assert isinstance(extraction, dict)
+        extraction["is_low_confidence"] = True
+
+        verdict, trace_entries = self._run_with_facts(monkeypatch, facts)
+        assert verdict == "FAIL"
+        rule_ids = [getattr(e, "rule_id", None) for e in trace_entries]
+        assert "gate:low_confidence" in rule_ids
+
+    def test_nli_strong_contradiction_forces_fail(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        facts = self._base_facts()
+        text_nli = facts["text_nli"]
+        assert isinstance(text_nli, dict)
+        text_nli.update(
+            {
+                "checked": True,
+                "n_support": 1,
+                "n_contradict": 2,
+                "s_neg_total": 0.9,
+                "m_lit": -1.0,
+                "paper_aggregates": [
+                    {
+                        "citation": "PMID:1",
+                        "paper_type": "primary_human",
+                        "s_neg": 0.95,
+                    }
+                ],
+            }
+        )
+
+        verdict, trace_entries = self._run_with_facts(monkeypatch, facts)
+        assert verdict == "FAIL"
+        rule_ids = [getattr(e, "rule_id", None) for e in trace_entries]
+        assert "gate:nli_strong_contradiction" in rule_ids
+
+    def test_nli_no_support_with_contradiction_for_causal_claim(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        facts = self._base_facts()
+        text_nli = facts["text_nli"]
+        assert isinstance(text_nli, dict)
+        text_nli.update(
+            {
+                "checked": True,
+                "n_support": 0,
+                "n_contradict": 1,
+                "s_neg_total": 0.5,
+                "m_lit": -0.5,
+                "claim_predicate_class": "causal",
+            }
+        )
+
+        verdict, trace_entries = self._run_with_facts(monkeypatch, facts)
+        assert verdict == "FAIL"
+        rule_ids = [getattr(e, "rule_id", None) for e in trace_entries]
+        assert "gate:nli_no_support_with_contradiction" in rule_ids
+
+    def test_nli_weak_causal_support_downgrades_pass_to_warn(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        facts = self._base_facts()
+        text_nli = facts["text_nli"]
+        assert isinstance(text_nli, dict)
+        text_nli.update(
+            {
+                "checked": True,
+                "n_support": 1,  # < 2
+                "n_contradict": 0,
+                "s_neg_total": 0.0,
+                "m_lit": 0.5,
+                "claim_predicate_class": "causal",
+            }
+        )
+
+        verdict, trace_entries = self._run_with_facts(monkeypatch, facts)
+        assert verdict == "WARN"
+        rule_ids = [getattr(e, "rule_id", None) for e in trace_entries]
+        assert "gate:nli_weak_causal_support" in rule_ids
+
+    def test_nli_mixed_evidence_marks_contested_and_may_downgrade(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        facts = self._base_facts()
+        text_nli = facts["text_nli"]
+        assert isinstance(text_nli, dict)
+        text_nli.update(
+            {
+                "checked": True,
+                "n_support": 1,
+                "n_contradict": 1,
+                "m_lit": 0.1,  # |M_lit| < 0.4
+                "claim_predicate_class": "association",
+            }
+        )
+
+        verdict, trace_entries = self._run_with_facts(monkeypatch, facts)
+        assert verdict == "WARN"
+        rule_ids = [getattr(e, "rule_id", None) for e in trace_entries]
+        assert "gate:nli_mixed_evidence" in rule_ids
+
+    def test_nli_hedged_claim_raises_threshold_and_downgrades(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        facts = self._base_facts()
+        text_nli = facts["text_nli"]
+        assert isinstance(text_nli, dict)
+        text_nli.update(
+            {
+                "checked": True,
+                "claim_is_hedged": True,
+                "hedging_terms": ["may"],
+            }
+        )
+
+        # Base score chosen between PASS threshold (0.0) and hedging threshold (0.85)
+        verdict, trace_entries = self._run_with_facts(monkeypatch, facts, base_score=0.8)
+        assert verdict == "WARN"
+        rule_ids = [getattr(e, "rule_id", None) for e in trace_entries]
+        assert "gate:nli_hedged_claim" in rule_ids
 
 
 class TestClaimNormalizerGLiNER:

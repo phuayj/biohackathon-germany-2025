@@ -39,6 +39,10 @@ def sample_facts() -> dict[str, dict[str, object]]:
             "concern_count": 0,
             "has_multiple_sources": True,
         },
+        # Explicitly mark NLI as unchecked so the multi_source_bonus rule applies.
+        "text_nli": {
+            "checked": False,
+        },
     }
 
 
@@ -47,11 +51,20 @@ def test_evaluate_returns_features_and_trace(sample_facts: dict[str, dict[str, o
     result = engine.evaluate(sample_facts)
 
     rule_ids = {rule.id for rule in engine.rules}
+    weights = {rule.id: rule.weight for rule in engine.rules}
+
     assert set(result.features.keys()) == rule_ids
-    assert pytest.approx(result.features["type_domain_range_valid"]) == 0.8
+    # Feature values should equal the corresponding rule weights when triggered.
+    assert pytest.approx(result.features["type_domain_range_valid"]) == pytest.approx(
+        weights["type_domain_range_valid"]
+    )
     assert result.features["type_domain_range_violation"] == 0.0
-    assert pytest.approx(result.features["ontology_closure_hpo"]) == 0.4
-    assert pytest.approx(result.features["multi_source_bonus"]) == 0.3
+    assert pytest.approx(result.features["ontology_closure_hpo"]) == pytest.approx(
+        weights["ontology_closure_hpo"]
+    )
+    assert pytest.approx(result.features["multi_source_bonus"]) == pytest.approx(
+        weights["multi_source_bonus"]
+    )
     assert result.features["minimal_evidence"] == 0.0
 
     trace_ids = {entry.rule_id for entry in result.trace.entries}

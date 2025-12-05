@@ -11,15 +11,24 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass, field
+from types import TracebackType
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Sequence, TypedDict
-from collections.abc import Mapping
+from typing import TYPE_CHECKING, Sequence, TypedDict, cast
+from collections.abc import Iterable, Mapping
 
 from kg_skeptic.mcp.ids import IDNormalizerTool
 from kg_skeptic.mcp.pathways import PathwayTool
 from kg_skeptic.mcp.disgenet import DisGeNETTool
-from kg_skeptic.mcp.kg import EdgeQueryResult, InMemoryBackend, KGBackend, KGEdge, KGTool
+from kg_skeptic.mcp.kg import (
+    EdgeQueryResult,
+    InMemoryBackend,
+    KGBackend,
+    KGEdge,
+    KGTool,
+    Neo4jBackend,
+    Neo4jSession,
+)
 from kg_skeptic.mcp.semmed import LiteratureTriple, SemMedDBTool
 from kg_skeptic.mcp.indra import INDRATool
 from kg_skeptic.mcp.cosmic import COSMICTool
@@ -2194,6 +2203,24 @@ class SkepticPipeline:
         self._suspicion_model: RGCNSuspicionModel | None = None
         self._suspicion_meta: dict[str, object] | None = None
 
+        # Suspicion GNN backend configuration.
+        # Options: "mini_kg" (default), "neo4j", or "auto" (use neo4j if available)
+        suspicion_gnn_backend_raw = self.config.get("suspicion_gnn_backend", "mini_kg")
+        self._suspicion_gnn_backend_type: str = (
+            str(suspicion_gnn_backend_raw) if suspicion_gnn_backend_raw else "mini_kg"
+        )
+
+        # Optional Neo4j session for GNN inference (passed directly or built from env)
+        self._suspicion_neo4j_session: Neo4jSession | None
+        suspicion_neo4j_session_raw = self.config.get("suspicion_gnn_neo4j_session")
+        if suspicion_neo4j_session_raw is not None and hasattr(suspicion_neo4j_session_raw, "run"):
+            self._suspicion_neo4j_session = cast(Neo4jSession, suspicion_neo4j_session_raw)
+        else:
+            self._suspicion_neo4j_session = None
+
+        # Cached backend for GNN inference (lazy-loaded)
+        self._suspicion_gnn_backend: KGBackend | None = None
+
     def _verdict_for_score(self, score: float) -> str:
         if score >= self.PASS_THRESHOLD:
             return "PASS"
@@ -2267,6 +2294,130 @@ class SkepticPipeline:
         except Exception:
             self._monarch_kg_tool = None
         return self._monarch_kg_tool
+
+    def _get_suspicion_gnn_backend(self) -> KGBackend | None:
+        """Lazily initialize the backend for suspicion GNN inference.
+
+        The backend type is controlled by the ``suspicion_gnn_backend`` config:
+        - "mini_kg": Use the in-memory mini KG slice (default, fast)
+        - "neo4j": Use a Neo4j backend for full-scale inference
+        - "auto": Try Neo4j first (from env vars), fall back to mini KG
+
+        For Neo4j, connection can be provided via:
+        - ``suspicion_gnn_neo4j_session`` config (a Neo4jSession-like object)
+        - Environment variables: NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
+
+        Returns:
+            KGBackend instance, or None if backend cannot be initialized.
+        """
+        if self._suspicion_gnn_backend is not None:
+            return self._suspicion_gnn_backend
+
+        backend_type = getattr(self, "_suspicion_gnn_backend_type", "mini_kg")
+
+        if backend_type == "neo4j":
+            backend = self._build_neo4j_backend_for_gnn()
+            if backend is not None:
+                self._suspicion_gnn_backend = backend
+                return backend
+            # Fall back to mini_kg if Neo4j fails
+            return self._load_mini_kg_for_gnn()
+
+        if backend_type == "auto":
+            # Try Neo4j first, fall back to mini_kg
+            backend = self._build_neo4j_backend_for_gnn()
+            if backend is not None:
+                self._suspicion_gnn_backend = backend
+                return backend
+            return self._load_mini_kg_for_gnn()
+
+        # Default: mini_kg
+        return self._load_mini_kg_for_gnn()
+
+    def _load_mini_kg_for_gnn(self) -> KGBackend | None:
+        """Load the in-memory mini KG backend for GNN inference."""
+        if self._suspicion_gnn_backend is not None:
+            return self._suspicion_gnn_backend
+
+        try:
+            from kg_skeptic.mcp.mini_kg import load_mini_kg_backend
+
+            self._suspicion_gnn_backend = load_mini_kg_backend()
+            return self._suspicion_gnn_backend
+        except Exception:
+            return None
+
+    def _build_neo4j_backend_for_gnn(self) -> KGBackend | None:
+        """Build a Neo4j backend for GNN inference.
+
+        Uses either a pre-configured session or builds one from environment.
+        """
+        # Check if a session was provided directly
+        session = getattr(self, "_suspicion_neo4j_session", None)
+        if session is not None:
+            try:
+                return Neo4jBackend(session)
+            except Exception:
+                pass
+
+        # Try to build from environment variables
+        uri = os.environ.get("NEO4J_URI")
+        user = os.environ.get("NEO4J_USER")
+        password = os.environ.get("NEO4J_PASSWORD")
+
+        if not uri or not user or not password:
+            return None
+
+        try:
+            from neo4j import GraphDatabase
+        except ImportError:
+            # neo4j driver not installed
+            return None
+
+        try:
+            from typing import Protocol
+
+            class _Neo4jSessionLike(Protocol):
+                def run(
+                    self,
+                    query: str,
+                    parameters: dict[str, object] | None = None,
+                ) -> object: ...
+
+                def __enter__(self) -> _Neo4jSessionLike: ...
+
+                def __exit__(
+                    self,
+                    exc_type: type[BaseException] | None,
+                    exc: BaseException | None,
+                    traceback: TracebackType | None,
+                ) -> bool | None: ...
+
+            class _Neo4jDriverLike(Protocol):
+                def session(self) -> _Neo4jSessionLike: ...
+
+            class _DriverSessionWrapper:
+                """Session wrapper matching the Neo4jSession protocol."""
+
+                def __init__(self, driver: _Neo4jDriverLike) -> None:
+                    self._driver = driver
+
+                def run(
+                    self,
+                    query: str,
+                    parameters: dict[str, object] | None = None,
+                ) -> object:
+                    with self._driver.session() as session:
+                        raw_result = session.run(query, parameters or {})
+                        records = list(cast(Iterable[object], raw_result))
+                    return records
+
+            from typing import cast
+
+            driver = GraphDatabase.driver(uri, auth=(user, password))
+            return Neo4jBackend(_DriverSessionWrapper(cast(_Neo4jDriverLike, driver)))
+        except Exception:
+            return None
 
     def _get_suspicion_model(self) -> tuple[RGCNSuspicionModel, dict[str, object]] | None:
         """Lazily load the Day 3 suspicion GNN model, if configured.
@@ -2355,13 +2506,18 @@ class SkepticPipeline:
         - model_path: Path to the model file (if configured)
         - loaded: Whether the model loaded successfully
         - has_error_type_head: Whether the model includes error type classification
+        - backend_type: The configured backend type (mini_kg, neo4j, or auto)
+        - backend_active: The actual backend type being used
         - error: Error message if loading failed
         """
+        backend_type = getattr(self, "_suspicion_gnn_backend_type", "mini_kg")
         status: dict[str, object] = {
             "enabled": getattr(self, "_use_suspicion_gnn", False),
             "model_path": str(self._suspicion_model_path) if self._suspicion_model_path else None,
             "loaded": False,
             "has_error_type_head": False,
+            "backend_type": backend_type,
+            "backend_active": None,
             "error": None,
         }
 
@@ -2384,6 +2540,16 @@ class SkepticPipeline:
         else:
             status["error"] = "Model failed to load (check PyTorch installation or model format)"
 
+        # Check which backend is active
+        backend = self._get_suspicion_gnn_backend()
+        if backend is not None:
+            if isinstance(backend, Neo4jBackend):
+                status["backend_active"] = "neo4j"
+            elif isinstance(backend, InMemoryBackend):
+                status["backend_active"] = "mini_kg"
+            else:
+                status["backend_active"] = type(backend).__name__
+
         return status
 
     def _compute_suspicion_gnn_scores(
@@ -2399,21 +2565,11 @@ class SkepticPipeline:
         if not getattr(self, "_use_suspicion_gnn", False):
             return {}
 
-        backend = getattr(self.normalizer, "backend", None)
-        if backend is None or not isinstance(backend, KGBackend):
+        # Get the backend for GNN inference based on configuration.
+        # This can be mini_kg (default), neo4j, or auto (tries neo4j first).
+        backend = self._get_suspicion_gnn_backend()
+        if backend is None:
             return {}
-
-        # The Day 3 prototype is trained on the mini KG slice; for now we
-        # use the in-memory backend for GNN inference even when the main
-        # backend is Neo4j or another type.
-        if not isinstance(backend, InMemoryBackend):
-            # Try to load the mini KG backend for GNN inference
-            try:
-                from kg_skeptic.mcp.mini_kg import load_mini_kg_backend
-
-                backend = load_mini_kg_backend()
-            except Exception:
-                return {}
 
         bundle = self._get_suspicion_model()
         if bundle is None:

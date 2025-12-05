@@ -125,6 +125,12 @@ def _build_pipeline(ner_backend: NERBackend) -> SkepticPipeline:
         config["use_suspicion_gnn"] = True
         config["suspicion_gnn_model_path"] = suspicion_model_path
 
+        # Wire suspicion GNN to use the same backend type as the main pipeline.
+        # When Neo4j is the main backend, the suspicion GNN should also use Neo4j
+        # for building subgraphs during inference.
+        if isinstance(backend, Neo4jBackend):
+            config["suspicion_gnn_backend"] = "neo4j"
+
     return SkepticPipeline(config=config, normalizer=normalizer)
 
 

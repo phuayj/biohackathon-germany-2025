@@ -356,22 +356,72 @@ def _get_pipeline(ner_backend: NERBackend = NERBackend.DICTIONARY) -> SkepticPip
             config["use_suspicion_gnn"] = True
             config["suspicion_gnn_model_path"] = suspicion_model_path
 
+            # Wire suspicion GNN to use the same backend type as the main pipeline.
+            # When Neo4j is the main backend, the suspicion GNN should also use Neo4j
+            # for building subgraphs during inference.
+            if isinstance(kg_backend, Neo4jBackend):
+                config["suspicion_gnn_backend"] = "neo4j"
+
         st.session_state[cache_key] = SkepticPipeline(config=config, normalizer=normalizer)
     return cast(SkepticPipeline, st.session_state[cache_key])
 
 
+# Entity source badge configuration
+# Maps source strings to (background_color, display_label)
+ENTITY_SOURCE_BADGES: dict[str, tuple[str, str]] = {
+    # NER + KG normalization
+    "gliner2+mini_kg": ("#5c6bc0", "GLiNER2+KG"),
+    "pubmedbert+mini_kg": ("#5c6bc0", "OpenMed+KG"),
+    "dictionary+mini_kg": ("#26a69a", "Dict+KG"),
+    # NER only (no KG normalization)
+    "gliner2": ("#7e57c2", "GLiNER2"),
+    "pubmedbert": ("#7e57c2", "OpenMed"),
+    "dictionary": ("#78909c", "Dict"),
+    # KG/ID normalization sources
+    "mini_kg": ("#26a69a", "KG"),
+    "ids.hgnc": ("#2e7d32", "HGNC"),
+    "ids.mondo": ("#1565c0", "MONDO"),
+    "ids.hpo": ("#6a1b9a", "HPO"),
+    # Pathway sources
+    "pathways.reactome": ("#e65100", "Reactome"),
+    "pathways.go": ("#00838f", "GO"),
+    # Other sources
+    "payload": ("#546e7a", "Input"),
+    "evidence": ("#795548", "Evidence"),
+    "fixture": ("#607d8b", "Fixture"),
+}
+
+
+def _get_entity_source_badge(source: str | None) -> str:
+    """Generate HTML badge for entity source."""
+    if not source:
+        return ""
+
+    # Check exact match first
+    if source in ENTITY_SOURCE_BADGES:
+        color, label = ENTITY_SOURCE_BADGES[source]
+        return f'<span style="background-color: {color}; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.7em; margin-left: 4px;">{label}</span>'
+
+    # Check prefix matches (e.g., "pathways.go" matches "pathways.")
+    for prefix in ["pathways.", "ids."]:
+        if source.startswith(prefix):
+            # Extract the suffix for display
+            suffix = source[len(prefix) :].upper()
+            color = "#e65100" if prefix == "pathways." else "#2e7d32"
+            return f'<span style="background-color: {color}; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.7em; margin-left: 4px;">{suffix}</span>'
+
+    # Check if source contains "+mini_kg" pattern (NER+KG)
+    if "+mini_kg" in source:
+        ner_part = source.replace("+mini_kg", "").upper()
+        return f'<span style="background-color: #5c6bc0; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.7em; margin-left: 4px;">{ner_part}+KG</span>'
+
+    # Fallback: show source as-is with neutral color
+    return f'<span style="background-color: #78909c; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.7em; margin-left: 4px;">{source}</span>'
+
+
 def render_entity_badge(entity: EntityMention) -> None:
     """Render an entity as a styled badge."""
-    # Determine source badge
-    source = entity.source
-    if source == "gliner2+mini_kg":
-        source_badge = '<span style="background-color: #5c6bc0; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.7em; margin-left: 4px;">GLiNER2+KG</span>'
-    elif source == "gliner2":
-        source_badge = '<span style="background-color: #7e57c2; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.7em; margin-left: 4px;">GLiNER2</span>'
-    elif source == "mini_kg":
-        source_badge = '<span style="background-color: #26a69a; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.7em; margin-left: 4px;">KG</span>'
-    else:
-        source_badge = f'<span style="background-color: #78909c; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.7em; margin-left: 4px;">{source}</span>'
+    source_badge = _get_entity_source_badge(entity.source)
 
     if entity.norm_id:
         st.markdown(
@@ -1519,16 +1569,28 @@ def main() -> None:
 
         st.divider()
         st.caption("**Entity Source Legend:**")
+        # NER + KG normalization
         st.markdown(
-            '<span style="background-color: #5c6bc0; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.8em;">GLiNER2+KG</span> GLiNER2 + KG normalized',
+            '<span style="background-color: #5c6bc0; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.8em;">GLiNER2+KG</span> NER + KG normalized',
+            unsafe_allow_html=True,
+        )
+        # NER only
+        st.markdown(
+            '<span style="background-color: #7e57c2; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.8em;">GLiNER2</span> NER extraction only',
+            unsafe_allow_html=True,
+        )
+        # KG/Dictionary match
+        st.markdown(
+            '<span style="background-color: #26a69a; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.8em;">KG</span> KG/Dictionary match',
+            unsafe_allow_html=True,
+        )
+        # ID normalization
+        st.markdown(
+            '<span style="background-color: #2e7d32; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.8em;">HGNC</span> ID normalized (gene)',
             unsafe_allow_html=True,
         )
         st.markdown(
-            '<span style="background-color: #7e57c2; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.8em;">GLiNER2</span> GLiNER2 extraction only',
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            '<span style="background-color: #26a69a; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.8em;">KG</span> Dictionary/KG match',
+            '<span style="background-color: #1565c0; color: white; padding: 1px 4px; border-radius: 3px; font-size: 0.8em;">MONDO</span> ID normalized (disease)',
             unsafe_allow_html=True,
         )
 
