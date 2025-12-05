@@ -495,19 +495,32 @@ class IDNormalizerTool:
 
         # Best-effort extraction of UMLS CUIs from OLS xrefs, when available.
         umls_ids: list[str] = []
-        xref_value = term.get("obo_xref") or term.get("database_cross_reference")
-        if isinstance(xref_value, list):
-            for raw in xref_value:
-                if not isinstance(raw, str):
-                    continue
-                value = raw.strip()
-                if not value:
-                    continue
-                # Common patterns: "UMLS:C0006142", "UMLS_C0006142"
-                if value.upper().startswith("UMLS:"):
-                    umls_ids.append(value.split(":", 1)[1])
-                elif value.upper().startswith("UMLS_"):
-                    umls_ids.append(value)
+        # Try structured obo_xref first (list of dicts)
+        obo_xref = term.get("obo_xref")
+        if isinstance(obo_xref, list):
+            for xref in obo_xref:
+                if isinstance(xref, Mapping):
+                    db = xref.get("database", "")
+                    xid = xref.get("id", "")
+                    if isinstance(db, str) and db.upper() == "UMLS" and isinstance(xid, str):
+                        umls_ids.append(xid)
+        # Also check annotation.database_cross_reference (list of strings)
+        annotation = term.get("annotation")
+        if isinstance(annotation, Mapping):
+            db_xref = annotation.get("database_cross_reference")
+            if isinstance(db_xref, list):
+                for raw in db_xref:
+                    if not isinstance(raw, str):
+                        continue
+                    value = raw.strip()
+                    # Common patterns: "UMLS:C0006142", "UMLS_C0006142"
+                    if value.upper().startswith("UMLS:"):
+                        cui = value.split(":", 1)[1]
+                        if cui not in umls_ids:
+                            umls_ids.append(cui)
+                    elif value.upper().startswith("UMLS_"):
+                        if value not in umls_ids:
+                            umls_ids.append(value)
 
         return NormalizedID(
             input_value=mondo_id,
@@ -565,26 +578,23 @@ class IDNormalizerTool:
 
         doc = docs_list[0]
         obo_id = cast(Optional[str], doc.get("obo_id"))
+
+        # Search endpoint returns minimal data; do a follow-up lookup by ID
+        # to get full details including UMLS xrefs.
+        if obo_id:
+            full_result = self._lookup_mondo_by_id(obo_id)
+            if full_result.found:
+                # Preserve the original search term as input_value
+                full_result.input_value = term
+                return full_result
+
+        # Fallback if ID lookup fails
         label = cast(Optional[str], doc.get("label"))
         synonym_value = doc.get("synonym", [])
         synonym_list = synonym_value if isinstance(synonym_value, list) else []
         synonyms = [str(s) for s in synonym_list]
         ancestors = self._get_obo_ancestors("mondo", obo_id)
 
-        # Best-effort extraction of UMLS CUIs from OLS search docs.
-        umls_ids: list[str] = []
-        xref_value = doc.get("obo_xref") or doc.get("database_cross_reference")
-        if isinstance(xref_value, list):
-            for raw in xref_value:
-                if not isinstance(raw, str):
-                    continue
-                value = raw.strip()
-                if not value:
-                    continue
-                if value.upper().startswith("UMLS:"):
-                    umls_ids.append(value.split(":", 1)[1])
-                elif value.upper().startswith("UMLS_"):
-                    umls_ids.append(value)
         return NormalizedID(
             input_value=term,
             input_type=IDType.MONDO,
@@ -596,7 +606,7 @@ class IDNormalizerTool:
             metadata={
                 "iri": doc.get("iri"),
                 "ancestors": ancestors,
-                "umls_ids": umls_ids,
+                "umls_ids": [],
             },
             provenance=make_live_provenance(source_db="ols.mondo"),
         )

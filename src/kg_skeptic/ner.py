@@ -145,7 +145,7 @@ def _get_openmed_pipeline() -> TokenClassificationPipeline:
                 hf_pipeline(
                     task="token-classification",
                     model=OPENMED_MODEL_NAME,
-                    aggregation_strategy="simple",
+                    aggregation_strategy="first",
                 ),
             )
         except ImportError as e:
@@ -402,11 +402,17 @@ class PubMedBertExtractor:
 
             # Only include if the mapped label is in our requested entity types
             if mapped_label in self.entity_types:
-                word_obj = entity.get("word")
-                if isinstance(word_obj, str):
-                    entity_text = word_obj.strip()
-                    if entity_text:
-                        entities.append(ExtractedEntity(text=entity_text, label=mapped_label))
+                # Use position-based extraction from original text for accuracy
+                start = entity.get("start")
+                end = entity.get("end")
+                if isinstance(start, int) and isinstance(end, int):
+                    entity_text = text[start:end].strip()
+                else:
+                    # Fallback to word field if positions unavailable
+                    word_obj = entity.get("word")
+                    entity_text = word_obj.strip() if isinstance(word_obj, str) else ""
+                if entity_text:
+                    entities.append(ExtractedEntity(text=entity_text, label=mapped_label))
 
         return entities
 

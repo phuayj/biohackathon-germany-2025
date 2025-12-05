@@ -122,14 +122,15 @@
 - [ ] **OntologyMismatch:** Suggest nearest child/parent HPO term with evidence.
 - [ ] **RetractedSupport:** Replace with alternate PMIDs seen in subgraph for same relation type.
 - [ ] **TypeViolation:** Propose allowed relation types given domain/range.
+- [x] **Evidence patches:** UI suggests adding evidence for unsupported claims or checking concerns.
 
 ### Reliability & Caching
-- [ ] Disk cache for all tool calls.
-- [ ] Graceful fallbacks (if Crossref down, show WARN but don't auto-PASS).
+- [x] Disk cache for all tool calls.
+- [x] Graceful fallbacks (if Crossref down, show WARN, don't auto-PASS).
 - [ ] Deterministic card generation: all numbers passed as fixed fields; LLM only writes connective text.
 
 ### Polish
-- [ ] UI badges, copy-to-clipboard JSON, "Not medical advice" banner.
+- [x] UI badges, copy-to-clipboard JSON, "Not medical advice" banner.
 - [ ] Logging: anonymized audit logs for reproducibility.
 
 **Definition of Done:** Quantitative metrics table; polished cards with reliable, deterministic content; sub-3s typical audits with warm cache.
@@ -141,9 +142,9 @@
 **Goals:** Easy to run, hard to break, great to watch.
 
 ### Demo Script
-- [ ] **Scene A (clean claim):** PASS with multi-source support; show subgraph; talk through rules.
-- [ ] **Scene B (tainted claim):** FAIL due to retraction; re-run with "Auditor OFF" to show what would have slipped through.
-- [ ] **Scene C (fix):** Accept patch suggestion → re-audit → PASS/WARN.
+- [x] **Scene A (clean claim):** PASS with multi-source support; show subgraph; talk through rules (Implemented via Demo Tabs).
+- [x] **Scene B (tainted claim):** FAIL due to retraction; re-run with "Auditor OFF" to show what would have slipped through.
+- [x] **Scene C (fix):** Accept patch suggestion → re-audit → PASS/WARN.
 
 ### Packaging
 - [ ] `docker compose up` brings: MCP tools, Streamlit UI, agent service.
@@ -155,7 +156,7 @@
 - [ ] Short screen-capture of flow for judges.
 
 ### Stretch Toggles (If Time)
-- [ ] **Strict vs Lenient auditor** switch.
+- [x] **Strict vs Lenient auditor** switch (Implemented as "Ontology Strictness").
 - [ ] **Provenance explain:** Link from each edge to exact PMIDs/DOIs in side panel.
 - [ ] **Batch mode:** Upload list of claims; get CSV of audit results.
 - [ ] **Negation & variant cue hardening:** Replace hard-coded negation phrases and mutation keywords with a data-driven pattern set or lightweight NLP to improve both self-negation and variant-context detection.

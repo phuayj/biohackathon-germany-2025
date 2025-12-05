@@ -105,14 +105,18 @@ def fetch_citations_for_pmids(
             last_error = e
             if attempt < max_retries:
                 wait_time = RETRY_BACKOFF_BASE ** (attempt + 1)
-                logger.warning(f"IncompleteRead on attempt {attempt + 1}, retrying in {wait_time}s...")
+                logger.warning(
+                    f"IncompleteRead on attempt {attempt + 1}, retrying in {wait_time}s..."
+                )
                 time.sleep(wait_time)
         except HTTPError as e:
             # Retry on 5xx server errors
             if e.code >= 500 and attempt < max_retries:
                 last_error = e
                 wait_time = RETRY_BACKOFF_BASE ** (attempt + 1)
-                logger.warning(f"HTTP {e.code} on attempt {attempt + 1}, retrying in {wait_time}s...")
+                logger.warning(
+                    f"HTTP {e.code} on attempt {attempt + 1}, retrying in {wait_time}s..."
+                )
                 time.sleep(wait_time)
             else:
                 raise RuntimeError(f"Failed to fetch citation data: {e}") from e

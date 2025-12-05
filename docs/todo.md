@@ -171,7 +171,7 @@
 
 #### Evidence Overlays
 - [ ] **Freshness overlay:** Gray gradient by age of newest PMID (darker = older).
-- [ ] **Multiplicity overlay:** Edge thickness proportional to number of independent sources.
+- [x] **Multiplicity overlay:** Edge thickness proportional to number of independent sources.
 - [x] Add `overlay_evidence(edge)` function that enriches edges with freshest_year, has_retraction, source_count.
 
 #### Evidence-Driven Subgraph Construction
@@ -203,7 +203,7 @@
 - [x] "Why flagged?" drawer: top rules + top suspicious edges.
 - [x] One-click patch suggestions.
 - [ ] Surface per-edge rule feature aggregates in the subgraph edge table (e.g., show `rule_feature_sum` and `is_claim_edge_for_rule_features`).
-- [ ] Add a concise legend in the subgraph UI explaining edge origin categories (`paper`, `curated`, `agent`) and how filters affect which edges are shown.
+- [x] Add a concise legend in the subgraph UI explaining edge origin categories (`paper`, `curated`, `agent`) and how filters affect which edges are shown.
 
 #### Edge Inspector Panel (Done)
 - [x] Inline Edge Inspector on edge click showing:
@@ -255,14 +255,14 @@
 
 ### Polish
 - [ ] Deterministic card generation (numbers as fixed fields, LLM only writes connective text).
-- [ ] UI: badges, copy-to-clipboard JSON, "Not medical advice" banner.
+- [x] UI: badges, copy-to-clipboard JSON, "Not medical advice" banner.
 - [ ] Anonymized audit logs for reproducibility.
 - [ ] Improve negation detection beyond hard-coded phrases (data-driven patterns or lightweight NLP cues) alongside variant cue hardening.
 - [ ] Refine variant-context detection beyond simple mutation keywords (e.g., better patterns/NER for `has_variant_context` on GeneToDiseaseAssociation edges).
-- [ ] Tighten Edge Inspector rule footprint to only show truly edge/evidence-level rules (type/ontology/NLI gates stay at claim level) and ensure wording is edge-specific.
-- [ ] Attach explicit evidence/source identifiers to Neo4j/BioCypher edges where possible so Edge Inspector can surface PMIDs/DOIs/GO/Reactome IDs instead of "Sources: (none)".
+- [x] Tighten Edge Inspector rule footprint to only show truly edge/evidence-level rules (type/ontology/NLI gates stay at claim level) and ensure wording is edge-specific.
+- [x] Attach explicit evidence/source identifiers to Neo4j/BioCypher edges where possible so Edge Inspector can surface PMIDs/DOIs/GO/Reactome IDs instead of "Sources: (none)".
 - [ ] Consider enriching Neo4j edges with suspicion/error-type overlays (or add a mini-KG-backed "evidence overlay" mode) so Edge Inspector can display GNN-based suspicion and error type predictions for graph edges.
-- [x] Modernize predicate polarity detection using pattern sets or lightweight classifiers (beyond manual verb lists) and expose configurable synonym maps.
+- [ ] Modernize predicate polarity detection using pattern sets or lightweight classifiers (beyond manual verb lists) and expose configurable synonym maps.
 - [ ] Add corpus-derived predicate canonicalization (embedding/alias lookup) so opposite-predicate detection covers nuanced phrasing.
 - [ ] Make NLI paper type classifiers data-driven: replace hardcoded REVIEW_INDICATORS, ANIMAL_STUDY_INDICATORS, HUMAN_STUDY_INDICATORS with configurable patterns or lightweight ML-based classification using MeSH terms/publication types.
 
@@ -278,10 +278,10 @@
 ## Day 5 — Demo & Packaging
 
 ### Demo Scenarios
-- [ ] **Scene A (clean claim):** PASS with multi-source support; show subgraph; explain rules.
-- [ ] **Scene B (tainted claim):** FAIL due to retraction; re-run with "Auditor OFF" comparison.
-- [ ] **Scene C (fix):** Accept patch suggestion → re-audit → PASS/WARN.
-- [ ] **A/B "Frozen vs Live" demo:** Run same claim in frozen mode (cached) vs live mode (refetch + overlay) to show graph reacting to evidence changes.
+- [x] **Scene A (clean claim):** PASS with multi-source support; show subgraph; explain rules.
+- [x] **Scene B (tainted claim):** FAIL due to retraction; re-run with "Auditor OFF" comparison.
+- [x] **Scene C (fix):** Accept patch suggestion → re-audit → PASS/WARN.
+- [x] **A/B "Frozen vs Live" demo:** Run same claim in frozen mode (cached) vs live mode (refetch + overlay) to show graph reacting to evidence changes.
 
 ### Packaging
 - [ ] `docker compose up` brings: MCP tools, Streamlit UI, agent service.
@@ -295,7 +295,7 @@
 - [ ] 20–30s screen capture showing edges changing color/width as evidence updates (live overlay demo).
 
 ### Stretch Features (If Time)
-- [ ] **Strict vs Lenient auditor** toggle:
+- [x] **Strict vs Lenient auditor** toggle:
   - **Strict:** α=1.5, θ⁻=0.6, require `N_sup≥2` (primary human) for PASS on causal predicates.
   - **Lenient:** α=1.2, allow PASS with `N_sup≥1` if predicate is **associated_with** and no contradictions.
 - [ ] **Provenance explain:** Link from each edge to exact PMIDs/DOIs.
