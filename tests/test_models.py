@@ -1,11 +1,11 @@
-"""Tests for KG Skeptic models and JSON schema validation."""
+"""Tests for NERVE models and JSON schema validation."""
 
 import json
 from pathlib import Path
 
 import pytest
 
-from kg_skeptic.models import (
+from nerve.models import (
     Claim,
     EntityMention,
     Finding,
@@ -13,7 +13,7 @@ from kg_skeptic.models import (
     Severity,
     SuggestedFix,
 )
-from kg_skeptic.schemas import REPORT_SCHEMA_PATH
+from nerve.schemas import REPORT_SCHEMA_PATH
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 

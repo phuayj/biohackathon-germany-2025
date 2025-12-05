@@ -5,7 +5,7 @@ used from notebooks or a future training script without wiring it into
 the main pipeline yet.
 
 Key pieces:
-- ``subgraph_to_tensors``: convert a :class:`kg_skeptic.subgraph.Subgraph`
+- ``subgraph_to_tensors``: convert a :class:`nerve.subgraph.Subgraph`
   instance into PyTorch tensors that are directly usable with an
   R‑GCN‑style model (node features, edge index, edge types, edge
   feature vectors including rule feature aggregates).
@@ -38,11 +38,11 @@ except ImportError as exc:  # pragma: no cover - exercised via tests with import
     raise RuntimeError(
         "The suspicion GNN module requires PyTorch. Install torch first, "
         "for example via `pip install torch` in an environment that "
-        "supports it, then re‑import `kg_skeptic.suspicion_gnn`."
+        "supports it, then re‑import `nerve.suspicion_gnn`."
     ) from exc
 
-from kg_skeptic.error_types import ErrorType
-from kg_skeptic.subgraph import Subgraph
+from nerve.error_types import ErrorType
+from nerve.subgraph import Subgraph
 
 # Number of error type classes (TypeViolation, RetractedSupport, WeakEvidence, OntologyMismatch)
 NUM_ERROR_TYPES = len(ErrorType)
@@ -529,7 +529,7 @@ def rank_suspicion(
     ----------
     subgraph:
         The Day 3 :class:`Subgraph` instance produced by
-        :func:`kg_skeptic.subgraph.build_pair_subgraph`.
+        :func:`nerve.subgraph.build_pair_subgraph`.
     model:
         A trained :class:`RGCNSuspicionModel` instance.
     device:

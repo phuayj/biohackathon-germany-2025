@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from kg_skeptic.pipeline import (
+from nerve.pipeline import (
     ClaimNormalizer,
     NormalizedEntity,
     NormalizedTriple,
@@ -13,13 +13,13 @@ from kg_skeptic.pipeline import (
     NormalizationResult,
     _build_text_nli_facts,
 )
-from kg_skeptic.ner import NERBackend
-from kg_skeptic.provenance import CitationProvenance, ProvenanceFetcher
-from kg_skeptic.models import Claim
-from kg_skeptic.mcp.ids import NormalizedID, IDType
-from kg_skeptic.mcp.pathways import PathwayRecord
-from kg_skeptic.mcp.semmed import DBAPIConnection, LiteratureTriple, SemMedDBTool
-from kg_skeptic.mcp.indra import INDRATool
+from nerve.ner import NERBackend
+from nerve.provenance import CitationProvenance, ProvenanceFetcher
+from nerve.models import Claim
+from nerve.mcp.ids import NormalizedID, IDType
+from nerve.mcp.pathways import PathwayRecord
+from nerve.mcp.semmed import DBAPIConnection, LiteratureTriple, SemMedDBTool
+from nerve.mcp.indra import INDRATool
 
 
 class TestSkepticPipeline:
@@ -237,7 +237,7 @@ class TestSkepticPipeline:
 
     def test_has_positive_evidence_helper(self) -> None:
         """Positive evidence helper should reflect multi-source or curated KG support."""
-        from kg_skeptic.pipeline import SkepticPipeline as _Pipeline
+        from nerve.pipeline import SkepticPipeline as _Pipeline
 
         facts_multi = {
             "evidence": {"has_multiple_sources": True},
@@ -256,7 +256,7 @@ class TestSkepticPipeline:
         assert _Pipeline._has_positive_evidence(facts_curated) is True
         assert _Pipeline._has_positive_evidence(facts_none) is False
 
-    @patch("kg_skeptic.pipeline.KGTool")
+    @patch("nerve.pipeline.KGTool")
     def test_curated_kg_facts_use_monarch_backend(self, mock_kg_tool_cls: MagicMock) -> None:
         """Curated KG facts should incorporate Monarch-backed KG support when enabled."""
         # Arrange a Monarch-backed KGTool that reports a supporting edge
@@ -517,7 +517,7 @@ class TestVerdictGates:
         base_score: float = 1.0,
     ) -> tuple[str, list[object]]:
         """Helper to run evaluate_audit with synthetic facts."""
-        from kg_skeptic import pipeline as pipeline_mod
+        from nerve import pipeline as pipeline_mod
 
         def fake_build_rule_facts(triple, provenance, *, claim=None, context_conflicts=None):
             _ = triple, provenance, claim, context_conflicts
@@ -748,7 +748,7 @@ class TestClaimNormalizerGLiNER:
         assert result.triple.subject is not None
         assert result.triple.object is not None
 
-    @patch("kg_skeptic.pipeline.get_extractor")
+    @patch("nerve.pipeline.get_extractor")
     def test_normalizer_gliner_extraction(self, mock_get_extractor: MagicMock) -> None:
         """Test GLiNER2 entity extraction in normalizer."""
         # Setup mock extractor

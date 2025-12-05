@@ -1,6 +1,6 @@
-# KG Skeptic: Neuro-Symbolic Auditor for LLM Bio Agents
+# NERVE: Neuro-symbolic Evidence Review and Verification Engine
 
-A neuro-symbolic, knowledge-graph–verified “skeptic” that audits MCP-connected LLM bio-agents. It catches ontology violations, weak or contradictory claims, and missing evidence, then proposes minimal fixes that keep the agent’s intent intact.
+A neuro-symbolic, knowledge-graph–verified auditor for MCP-connected LLM bio-agents. NERVE catches ontology violations, weak or contradictory claims, and missing evidence, then proposes minimal fixes that keep the agent's intent intact.
 
 BioHackathon Germany 2025 event page: [4th BioHackathon Germany — Detection and extraction of datasets for training machine learning methods from literature](https://www.denbi.de/de-nbi-events/1935-4th-biohackathon-germany-detection-and-extraction-of-datasets-for-training-machine-learning-methods-from-literature).
 
@@ -14,7 +14,7 @@ BioHackathon Germany 2025 event page: [4th BioHackathon Germany — Detection an
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           KG-SKEPTIC ARCHITECTURE                           │
+│                            NERVE ARCHITECTURE                               │
 └─────────────────────────────────────────────────────────────────────────────┘
 
   ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
@@ -77,10 +77,10 @@ BioHackathon Germany 2025 event page: [4th BioHackathon Germany — Detection an
   ┌───────────────────────────────────────────────────────────────────────────┐
   │  5. VERDICT & AUDIT CARD                                                  │
   │  ┌──────────────────────────────────────────────────────────────────────┐ │
-  │  │  ┌────────┐  Score: 0.72  Rules: 3 fired  Evidence: 4 PMIDs        │ │
-  │  │  │  PASS  │  ────────────────────────────────────────────────────── │ │
-  │  │  └────────┘  Claim: BRCA1 → associated_with → Breast Cancer         │ │
-  │  │              ✓ type_domain_range   ✓ multi_source   ✓ curated_kg   │ │
+  │  │  ┌────────┐  Score: 0.72  Rules: 3 fired  Evidence: 4 PMIDs          │ │
+  │  │  │  PASS  │  ──────────────────────────────────────────────────────- │ │
+  │  │  └────────┘  Claim: BRCA1 → associated_with → Breast Cancer          │ │
+  │  │              ✓ type_domain_range   ✓ multi_source   ✓ curated_kg     │ │
   │  └──────────────────────────────────────────────────────────────────────┘ │
   └───────────────────────────────────────────────────────────────────────────┘
 
@@ -94,7 +94,7 @@ BioHackathon Germany 2025 event page: [4th BioHackathon Germany — Detection an
 2. **Claim extraction**: Turn outputs into atomic claims with typed entities and provenance.
 3. **KG + ontology checks**: Normalize entities to curated vocabularies (HGNC, UniProt, MONDO, HPO); validate relationships and constraints; flag ungrounded terms.
 4. **Reasoning**: Combine symbolic rules with LLM heuristics to score claim strength, detect contradictions, and spot missing evidence.
-5. **Skeptic report**: Return a structured critique (violations, confidence, evidence needs) and suggest minimal edits or tool calls to repair.
+5. **Audit report**: Return a structured critique (violations, confidence, evidence needs) and suggest minimal edits or tool calls to repair.
 
 ## Quick start
 
@@ -115,8 +115,8 @@ BioHackathon Germany 2025 event page: [4th BioHackathon Germany — Detection an
 ### Using conda
 - Create and activate a conda environment:
   ```bash
-  conda create -n kg-skeptic python=3.13 -y
-  conda activate kg-skeptic
+  conda create -n nerve python=3.13 -y
+  conda activate nerve
   ```
 - Install dependencies:
   ```bash
@@ -135,10 +135,10 @@ Launch the Streamlit UI:
 
 ```bash
 # uv
-uv run streamlit run src/kg_skeptic/app.py
+uv run streamlit run src/nerve/app.py
 
 # conda
-streamlit run src/kg_skeptic/app.py
+streamlit run src/nerve/app.py
 ```
 
 By default the app uses a pre-seeded in-memory mini KG for fast, offline checks.
@@ -149,18 +149,18 @@ For fast debugging and automated checks, you can run the same audit logic from t
 
 ```bash
 # List demo claims (from fixtures)
-uv run python -m kg_skeptic --list-demos
+uv run python -m nerve --list-demos
 
 # Audit a demo claim by fixture ID (e.g. REAL_D01)
-uv run python -m kg_skeptic --demo-id REAL_D01
+uv run python -m nerve --demo-id REAL_D01
 
 # Audit a custom free-text claim with evidence identifiers
-uv run python -m kg_skeptic \
+uv run python -m nerve \
   --claim-text "TP53 mutations are associated with lung cancer." \
   --evidence PMID:12345 PMID:67890
 
 # Optional: JSON output for diffing / automation
-uv run python -m kg_skeptic --demo-id REAL_D01 --format json
+uv run python -m nerve --demo-id REAL_D01 --format json
 ```
 
 ### Enabling Curated KG Signals
@@ -175,17 +175,17 @@ export DISGENET_API_KEY=your_disgenet_token
 ```
 
 **2. Monarch Initiative (Curated KG)**
-Enabled by default in the app. The skeptic queries the Monarch KG API for curated associations (gene-disease, gene-phenotype) to complement DisGeNET.
+Enabled by default in the app. The nerve queries the Monarch KG API for curated associations (gene-disease, gene-phenotype) to complement DisGeNET.
 
 To disable it (e.g., for offline use):
 ```bash
-export KG_SKEPTIC_USE_MONARCH_KG=false
+export NERVE_USE_MONARCH_KG=false
 ```
 
 **Example run with full features:**
 ```bash
 export DISGENET_API_KEY=your_key_here
-uv run streamlit run src/kg_skeptic/app.py
+uv run streamlit run src/nerve/app.py
 ```
 
 ### With a Neo4j backend
@@ -194,7 +194,7 @@ To use a local Neo4j graph instead:
 
 1. **Start Neo4j**:
    ```bash
-   docker run -d --name kg-skeptic-neo4j \
+   docker run -d --name nerve-neo4j \
      -p 7474:7474 -p 7687:7687 \
      -e NEO4J_AUTH=neo4j/password neo4j:5
    ```
@@ -205,23 +205,23 @@ To use a local Neo4j graph instead:
    export NEO4J_USER=neo4j
    export NEO4J_PASSWORD=password
 
-   uv run streamlit run src/kg_skeptic/app.py   # or just: streamlit run ...
+   uv run streamlit run src/nerve/app.py   # or just: streamlit run ...
    ```
 
 The sidebar will show "Using Neo4j KG backend" when connected. If configuration is missing, the app falls back to the in-memory mini KG.
 
 ## Project structure
 
-- **`src/kg_skeptic/`** — Core library: pipeline orchestration, data models, rule engine, NER, and provenance handling.
-- **`src/kg_skeptic/mcp/`** — MCP tool adapters for external services (Europe PMC, CrossRef, ID normalization) and the knowledge graph backends.
+- **`src/nerve/`** — Core library: pipeline orchestration, data models, rule engine, NER, and provenance handling.
+- **`src/nerve/mcp/`** — MCP tool adapters for external services (Europe PMC, CrossRef, ID normalization) and the knowledge graph backends.
 - **`rules.yaml`** — Declarative audit rules (type constraints, ontology checks, evidence scoring).
 - **`tests/`** — Unit and integration tests for models, rules, MCP tools, and the full pipeline.
 - **`docs/`** — Design notes, architecture decisions, and roadmap.
 
 ## Current features
-- **Skeptic report schema**: Structured format for claims, findings, and suggested fixes with full provenance (`src/kg_skeptic/models.py`).
+- **Skeptic report schema**: Structured format for claims, findings, and suggested fixes with full provenance (`src/nerve/models.py`).
 - **GLiNER2 NER**: Neural entity extraction for genes, diseases, phenotypes, pathways, and more—with fallback to dictionary matching.
-- **MCP tools** (`src/kg_skeptic/mcp/`):
+- **MCP tools** (`src/nerve/mcp/`):
   - `europepmc`: Search and fetch publication metadata (title, abstract, DOI, citations, open access status)
   - `crossref`: Retraction status lookups (available; heuristic integration in pipeline)
   - `ids`: Normalize identifiers to HGNC, UniProt, MONDO, HPO with ontology ancestors
@@ -238,7 +238,7 @@ The sidebar will show "Using Neo4j KG backend" when connected. If configuration 
 
 ## Docker deployment
 
-Deploy KG-Skeptic with a single command using Docker Compose.
+Deploy NERVE with a single command using Docker Compose.
 
 ### Quick start (one command)
 
@@ -300,8 +300,8 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 ### Python: Programmatic auditing
 
 ```python
-from kg_skeptic.pipeline import run_audit_pipeline
-from kg_skeptic.models import Claim
+from nerve.pipeline import run_audit_pipeline
+from nerve.models import Claim
 
 # Audit a structured claim
 claim = Claim(
@@ -321,7 +321,7 @@ print(f"Rules fired: {[r.name for r in result.rule_traces if r.fired]}")
 ### Python: Free-text claim
 
 ```python
-from kg_skeptic.pipeline import run_audit_pipeline
+from nerve.pipeline import run_audit_pipeline
 
 # Audit free-text (NER extracts entities automatically)
 result = run_audit_pipeline(
@@ -337,7 +337,7 @@ print(f"Object: {result.claim.object_id}")    # e.g., MONDO:0010545
 ### Python: Batch processing
 
 ```python
-from kg_skeptic.pipeline import run_audit_pipeline
+from nerve.pipeline import run_audit_pipeline
 import json
 
 claims = [
@@ -365,16 +365,16 @@ with open("audit_results.json", "w") as f:
 
 ```bash
 # Single audit with JSON output
-uv run python -m kg_skeptic --demo-id REAL_D01 --format json > audit.json
+uv run python -m nerve --demo-id REAL_D01 --format json > audit.json
 
 # Process with jq
-uv run python -m kg_skeptic --demo-id REAL_D01 --format json | jq '.verdict'
+uv run python -m nerve --demo-id REAL_D01 --format json | jq '.verdict'
 ```
 
 ### MCP tools (for agent integration)
 
 ```python
-from kg_skeptic.mcp import europepmc, ids, kg
+from nerve.mcp import europepmc, ids, kg
 
 # Search literature
 papers = europepmc.search("BRCA1 breast cancer", limit=5)

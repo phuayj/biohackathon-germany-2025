@@ -3,7 +3,7 @@
 from unittest.mock import MagicMock, patch
 import json
 
-from kg_skeptic.mcp.europepmc import (
+from nerve.mcp.europepmc import (
     EuropePMCTool,
     EuropePMCArticle,
     EuropePMCSearchResult,
@@ -87,7 +87,7 @@ class TestEuropePMCTool:
         assert d["mesh_terms"] == []
         assert d["is_open_access"] is False
 
-    @patch("kg_skeptic.mcp.europepmc.urlopen")
+    @patch("nerve.mcp.europepmc.urlopen")
     def test_search_mocked(self, mock_urlopen: MagicMock) -> None:
         """Test search with mocked response."""
         mock_response = MagicMock()
@@ -136,7 +136,7 @@ class TestEuropePMCTool:
         assert result.provenance is not None
         assert result.provenance.source_db == "europepmc"
 
-    @patch("kg_skeptic.mcp.europepmc.urlopen")
+    @patch("nerve.mcp.europepmc.urlopen")
     def test_fetch_mocked(self, mock_urlopen: MagicMock) -> None:
         """Test fetch with mocked response."""
         mock_response = MagicMock()
@@ -192,7 +192,7 @@ class TestEuropePMCTool:
         assert article.is_open_access is True
         assert article.citation_count == 25
 
-    @patch("kg_skeptic.mcp.europepmc.urlopen")
+    @patch("nerve.mcp.europepmc.urlopen")
     def test_fetch_not_found(self, mock_urlopen: MagicMock) -> None:
         """Test fetch with no results."""
         mock_response = MagicMock()
@@ -209,7 +209,7 @@ class TestEuropePMCTool:
         assert article.pmid == "99999999"
         assert article.title == "[Article not found]"
 
-    @patch("kg_skeptic.mcp.europepmc.urlopen")
+    @patch("nerve.mcp.europepmc.urlopen")
     def test_fetch_by_doi_mocked(self, mock_urlopen: MagicMock) -> None:
         """Test fetch_by_doi with mocked response."""
         mock_response = MagicMock()
@@ -238,7 +238,7 @@ class TestEuropePMCTool:
         assert article.pmid == "12345678"
         assert article.title == "Found by DOI"
 
-    @patch("kg_skeptic.mcp.europepmc.urlopen")
+    @patch("nerve.mcp.europepmc.urlopen")
     def test_pmid_from_doi_mocked(self, mock_urlopen: MagicMock) -> None:
         """Test pmid_from_doi with mocked response."""
         mock_response = MagicMock()
@@ -266,7 +266,7 @@ class TestEuropePMCTool:
 
         assert pmid == "12345678"
 
-    @patch("kg_skeptic.mcp.europepmc.urlopen")
+    @patch("nerve.mcp.europepmc.urlopen")
     def test_open_access_filter(self, mock_urlopen: MagicMock) -> None:
         """Test search with open access filter."""
         mock_response = MagicMock()

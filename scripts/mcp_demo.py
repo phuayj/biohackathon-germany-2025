@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-MCP Tools Demo Script for KG-Skeptic.
+MCP Tools Demo Script for NERVE.
 
 This script demonstrates the biomedical data lookup tools that power
-the KG-Skeptic auditor. Run it to see the tools in action.
+the NERVE auditor. Run it to see the tools in action.
 
 Usage:
     uv run python scripts/mcp_demo.py
@@ -19,7 +19,7 @@ import sys
 from collections.abc import Iterable
 from typing import Optional, Protocol, cast
 
-from kg_skeptic.mcp import (
+from nerve.mcp import (
     EuropePMCTool,
     CrossRefTool,
     DisGeNETTool,
@@ -30,7 +30,7 @@ from kg_skeptic.mcp import (
     load_mini_kg_backend,
     mini_kg_edge_count,
 )
-from kg_skeptic.mcp.kg import KGBackend
+from nerve.mcp.kg import KGBackend
 
 
 def section(title: str) -> None:
@@ -489,7 +489,7 @@ def demo_integration(
 def main() -> None:
     """Run the MCP tools demo."""
     parser = argparse.ArgumentParser(
-        description="Demo the KG-Skeptic MCP tools",
+        description="Demo the NERVE MCP tools",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -545,9 +545,9 @@ Examples:
     args = parser.parse_args()
 
     print("\n" + "=" * 60)
-    print("        KG-SKEPTIC MCP TOOLS DEMONSTRATION")
+    print("           NERVE MCP TOOLS DEMONSTRATION")
     print("=" * 60)
-    print("\nThese tools power the KG-Skeptic auditor for validating")
+    print("\nThese tools power the NERVE auditor for validating")
     print("biomedical claims from LLM agents.\n")
 
     if args.mini_kg and args.neo4j:

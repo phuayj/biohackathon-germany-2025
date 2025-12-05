@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import random
 
-from kg_skeptic.mcp.kg import KGEdge
-from kg_skeptic.mcp.mini_kg import iter_mini_kg_edges, load_mini_kg_backend
-from kg_skeptic.subgraph import build_pair_subgraph
+from nerve.mcp.kg import KGEdge
+from nerve.mcp.mini_kg import iter_mini_kg_edges, load_mini_kg_backend
+from nerve.subgraph import build_pair_subgraph
 
 from scripts import train_suspicion_gnn as tsg
 

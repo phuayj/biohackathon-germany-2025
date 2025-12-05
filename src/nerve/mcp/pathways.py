@@ -71,7 +71,7 @@ class PathwayTool:
         """Fetch URL and return JSON object."""
         default_headers: dict[str, str] = {
             "Accept": "application/json",
-            "User-Agent": "kg-skeptic/0.1",
+            "User-Agent": "nerve/0.1",
         }
         if headers:
             default_headers.update(headers)

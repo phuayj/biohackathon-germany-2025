@@ -3,7 +3,7 @@
 ## Day 1 — Spine
 
 ### Schema & Scaffolding (Done)
-- [x] Define and publish the skeptic report JSON schema (claims, findings, suggested fixes, evidence) with fixtures.
+- [x] Define and publish the nerve report JSON schema (claims, findings, suggested fixes, evidence) with fixtures.
 - [x] Define claim schema: subject/predicate/object with types (gene|disease|phenotype|pathway), qualifiers (tissue, inheritance), provenance (pmid, doi).
 - [x] Wire CI to run lint/type/test plus lightweight smoke of rule checks.
 
@@ -54,7 +54,7 @@
 - [x] **extraction_low_confidence:** Add a rule capturing low-confidence extraction / vague predicates (e.g., `REAL_F05`); after implementation, re-run the same E2E seed fixture test and update `REAL_F05` expectations in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`.
 - [x] **opposite_predicate_same_context:** Add a rule for opposite predicates in the same context (e.g., `REAL_025`); after implementation, re-run the same E2E seed fixture test and update `REAL_025` expectations in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`, removing the temporary WARN override.
 - [x] Fix all mypy strict type-checking errors in `src/`.
-- [x] Replace remaining `Any`-based Neo4j driver casts in `src/kg_skeptic/app.py` and `src/kg_skeptic/__main__.py` with a typed protocol to keep strict mypy happy long-term.
+- [x] Replace remaining `Any`-based Neo4j driver casts in `src/nerve/app.py` and `src/nerve/__main__.py` with a typed protocol to keep strict mypy happy long-term.
 
 ### Scoring & Decision
 - [x] Concatenate rule features → weighted sum → scalar audit score.
@@ -125,7 +125,7 @@
 - [x] Add rule feature aggregates to edge attributes.
 - [x] Add helper to convert subgraph edges (including rule feature aggregates) into PyG-ready tensors.
 - [x] **Swap curated KG check to Monarch:** Replace/augment the current curated KG evidence (e.g., DisGeNET) with a Monarch-backed `curated_kg_match` signal for gene→disease edges, wired into the curated KG facts and positive-evidence gate. See [linkml-store Monarch KG](https://linkml.io/linkml-store/how-to/Query-the-Monarch-KG.html).
-- [ ] Define and document the concrete Neo4j/BioCypher schema for KG-Skeptic (node `id` as Monarch-style CURIE, relationship type as Biolink predicate) and add a loading script/notes for importing a Monarch-derived KG slice.
+- [ ] Define and document the concrete Neo4j/BioCypher schema for NERVE (node `id` as Monarch-style CURIE, relationship type as Biolink predicate) and add a loading script/notes for importing a Monarch-derived KG slice.
 - [ ] Expand predicate polarity map (positive/negative verbs and biolink aliases) used by opposite-predicate checks.
 - [ ] Add fixtures covering mixed/ambiguous context polarity to validate detection paths.
 
@@ -259,7 +259,7 @@
 - [ ] Anonymized audit logs for reproducibility.
 - [ ] Improve negation detection beyond hard-coded phrases (data-driven patterns or lightweight NLP cues) alongside variant cue hardening.
 - [x] **Gene function polarity rule:** Add `tumor_suppressor_positive_predicate` rule to catch semantically misleading claims like "TP53 causes cancer" (tumor suppressors don't cause disease—their dysfunction does). Implemented with:
-  - COSMIC Cancer Gene Census v103 data source for gene function classification (`src/kg_skeptic/mcp/cosmic.py`)
+  - COSMIC Cancer Gene Census v103 data source for gene function classification (`src/nerve/mcp/cosmic.py`)
   - New fact group `gene.*` with `function_class`, `is_tumor_suppressor`, `is_oncogene`, `is_cancer_gene`
   - Rule fires when `gene.is_tumor_suppressor == true` AND `conflicts.claim_predicate_polarity == "positive"`, flagging as WARN with rephrasing suggestion
   - Added `cosmic_cancer_gene_bonus` (+0.2) for validated cancer genes

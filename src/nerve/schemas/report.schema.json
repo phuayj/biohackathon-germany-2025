@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://kg-skeptic.github.io/schemas/report.schema.json",
+  "$id": "https://nerve.github.io/schemas/report.schema.json",
   "title": "SkepticReport",
-  "description": "Structured audit report from the KG Skeptic tool",
+  "description": "Structured audit report from the NERVE tool",
   "type": "object",
   "required": ["task_id", "agent_name", "summary", "claims", "findings"],
   "properties": {
@@ -170,7 +170,7 @@
     },
     "Finding": {
       "type": "object",
-      "description": "A critique item produced by the skeptic",
+      "description": "A critique item produced by the nerve",
       "required": ["id", "kind", "severity", "message"],
       "properties": {
         "id": {

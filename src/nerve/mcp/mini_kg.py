@@ -471,7 +471,7 @@ def _attach_node2vec_embeddings(backend: InMemoryBackend, dim: int = 64) -> None
     """Attach deterministic Node2Vec-like embeddings to all backend nodes.
 
     Embeddings are stored under the ``node2vec`` key on node properties
-    so they are picked up by :mod:`kg_skeptic.subgraph` as additional
+    so they are picked up by :mod:`nerve.subgraph` as additional
     numeric node features.
     """
     for node in backend.nodes.values():

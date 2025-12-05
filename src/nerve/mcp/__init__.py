@@ -1,5 +1,5 @@
 """
-MCP (Model Context Protocol) tools for KG Skeptic.
+MCP (Model Context Protocol) tools for NERVE.
 
 This module provides adapters for querying external biomedical data sources:
 - EuropePMC: Search and fetch publication metadata (aggregates PubMed, PMC, etc.)

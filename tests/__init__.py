@@ -1,1 +1,1 @@
-"""KG Skeptic test suite."""
+"""NERVE test suite."""

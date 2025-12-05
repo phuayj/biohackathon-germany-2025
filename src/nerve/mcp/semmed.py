@@ -28,7 +28,7 @@ class LiteratureTriple:
     """
     A literature-derived subject–predicate–object triple.
 
-    The shape mirrors :class:`kg_skeptic.mcp.kg.KGEdge` closely so that these
+    The shape mirrors :class:`nerve.mcp.kg.KGEdge` closely so that these
     triples can be fed into the same downstream components.
     """
 

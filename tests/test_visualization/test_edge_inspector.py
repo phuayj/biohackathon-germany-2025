@@ -1,8 +1,8 @@
 """Tests for edge inspector functionality."""
 
-from kg_skeptic.mcp.kg import KGEdge
-from kg_skeptic.rules import RuleTraceEntry, RuleTrace, RuleEvaluation
-from kg_skeptic.visualization.edge_inspector import (
+from nerve.mcp.kg import KGEdge
+from nerve.rules import RuleTraceEntry, RuleTrace, RuleEvaluation
+from nerve.visualization.edge_inspector import (
     SourceReference,
     compute_rule_footprint,
 )

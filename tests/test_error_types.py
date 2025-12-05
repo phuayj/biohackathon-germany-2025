@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from kg_skeptic.error_types import (
+from nerve.error_types import (
     DEFAULT_FEATURE_KEYS,
     ErrorInstance,
     ErrorType,

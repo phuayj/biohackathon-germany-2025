@@ -14,8 +14,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable, Mapping, Optional
 
-from kg_skeptic.mcp.crossref import CrossRefTool, RetractionStatus
-from kg_skeptic.mcp.europepmc import EuropePMCArticle, EuropePMCTool
+from nerve.mcp.crossref import CrossRefTool, RetractionStatus
+from nerve.mcp.europepmc import EuropePMCArticle, EuropePMCTool
 
 logger = logging.getLogger(__name__)
 

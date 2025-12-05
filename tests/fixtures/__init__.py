@@ -1,4 +1,4 @@
-"""Test fixtures for KG Skeptic."""
+"""Test fixtures for NERVE."""
 
 from pathlib import Path
 

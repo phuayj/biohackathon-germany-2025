@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from kg_skeptic.ner import (
+from nerve.ner import (
     BIOMEDICAL_ENTITY_TYPES,
     BIOMEDICAL_ENTITY_DESCRIPTIONS,
     DictionaryExtractor,
@@ -49,7 +49,7 @@ class TestBiomedicalEntityTypes:
 class TestExtractEntitiesMocked:
     """Tests using mocked GLiNER2 model."""
 
-    @patch("kg_skeptic.ner._get_model")
+    @patch("nerve.ner._get_model")
     def test_extract_entities_basic(self, mock_get_model: MagicMock) -> None:
         """Test basic entity extraction with mocked model."""
         mock_model = MagicMock()
@@ -71,7 +71,7 @@ class TestExtractEntitiesMocked:
         assert "BRCA1" in texts
         assert "breast cancer" in texts
 
-    @patch("kg_skeptic.ner._get_model")
+    @patch("nerve.ner._get_model")
     def test_extract_entities_empty_result(self, mock_get_model: MagicMock) -> None:
         """Test handling of empty extraction results."""
         mock_model = MagicMock()
@@ -81,7 +81,7 @@ class TestExtractEntitiesMocked:
         entities = extract_entities("No entities here.")
         assert len(entities) == 0
 
-    @patch("kg_skeptic.ner._get_model")
+    @patch("nerve.ner._get_model")
     def test_extract_entities_with_descriptions(self, mock_get_model: MagicMock) -> None:
         """Test extraction with entity descriptions."""
         mock_model = MagicMock()
@@ -96,7 +96,7 @@ class TestExtractEntitiesMocked:
         assert isinstance(entity_spec, dict)
         assert "gene" in entity_spec
 
-    @patch("kg_skeptic.ner._get_model")
+    @patch("nerve.ner._get_model")
     def test_extract_entities_without_descriptions(self, mock_get_model: MagicMock) -> None:
         """Test extraction without entity descriptions."""
         mock_model = MagicMock()
@@ -114,7 +114,7 @@ class TestExtractEntitiesMocked:
         entity_spec = call_args[0][1]
         assert isinstance(entity_spec, list)
 
-    @patch("kg_skeptic.ner._get_model")
+    @patch("nerve.ner._get_model")
     def test_extract_biomedical_entities_grouped(self, mock_get_model: MagicMock) -> None:
         """Test grouped entity extraction."""
         mock_model = MagicMock()
@@ -136,7 +136,7 @@ class TestExtractEntitiesMocked:
 class TestGLiNER2Extractor:
     """Tests for the GLiNER2Extractor class."""
 
-    @patch("kg_skeptic.ner._get_model")
+    @patch("nerve.ner._get_model")
     def test_extractor_initialization(self, mock_get_model: MagicMock) -> None:
         """Test extractor initialization with custom parameters."""
         extractor = GLiNER2Extractor(
@@ -146,7 +146,7 @@ class TestGLiNER2Extractor:
         assert extractor.entity_types == ["gene", "disease"]
         assert extractor.use_descriptions is False
 
-    @patch("kg_skeptic.ner._get_model")
+    @patch("nerve.ner._get_model")
     def test_extractor_extract(self, mock_get_model: MagicMock) -> None:
         """Test extract method."""
         mock_model = MagicMock()
@@ -158,7 +158,7 @@ class TestGLiNER2Extractor:
         assert len(entities) == 1
         assert entities[0].text == "TP53"
 
-    @patch("kg_skeptic.ner._get_model")
+    @patch("nerve.ner._get_model")
     def test_extractor_extract_grouped(self, mock_get_model: MagicMock) -> None:
         """Test extract_grouped method."""
         mock_model = MagicMock()
@@ -175,7 +175,7 @@ class TestGLiNER2Extractor:
         assert "gene" in grouped
         assert "disease" in grouped
 
-    @patch("kg_skeptic.ner._get_model")
+    @patch("nerve.ner._get_model")
     def test_extractor_extract_first_of_type(self, mock_get_model: MagicMock) -> None:
         """Test extract_first_of_type method."""
         mock_model = MagicMock()
@@ -187,7 +187,7 @@ class TestGLiNER2Extractor:
         assert first_gene is not None
         assert first_gene.text == "BRCA1"
 
-    @patch("kg_skeptic.ner._get_model")
+    @patch("nerve.ner._get_model")
     def test_extractor_extract_first_of_type_not_found(self, mock_get_model: MagicMock) -> None:
         """Test extract_first_of_type returns None when type not found."""
         mock_model = MagicMock()

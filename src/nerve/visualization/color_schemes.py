@@ -1,4 +1,4 @@
-"""Color schemes for KG-Skeptic graph visualization."""
+"""Color schemes for NERVE graph visualization."""
 
 from __future__ import annotations
 

@@ -6,8 +6,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from kg_skeptic.models import Claim
-from kg_skeptic.pipeline import (
+from nerve.models import Claim
+from nerve.pipeline import (
     NormalizedEntity,
     NormalizedTriple,
     SkepticPipeline,
@@ -34,7 +34,7 @@ from kg_skeptic.pipeline import (
     _split_into_sentences_simple,
     detect_sibling_conflict,
 )
-from kg_skeptic.provenance import CitationProvenance
+from nerve.provenance import CitationProvenance
 
 
 class TestCategoryAndOntologyHelpers:

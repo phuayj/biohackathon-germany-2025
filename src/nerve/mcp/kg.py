@@ -189,7 +189,7 @@ class MonarchBackend(KGBackend):
         """Fetch URL and return JSON."""
         headers = {
             "Accept": "application/json",
-            "User-Agent": "kg-skeptic/0.1",
+            "User-Agent": "nerve/0.1",
         }
         request = Request(url, headers=headers)
         try:

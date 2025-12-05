@@ -8,8 +8,8 @@ from typing import Sequence
 
 import pytest
 
-from kg_skeptic.mcp.semmed import LiteratureTriple, SemMedDBTool
-from kg_skeptic.mcp.indra import INDRATool
+from nerve.mcp.semmed import LiteratureTriple, SemMedDBTool
+from nerve.mcp.indra import INDRATool
 
 
 class TestLiteratureTriple:

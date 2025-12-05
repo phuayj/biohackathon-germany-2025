@@ -46,13 +46,13 @@ try:
 except ImportError:
     HAS_SKLEARN = False
 
-from kg_skeptic.error_types import ErrorType
-from kg_skeptic.mcp.mini_kg import iter_mini_kg_edges, load_mini_kg_backend
-from kg_skeptic.mcp.kg import InMemoryBackend, KGBackend, KGEdge, KGNode, Neo4jBackend
-from kg_skeptic.pipeline import _category_from_id
-from kg_skeptic import subgraph as subgraph_module
-from kg_skeptic.subgraph import Subgraph, build_pair_subgraph
-from kg_skeptic.suspicion_gnn import (
+from nerve.error_types import ErrorType
+from nerve.mcp.mini_kg import iter_mini_kg_edges, load_mini_kg_backend
+from nerve.mcp.kg import InMemoryBackend, KGBackend, KGEdge, KGNode, Neo4jBackend
+from nerve.pipeline import _category_from_id
+from nerve import subgraph as subgraph_module
+from nerve.subgraph import Subgraph, build_pair_subgraph
+from nerve.suspicion_gnn import (
     ERROR_TYPE_TO_INDEX,
     NUM_ERROR_TYPES,
     RGCNSuspicionModel,
@@ -554,7 +554,7 @@ def _build_hpo_sibling_map(
         return _build_hpo_sibling_map_fallback(phenotype_ids)
 
     try:
-        from kg_skeptic.mcp.ids import IDNormalizerTool
+        from nerve.mcp.ids import IDNormalizerTool
     except Exception:
         return _build_hpo_sibling_map_fallback(phenotype_ids)
 

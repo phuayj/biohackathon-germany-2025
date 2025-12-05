@@ -99,7 +99,7 @@ class IDNormalizerTool:
         """Fetch URL and return JSON."""
         default_headers: dict[str, str] = {
             "Accept": "application/json",
-            "User-Agent": "kg-skeptic/0.1",
+            "User-Agent": "nerve/0.1",
         }
         if headers:
             default_headers.update(headers)
@@ -786,7 +786,7 @@ class IDNormalizerTool:
                         source_type=from_type,
                         target_id=uid,
                         target_type=to_type,
-                        provenance=make_live_provenance(source_db="kg_skeptic.ids"),
+                        provenance=make_live_provenance(source_db="nerve.ids"),
                     )
                 )
 
@@ -799,7 +799,7 @@ class IDNormalizerTool:
                         source_type=from_type,
                         target_id=hgnc_id,
                         target_type=to_type,
-                        provenance=make_live_provenance(source_db="kg_skeptic.ids"),
+                        provenance=make_live_provenance(source_db="nerve.ids"),
                     )
                 )
 
@@ -812,7 +812,7 @@ class IDNormalizerTool:
                         source_type=from_type,
                         target_id=hgnc_id,
                         target_type=to_type,
-                        provenance=make_live_provenance(source_db="kg_skeptic.ids"),
+                        provenance=make_live_provenance(source_db="nerve.ids"),
                     )
                 )
 

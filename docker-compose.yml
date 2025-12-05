@@ -6,22 +6,22 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: kg-skeptic-ui
+    container_name: nerve-ui
     ports:
       - "8501:8501"
     environment:
       # Neo4j connection (optional - uses mini KG if unavailable)
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=neo4j
-      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-skeptic123}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-nerve123}
       # KG backend configuration
-      - KG_SKEPTIC_USE_MONARCH_KG=true
-      - KG_SKEPTIC_SUSPICION_MODEL=/app/data/suspicion_gnn/model.pt
+      - NERVE_USE_MONARCH_KG=true
+      - NERVE_SUSPICION_MODEL=/app/data/suspicion_gnn/model.pt
       # Optional external APIs (set in .env file)
       - DISGENET_API_KEY=${DISGENET_API_KEY:-}
     volumes:
       # Persist cache across restarts
-      - kg-skeptic-cache:/app/data/cache
+      - nerve-cache:/app/data/cache
     depends_on:
       neo4j:
         condition: service_healthy
@@ -38,12 +38,12 @@ services:
   # =============================================================================
   neo4j:
     image: neo4j:5-community
-    container_name: kg-skeptic-neo4j
+    container_name: nerve-neo4j
     ports:
       - "7474:7474"  # HTTP browser
       - "7687:7687"  # Bolt protocol
     environment:
-      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-skeptic123}
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-nerve123}
       - NEO4J_PLUGINS=["apoc"]
       - NEO4J_dbms_memory_heap_initial__size=512m
       - NEO4J_dbms_memory_heap_max__size=1G
@@ -66,17 +66,17 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: kg-skeptic-cli
-    entrypoint: ["python", "-m", "kg_skeptic"]
+    container_name: nerve-cli
+    entrypoint: ["python", "-m", "nerve"]
     environment:
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=neo4j
-      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-skeptic123}
-      - KG_SKEPTIC_USE_MONARCH_KG=true
-      - KG_SKEPTIC_SUSPICION_MODEL=/app/data/suspicion_gnn/model.pt
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-nerve123}
+      - NERVE_USE_MONARCH_KG=true
+      - NERVE_SUSPICION_MODEL=/app/data/suspicion_gnn/model.pt
       - DISGENET_API_KEY=${DISGENET_API_KEY:-}
     volumes:
-      - kg-skeptic-cache:/app/data/cache
+      - nerve-cache:/app/data/cache
       - ./output:/app/output  # For batch output files
     depends_on:
       neo4j:
@@ -88,7 +88,7 @@ services:
 # Volumes
 # =============================================================================
 volumes:
-  kg-skeptic-cache:
+  nerve-cache:
     driver: local
   neo4j-data:
     driver: local
@@ -100,4 +100,4 @@ volumes:
 # =============================================================================
 networks:
   default:
-    name: kg-skeptic-network
+    name: nerve-network

@@ -58,7 +58,7 @@ class DisGeNETTool:
     def _build_headers(self) -> dict[str, str]:
         headers: dict[str, str] = {
             "accept": "application/json",
-            "User-Agent": "kg-skeptic/0.1",
+            "User-Agent": "nerve/0.1",
         }
         if self.api_key:
             # DisGeNET expects the raw API key as the Authorization header.

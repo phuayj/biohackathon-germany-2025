@@ -2,12 +2,12 @@
 
 from unittest.mock import MagicMock
 
-from kg_skeptic.mcp.kg import (
+from nerve.mcp.kg import (
     EdgeQueryResult,
     KGEdge,
     Neo4jBackend,
 )
-from kg_skeptic.mcp.provenance import make_live_provenance, ToolProvenance
+from nerve.mcp.provenance import make_live_provenance, ToolProvenance
 
 
 class DummySession:

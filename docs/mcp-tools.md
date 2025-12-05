@@ -1,11 +1,11 @@
 # MCP Tools Documentation
 
-The KG-Skeptic MCP (Model Context Protocol) tools provide adapters for querying external biomedical data sources. These tools are used to validate claims made by LLM bio-agents against authoritative databases.
+The NERVE MCP (Model Context Protocol) tools provide adapters for querying external biomedical data sources. These tools are used to validate claims made by LLM bio-agents against authoritative databases.
 
 All MCP tool return types now include a small, standardized provenance block so downstream components can reason about where data came from and how fresh it is.
 
 ```python
-from kg_skeptic.mcp import EuropePMCTool, ToolProvenance
+from nerve.mcp import EuropePMCTool, ToolProvenance
 
 tool = EuropePMCTool()
 results = tool.search("BRCA1 breast cancer", max_results=5)
@@ -37,7 +37,7 @@ uv run python scripts/mcp_demo.py --verbose
 Search and fetch publication metadata from Europe PMC (aggregates PubMed, PMC, preprints, and more).
 
 ```python
-from kg_skeptic.mcp import EuropePMCTool
+from nerve.mcp import EuropePMCTool
 
 epmc = EuropePMCTool()
 
@@ -94,7 +94,7 @@ epmc = EuropePMCTool(email="your@email.com")
 Check retraction status of publications via CrossRef.
 
 ```python
-from kg_skeptic.mcp import CrossRefTool
+from nerve.mcp import CrossRefTool
 
 crossref = CrossRefTool()
 
@@ -107,7 +107,7 @@ print(f"Message: {result.message}")
 result = crossref.retractions("https://doi.org/10.1038/nature12373")
 
 # Check by PMID (requires Europe PMC tool for DOI lookup)
-from kg_skeptic.mcp import EuropePMCTool
+from nerve.mcp import EuropePMCTool
 epmc = EuropePMCTool()
 result = crossref.check_pmid("12345678", literature_tool=epmc)
 ```
@@ -123,7 +123,7 @@ result = crossref.check_pmid("12345678", literature_tool=epmc)
 Normalize biomedical identifiers across different databases.
 
 ```python
-from kg_skeptic.mcp import IDNormalizerTool
+from nerve.mcp import IDNormalizerTool
 
 ids = IDNormalizerTool()
 
@@ -176,7 +176,7 @@ hgnc_id = ids.symbol_to_hgnc("BRCA1")            # HGNC:1100
 Query biomedical knowledge graphs (default: Monarch Initiative).
 
 ```python
-from kg_skeptic.mcp import KGTool
+from nerve.mcp import KGTool
 
 kg = KGTool()
 
@@ -200,13 +200,13 @@ print(f"Nodes: {len(ego.nodes)}")
 print(f"Edges: {len(ego.edges)}")
 
 # Filter by direction
-from kg_skeptic.mcp.kg import EdgeDirection
+from nerve.mcp.kg import EdgeDirection
 ego = kg.ego("HGNC:1100", k=1, direction=EdgeDirection.OUTGOING)
 ```
 
 **Using Custom Backends:**
 ```python
-from kg_skeptic.mcp.kg import KGTool, InMemoryBackend, KGEdge
+from nerve.mcp.kg import KGTool, InMemoryBackend, KGEdge
 
 # In-memory backend for testing
 backend = InMemoryBackend()
@@ -225,7 +225,7 @@ result = kg.query_edge("HGNC:1100", "MONDO:0007254")
 Load a pre-seeded mini KG (≈2,600 edges) that includes gene–disease, gene–phenotype, gene–gene (PPI), and gene–pathway edges with PMIDs/DOIs on each edge.
 
 ```python
-from kg_skeptic.mcp import KGTool, load_mini_kg_backend, mini_kg_edge_count
+from nerve.mcp import KGTool, load_mini_kg_backend, mini_kg_edge_count
 
 backend = load_mini_kg_backend()  # loads in-memory in under 2 seconds
 print(f"Mini KG edges: {mini_kg_edge_count()}")
@@ -245,7 +245,7 @@ uv run python scripts/mcp_demo.py --mini-kg
 Lookup pathway‑level entities from Gene Ontology (GO) and Reactome.
 
 ```python
-from kg_skeptic.mcp import PathwayTool
+from nerve.mcp import PathwayTool
 
 paths = PathwayTool()
 
@@ -267,7 +267,7 @@ print(reactome.species)      # Homo sapiens
 Query DisGeNET for gene–disease associations.
 
 ```python
-from kg_skeptic.mcp import DisGeNETTool
+from nerve.mcp import DisGeNETTool
 
 dg = DisGeNETTool(api_key="YOUR_TOKEN")  # api_key required for live calls
 
@@ -291,7 +291,7 @@ print("High-score support from DisGeNET:", supported)
 Use a local Neo4j or BioCypher graph as a drop‑in backend for `KGTool`.
 
 ```python
-from kg_skeptic.mcp import KGTool, Neo4jBackend
+from nerve.mcp import KGTool, Neo4jBackend
 from neo4j import GraphDatabase
 
 driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "password"))
@@ -308,7 +308,7 @@ By default, the backend:
   (for example, `HGNC:1100`, `MONDO:0007254`, `HP:0000118`, `GO:0007165`)
 - derives edge predicates from the relationship type (`type(r)`) only.
 
-When wiring a Neo4j/BioCypher graph to Monarch and KG-Skeptic, model your schema so that:
+When wiring a Neo4j/BioCypher graph to Monarch and NERVE, model your schema so that:
 - nodes use `id` for the external identifier (Monarch-style CURIEs)
 - relationship types encode the Biolink predicate (for example,
   `:biolink_gene_associated_with_condition`).
@@ -318,7 +318,7 @@ When wiring a Neo4j/BioCypher graph to Monarch and KG-Skeptic, model your schema
 Verify a biomedical claim using all tools:
 
 ```python
-from kg_skeptic.mcp import EuropePMCTool, CrossRefTool, IDNormalizerTool, KGTool
+from nerve.mcp import EuropePMCTool, CrossRefTool, IDNormalizerTool, KGTool
 
 def verify_claim(claim: str, gene: str, disease: str) -> dict:
     """Verify a gene-disease association claim."""
@@ -431,7 +431,7 @@ except RuntimeError as e:
 ## Architecture
 
 ```
-kg_skeptic/mcp/
+nerve/mcp/
 ├── __init__.py      # Exports all tools
 ├── europepmc.py     # Europe PMC search/fetch (literature)
 ├── crossref.py      # Retraction checking

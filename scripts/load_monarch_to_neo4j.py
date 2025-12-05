@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Load biomedical KG data into Neo4j for KG-Skeptic.
+"""Load biomedical KG data into Neo4j for NERVE.
 
 This script downloads and loads multiple biomedical data sources into Neo4j:
 - Monarch KG: Gene-disease associations, phenotypes, biomedical relationships
@@ -68,7 +68,7 @@ HGNC_DATA_DIR = Path(__file__).parent.parent / "data" / "hgnc"
 # Batch size for Neo4j transactions
 BATCH_SIZE = 5000
 
-# Node categories we care about for KG-Skeptic
+# Node categories we care about for NERVE
 RELEVANT_CATEGORIES = {
     "biolink:Gene",
     "biolink:Disease",
@@ -268,7 +268,7 @@ def read_tsv(path: Path, max_rows: int | None = None) -> Iterator[dict[str, str]
 
 
 def create_neo4j_schema(session: object) -> None:
-    """Create Neo4j constraints and indexes for KG-Skeptic schema."""
+    """Create Neo4j constraints and indexes for NERVE schema."""
     print("Creating Neo4j schema...")
 
     # Drop existing constraints/indexes if they exist (for clean reload)
@@ -1654,7 +1654,7 @@ def verify_load(session: object) -> dict[str, int]:
 def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Load biomedical KG data into Neo4j for KG-Skeptic",
+        description="Load biomedical KG data into Neo4j for NERVE",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )

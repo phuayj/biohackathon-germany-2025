@@ -6,9 +6,9 @@ import math
 
 import pytest
 
-from kg_skeptic.mcp.kg import InMemoryBackend, KGEdge, KGNode
-from kg_skeptic.mcp.mini_kg import load_mini_kg_backend
-from kg_skeptic.subgraph import (
+from nerve.mcp.kg import InMemoryBackend, KGEdge, KGNode
+from nerve.mcp.mini_kg import load_mini_kg_backend
+from nerve.subgraph import (
     Subgraph,
     build_pair_subgraph,
     _compute_rule_feature_aggregates,
@@ -608,7 +608,7 @@ def test_build_pair_subgraph_includes_evidence_nodes() -> None:
 
 def test_is_kg_node_id_filters_pmids() -> None:
     """_is_kg_node_id should filter out literature references."""
-    from kg_skeptic.subgraph import _is_kg_node_id
+    from nerve.subgraph import _is_kg_node_id
 
     # Should return True for KG nodes
     assert _is_kg_node_id("GO:0006915") is True

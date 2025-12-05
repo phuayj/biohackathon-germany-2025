@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from kg_skeptic.feedback import append_claim_to_dataset
+from nerve.feedback import append_claim_to_dataset
 
 
 def test_append_claim_to_dataset(tmp_path: Path) -> None:

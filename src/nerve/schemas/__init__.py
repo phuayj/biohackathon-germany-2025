@@ -1,4 +1,4 @@
-"""JSON schemas for KG Skeptic data contracts."""
+"""JSON schemas for NERVE data contracts."""
 
 from pathlib import Path
 

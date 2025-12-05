@@ -81,9 +81,9 @@ class CrossRefTool:
 
     def _fetch_url(self, url: str) -> JSONObject:
         """Fetch URL and return JSON."""
-        headers = {"User-Agent": "kg-skeptic/0.1 (mailto:biohackathon@example.org)"}
+        headers = {"User-Agent": "nerve/0.1 (mailto:biohackathon@example.org)"}
         if self.email:
-            headers["User-Agent"] = f"kg-skeptic/0.1 (mailto:{self.email})"
+            headers["User-Agent"] = f"nerve/0.1 (mailto:{self.email})"
 
         request = Request(url, headers=headers)
         try:

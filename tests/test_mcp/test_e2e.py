@@ -9,10 +9,10 @@ Run with: pytest tests/test_mcp/test_e2e.py -v -m e2e
 
 import pytest
 
-from kg_skeptic.mcp.europepmc import EuropePMCTool
-from kg_skeptic.mcp.crossref import CrossRefTool
-from kg_skeptic.mcp.ids import IDNormalizerTool
-from kg_skeptic.mcp.kg import KGTool
+from nerve.mcp.europepmc import EuropePMCTool
+from nerve.mcp.crossref import CrossRefTool
+from nerve.mcp.ids import IDNormalizerTool
+from nerve.mcp.kg import KGTool
 
 
 # Mark all tests in this module as e2e (network-dependent)

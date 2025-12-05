@@ -3,7 +3,7 @@
 from unittest.mock import MagicMock, patch
 import json
 
-from kg_skeptic.mcp.crossref import CrossRefTool, RetractionInfo, RetractionStatus
+from nerve.mcp.crossref import CrossRefTool, RetractionInfo, RetractionStatus
 
 
 class TestCrossRefTool:
@@ -43,7 +43,7 @@ class TestCrossRefTool:
         # PMID returns None (needs external lookup)
         assert tool._normalize_to_doi("12345678") is None
 
-    @patch("kg_skeptic.mcp.crossref.urlopen")
+    @patch("nerve.mcp.crossref.urlopen")
     def test_retractions_no_retraction(self, mock_urlopen: MagicMock) -> None:
         """Test checking a DOI with no retraction."""
         mock_response = MagicMock()
@@ -70,7 +70,7 @@ class TestCrossRefTool:
         assert result.provenance is not None
         assert result.provenance.source_db == "crossref"
 
-    @patch("kg_skeptic.mcp.crossref.urlopen")
+    @patch("nerve.mcp.crossref.urlopen")
     def test_retractions_retracted(self, mock_urlopen: MagicMock) -> None:
         """Test checking a retracted DOI."""
         mock_response = MagicMock()
@@ -96,7 +96,7 @@ class TestCrossRefTool:
         assert result.status == RetractionStatus.RETRACTED
         assert result.notice_doi == "10.1234/retraction"
 
-    @patch("kg_skeptic.mcp.crossref.urlopen")
+    @patch("nerve.mcp.crossref.urlopen")
     def test_retractions_with_update_to(self, mock_urlopen: MagicMock) -> None:
         """Test checking a DOI with update-to field indicating retraction."""
         mock_response = MagicMock()
@@ -127,7 +127,7 @@ class TestCrossRefTool:
         assert result.status == RetractionStatus.RETRACTED
         assert result.notice_doi == "10.1234/retraction-notice"
 
-    @patch("kg_skeptic.mcp.crossref.urlopen")
+    @patch("nerve.mcp.crossref.urlopen")
     def test_retractions_expression_of_concern(self, mock_urlopen: MagicMock) -> None:
         """Test checking a DOI with expression of concern."""
         mock_response = MagicMock()

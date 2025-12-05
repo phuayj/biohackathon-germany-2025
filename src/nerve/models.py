@@ -103,7 +103,7 @@ class SuggestedFix:
 
 @dataclass
 class Finding:
-    """A critique item produced by the skeptic."""
+    """A critique item produced by the nerve."""
 
     id: str
     kind: str  # e.g., "ontology_violation", "missing_evidence", "contradiction"
@@ -146,7 +146,7 @@ class Finding:
 
 @dataclass
 class Report:
-    """Structured skeptic report."""
+    """Structured nerve report."""
 
     task_id: str
     agent_name: str

@@ -31,7 +31,7 @@ def _collect_all_phenotype_ids() -> list[str]:
 
     # Collect from mini KG
     try:
-        from kg_skeptic.mcp.mini_kg import load_mini_kg_backend
+        from nerve.mcp.mini_kg import load_mini_kg_backend
 
         backend = load_mini_kg_backend()
         for edge in backend.edges:
@@ -54,7 +54,7 @@ def _collect_all_phenotype_ids() -> list[str]:
         neo4j_uri = os.environ.get("NEO4J_URI")
         if neo4j_uri:
             from neo4j import GraphDatabase
-            from kg_skeptic.mcp.kg import Neo4jBackend
+            from nerve.mcp.kg import Neo4jBackend
 
             class _Neo4jSessionLike(Protocol):
                 def run(
@@ -126,7 +126,7 @@ def build_hpo_ancestor_map(
     import threading
 
     try:
-        from kg_skeptic.mcp.ids import IDNormalizerTool
+        from nerve.mcp.ids import IDNormalizerTool
     except ImportError as e:
         print(f"Error: Could not import IDNormalizerTool: {e}")
         return {}

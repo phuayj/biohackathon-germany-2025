@@ -2,7 +2,7 @@
 
 from collections import Counter
 
-from kg_skeptic.mcp.mini_kg import (
+from nerve.mcp.mini_kg import (
     iter_mini_kg_edges,
     load_mini_kg_backend,
     mini_kg_edge_count,

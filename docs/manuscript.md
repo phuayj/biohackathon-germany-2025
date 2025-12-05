@@ -1,10 +1,10 @@
-# KG Skeptic: A Neuro-Symbolic Skeptic for Auditing Biomedical LLM Agents
+# NERVE: A Neuro-Symbolic Skeptic for Auditing Biomedical LLM Agents
 
 **Authors:** BioHackathon Germany 2025 Team
 
 ## Abstract
 
-Large Language Model (LLM) agents are increasingly deployed for complex biomedical tasks, from hypothesis generation to literature mining. However, these agents are prone to hallucinations, often generating plausible-sounding but factually incorrect claims (e.g., citing retracted papers, proposing impossible biological interactions, or misinterpreting ontology hierarchies). We present **KG Skeptic**, an open-source "skeptic" plugin designed to audit the outputs of biomedical agents via the Model Context Protocol (MCP). Our system employs a neuro-symbolic approach: it normalizes agent claims into typed triples, validates them against rigorous ontology constraints (HPO, MONDO, GO), checks for retracted evidence, and scores plausibility using a Graph Neural Network (GNN) trained on perturbation patterns. We demonstrate that KG Skeptic can autonomously flag violations, detect "zombie" citations, and propose minimal corrections, effectively acting as a "linting" layer for biomedical AI.
+Large Language Model (LLM) agents are increasingly deployed for complex biomedical tasks, from hypothesis generation to literature mining. However, these agents are prone to hallucinations, often generating plausible-sounding but factually incorrect claims (e.g., citing retracted papers, proposing impossible biological interactions, or misinterpreting ontology hierarchies). We present **NERVE**, an open-source "nerve" plugin designed to audit the outputs of biomedical agents via the Model Context Protocol (MCP). Our system employs a neuro-symbolic approach: it normalizes agent claims into typed triples, validates them against rigorous ontology constraints (HPO, MONDO, GO), checks for retracted evidence, and scores plausibility using a Graph Neural Network (GNN) trained on perturbation patterns. We demonstrate that NERVE can autonomously flag violations, detect "zombie" citations, and propose minimal corrections, effectively acting as a "linting" layer for biomedical AI.
 
 ## 1. Introduction
 
@@ -12,14 +12,14 @@ The integration of LLMs into biomedical workflows has accelerated discovery but 
 
 Existing evaluation frameworks often rely on static benchmarks or human review, which is unscalable for autonomous agents. There is a critical need for an automated, run-time auditor that can verify agent outputs against established biological ground truth.
 
-We propose **KG Skeptic**, a drop-in auditing service that:
+We propose **NERVE**, a drop-in auditing service that:
 1.  **Interprets** natural language claims into structured biological knowledge.
 2.  **Validates** these structures against curated Knowledge Graphs (KGs) and ontologies.
 3.  **Detects** subtle errors using a "suspicion" GNN trained to recognize patterns of hallucination.
 
 ## 2. System Architecture
 
-KG Skeptic is built as a **Model Context Protocol (MCP)** server, allowing it to integrate seamlessly with any MCP-compliant agent (e.g., Claude Desktop, Zed, or custom bio-agents). The pipeline consists of four main stages:
+NERVE is built as a **Model Context Protocol (MCP)** server, allowing it to integrate seamlessly with any MCP-compliant agent (e.g., Claude Desktop, Zed, or custom bio-agents). The pipeline consists of four main stages:
 
 ### 2.1 Claim Normalization
 The system accepts raw text or structured payloads. It uses a hybrid Named Entity Recognition (NER) strategy—combining dictionary lookups with neural extractors (GLiNER/PubMedBERT)—to map entities to canonical identifiers (HGNC, MONDO, HP, GO).
@@ -45,7 +45,7 @@ To catch errors that pass symbolic checks (e.g., a technically valid but highly 
 *   **Output:** A suspicion score (0-1) and a predicted error type (e.g., `OntologyMismatch`, `WeakEvidence`).
 
 ### 2.5 Human-in-the-Loop Interaction
-KG Skeptic exposes a **Streamlit-based Audit Console** that allows researchers to interactively inspect agent claims. Key features include:
+NERVE exposes a **Streamlit-based Audit Console** that allows researchers to interactively inspect agent claims. Key features include:
 *   **Interactive Audit Card:** A visual summary presenting the PASS/FAIL verdict, normalized entities, and rule traces in a digestible format.
 *   **Edge Inspector:** A deep-dive view into specific knowledge graph edges, revealing the supporting provenance (citations, database records) and the GNN's local suspicion score.
 *   **What-If Scenarios:** Users can toggle "Strict Mode" (enforcing rigid ontology descendant constraints) or simulate citation retractions to see how the auditor's verdict changes in real-time.
@@ -59,9 +59,9 @@ The system is implemented in Python and orchestrates several key technologies:
 *   **Integration:** Model Context Protocol (MCP) SDK for standardized agent communication. The system exposes specialized MCP tools: `europepmc` for literature metadata, `crossref` for retraction checks, `ids` for ontology normalization, and `kg` for graph queries.
 
 Key components include:
-*   `kg_skeptic.pipeline`: The central coordinator that runs normalization, rules, and scoring.
-*   `kg_skeptic.suspicion_gnn`: The neural module for graph-level anomaly detection.
-*   `kg_skeptic.feedback`: A dedicated feedback loop that collects expert annotations (Agree/Disagree) on audit verdicts. These annotations are fed back into the training pipeline, enabling **class-incremental learning** where the GNN adapts to new hallucination patterns over time.
+*   `nerve.pipeline`: The central coordinator that runs normalization, rules, and scoring.
+*   `nerve.suspicion_gnn`: The neural module for graph-level anomaly detection.
+*   `nerve.feedback`: A dedicated feedback loop that collects expert annotations (Agree/Disagree) on audit verdicts. These annotations are fed back into the training pipeline, enabling **class-incremental learning** where the GNN adapts to new hallucination patterns over time.
 
 ### 3.1 Data Pipeline & Tooling
 To support the auditor, we developed a robust data engineering suite:
@@ -81,7 +81,7 @@ To illustrate the auditor's capabilities, we present three representative audit 
 The system correctly identifies that the sole supporting evidence for a claim has been retracted, triggering a hard FAIL.
 
 ```text
-=== KG-Skeptic Audit ===
+=== NERVE Audit ===
 Claim: "STAT3 promotes proliferation of rheumatoid arthritis fibroblast-like synoviocytes."
 Verdict: FAIL (score=-0.35)
 
@@ -106,7 +106,7 @@ Rules fired:
 A biologically invalid claim ("Disease activates Gene") is caught by the neuro-symbolic rule engine, which enforces Biolink Model constraints.
 
 ```text
-=== KG-Skeptic Audit ===
+=== NERVE Audit ===
 Claim: "Rheumatoid arthritis activates STAT3."
 Verdict: FAIL (score=-1.45)
 
@@ -128,7 +128,7 @@ Rules fired:
 A well-supported claim with valid types, ontology terms, and clean citations passes the audit.
 
 ```text
-=== KG-Skeptic Audit ===
+=== NERVE Audit ===
 Claim: "TNF activates canonical NF-κB signaling."
 Verdict: PASS (score=1.45)
 
@@ -169,11 +169,11 @@ In our hackathon prototype, we successfully implemented the complete end-to-end 
 
 ## 6. Availability
 
-The KG Skeptic is open-source and available via a command-line interface (CLI) for batch processing and a Streamlit web application for interactive analysis. It supports deployment via `uv`, `conda`, or Docker.
+The NERVE is open-source and available via a command-line interface (CLI) for batch processing and a Streamlit web application for interactive analysis. It supports deployment via `uv`, `conda`, or Docker.
 
 ## 7. Conclusion
 
-KG Skeptic represents a step towards "self-correcting" biomedical AI. By combining rigid symbolic logic with flexible neural intuition, we provide a safety net that allows researchers to use powerful LLM agents with greater confidence.
+NERVE represents a step towards "self-correcting" biomedical AI. By combining rigid symbolic logic with flexible neural intuition, we provide a safety net that allows researchers to use powerful LLM agents with greater confidence.
 
 ---
 *Repositories and Data:*

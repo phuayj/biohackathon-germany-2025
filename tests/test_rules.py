@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from kg_skeptic.rules import DEFAULT_RULES_PATH, RuleEngine
+from nerve.rules import DEFAULT_RULES_PATH, RuleEngine
 
 
 def test_default_rules_file_exists() -> None:
@@ -92,7 +92,7 @@ def test_retraction_and_minimal_evidence_rules(sample_facts: dict[str, dict[str,
 
 class TestRuleConditionEvaluation:
     def test_exists_op(self) -> None:
-        from kg_skeptic.rules import RuleCondition
+        from nerve.rules import RuleCondition
 
         cond = RuleCondition(fact="a.b", op="exists")
         assert cond.evaluate({"a": {"b": 1}}) is True
@@ -101,14 +101,14 @@ class TestRuleConditionEvaluation:
         assert cond.evaluate({"a": {}}) is False
 
     def test_equals_op(self) -> None:
-        from kg_skeptic.rules import RuleCondition
+        from nerve.rules import RuleCondition
 
         cond = RuleCondition(fact="status", op="equals", value="active")
         assert cond.evaluate({"status": "active"}) is True
         assert cond.evaluate({"status": "inactive"}) is False
 
     def test_contains_op(self) -> None:
-        from kg_skeptic.rules import RuleCondition
+        from nerve.rules import RuleCondition
 
         cond = RuleCondition(fact="tags", op="contains", value="urgent")
         assert cond.evaluate({"tags": ["urgent", "review"]}) is True
@@ -116,7 +116,7 @@ class TestRuleConditionEvaluation:
         assert cond.evaluate({"tags": None}) is False
 
     def test_numeric_ops(self) -> None:
-        from kg_skeptic.rules import RuleCondition
+        from nerve.rules import RuleCondition
 
         # Greater than
         gt = RuleCondition(fact="count", op="gt", value=5)
@@ -139,7 +139,7 @@ class TestRuleConditionEvaluation:
         assert lte.evaluate({"count": 6}) is False
 
     def test_negation(self) -> None:
-        from kg_skeptic.rules import RuleCondition
+        from nerve.rules import RuleCondition
 
         cond = RuleCondition(fact="status", op="equals", value="error", negate=True)
         assert cond.evaluate({"status": "ok"}) is True

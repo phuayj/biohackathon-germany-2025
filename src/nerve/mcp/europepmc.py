@@ -97,7 +97,7 @@ class EuropePMCTool:
     def _fetch_url(self, url: str, params: Mapping[str, str]) -> str:
         """Fetch URL with parameters."""
         full_url = f"{url}?{urlencode(params)}"
-        headers = {"User-Agent": "kg-skeptic/0.1"}
+        headers = {"User-Agent": "nerve/0.1"}
         if self.email:
             headers["From"] = self.email
         request = Request(full_url, headers=headers)

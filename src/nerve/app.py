@@ -1,4 +1,4 @@
-"""Streamlit UI for KG-Skeptic: Hello Audit Card.
+"""Streamlit UI for NERVE: Hello Audit Card.
 
 This is the MVP "hello audit card" demonstrating:
 - Static card with claim info
@@ -19,16 +19,16 @@ import streamlit.components.v1 as components
 from collections.abc import Iterable, Mapping
 from typing import Protocol, cast, Literal
 
-from kg_skeptic.feedback import append_claim_to_dataset
-from kg_skeptic.models import Claim, EntityMention
-from kg_skeptic.pipeline import AuditResult, ClaimNormalizer, SkepticPipeline
-from kg_skeptic.ner import NERBackend
-from kg_skeptic.mcp.kg import KGBackend, KGEdge, Neo4jBackend, MonarchBackend
-from kg_skeptic.mcp.mini_kg import load_mini_kg_backend
-from kg_skeptic.provenance import CitationProvenance
-from kg_skeptic.rules import RuleEvaluation, RuleTraceEntry
-from kg_skeptic.subgraph import Subgraph, build_pair_subgraph
-from kg_skeptic.visualization import (
+from nerve.feedback import append_claim_to_dataset
+from nerve.models import Claim, EntityMention
+from nerve.pipeline import AuditResult, ClaimNormalizer, SkepticPipeline
+from nerve.ner import NERBackend
+from nerve.mcp.kg import KGBackend, KGEdge, Neo4jBackend, MonarchBackend
+from nerve.mcp.mini_kg import load_mini_kg_backend
+from nerve.provenance import CitationProvenance
+from nerve.rules import RuleEvaluation, RuleTraceEntry
+from nerve.subgraph import Subgraph, build_pair_subgraph
+from nerve.visualization import (
     CATEGORY_COLORS,
     EDGE_STATUS_COLORS,
     ERROR_TYPE_COLORS,
@@ -41,8 +41,8 @@ from kg_skeptic.visualization import (
     network_to_html,
     suspicion_to_color,
 )
-from kg_skeptic.visualization.edge_inspector import DbProvenance
-from kg_skeptic.mcp.citations import normalize_citation_identifier
+from nerve.visualization.edge_inspector import DbProvenance
+from nerve.mcp.citations import normalize_citation_identifier
 
 
 def _load_demo_claims_from_fixtures() -> list[tuple[str, Claim]]:
@@ -328,8 +328,8 @@ def _get_pipeline(ner_backend: NERBackend = NERBackend.DICTIONARY) -> SkepticPip
         # rule engine.
         use_disgenet = bool(os.environ.get("DISGENET_API_KEY"))
         # Monarch KG-backed curated KG checks are enabled by default in the
-        # app but can be disabled via KG_SKEPTIC_USE_MONARCH_KG=0/false.
-        monarch_env = os.environ.get("KG_SKEPTIC_USE_MONARCH_KG")
+        # app but can be disabled via NERVE_USE_MONARCH_KG=0/false.
+        monarch_env = os.environ.get("NERVE_USE_MONARCH_KG")
         if monarch_env is None:
             use_monarch_kg = True
         else:
@@ -341,7 +341,7 @@ def _get_pipeline(ner_backend: NERBackend = NERBackend.DICTIONARY) -> SkepticPip
         }
 
         # Optional Day 3 suspicion GNN: load a pre-trained model when available.
-        suspicion_model_env = os.environ.get("KG_SKEPTIC_SUSPICION_MODEL")
+        suspicion_model_env = os.environ.get("NERVE_SUSPICION_MODEL")
         suspicion_model_path: str | None = None
         if suspicion_model_env:
             suspicion_model_path = suspicion_model_env
@@ -1042,7 +1042,7 @@ def render_subgraph_visualization(
                 relevant_node_ids.add(node_id)
 
         # Filter nodes and edges
-        from kg_skeptic.subgraph import Subgraph
+        from nerve.subgraph import Subgraph
 
         filtered_nodes = [n for n in subgraph.nodes if n.id in relevant_node_ids]
         filtered_edges = [
@@ -1453,12 +1453,12 @@ def render_audit_card(result: AuditResult, allow_feedback: bool = False) -> None
 def main() -> None:
     """Main Streamlit app entry point."""
     st.set_page_config(
-        page_title="KG-Skeptic Audit Card",
+        page_title="NERVE Audit Card",
         page_icon="🔬",
         layout="centered",
     )
 
-    st.title("🔬 KG-Skeptic")
+    st.title("🔬 NERVE")
     st.markdown("*Neuro-symbolic auditor for LLM bio-agents*")
     st.divider()
 

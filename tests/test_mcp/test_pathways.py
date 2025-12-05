@@ -3,7 +3,7 @@
 from unittest.mock import MagicMock, patch
 import json
 
-from kg_skeptic.mcp.pathways import PathwayRecord, PathwayTool
+from nerve.mcp.pathways import PathwayRecord, PathwayTool
 
 
 class TestPathwayRecord:
@@ -38,7 +38,7 @@ class TestPathwayRecord:
 class TestPathwayTool:
     """Test cases for PathwayTool."""
 
-    @patch("kg_skeptic.mcp.pathways.urlopen")
+    @patch("nerve.mcp.pathways.urlopen")
     def test_fetch_go_term(self, mock_urlopen: MagicMock) -> None:
         """Fetch GO term with mocked QuickGO response."""
         mock_response = MagicMock()
@@ -76,7 +76,7 @@ class TestPathwayTool:
         assert rec.provenance is not None
         assert rec.provenance.source_db == "go"
 
-    @patch("kg_skeptic.mcp.pathways.urlopen")
+    @patch("nerve.mcp.pathways.urlopen")
     def test_fetch_reactome_pathway(self, mock_urlopen: MagicMock) -> None:
         """Fetch Reactome pathway with mocked response."""
         mock_response = MagicMock()

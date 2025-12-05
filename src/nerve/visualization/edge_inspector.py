@@ -1,17 +1,17 @@
-"""Edge inspector data extraction for KG-Skeptic UI."""
+"""Edge inspector data extraction for NERVE UI."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from kg_skeptic.mcp.citations import normalize_citation_identifier
+from nerve.mcp.citations import normalize_citation_identifier
 
 if TYPE_CHECKING:
-    from kg_skeptic.mcp.kg import KGEdge
-    from kg_skeptic.provenance import CitationProvenance
-    from kg_skeptic.rules import RuleEvaluation
-    from kg_skeptic.subgraph import Subgraph
+    from nerve.mcp.kg import KGEdge
+    from nerve.provenance import CitationProvenance
+    from nerve.rules import RuleEvaluation
+    from nerve.subgraph import Subgraph
 
 
 @dataclass
@@ -413,7 +413,7 @@ def extract_edge_inspector_data(
     if error_pred is not None:
         error_type_str, confidence = error_pred
         # Import descriptions here to avoid circular imports
-        from kg_skeptic.visualization.color_schemes import ERROR_TYPE_DESCRIPTIONS
+        from nerve.visualization.color_schemes import ERROR_TYPE_DESCRIPTIONS
 
         description = ERROR_TYPE_DESCRIPTIONS.get(error_type_str, "Unknown error type")
         error_type_prediction = ErrorTypePrediction(

@@ -1,5 +1,5 @@
 """
-CLI entry point for KG-Skeptic.
+CLI entry point for NERVE.
 
 This mirrors the Streamlit app's audit logic so that the same claims
 produce the same verdicts, rule traces, and evidence summaries in a
@@ -8,13 +8,13 @@ terminal-friendly format.
 Typical usage:
 
   # List demo claims (from test fixtures)
-  python -m kg_skeptic --list-demos
+  python -m nerve --list-demos
 
   # Audit a demo claim by fixture ID (e.g. REAL_D01)
-  python -m kg_skeptic --demo-id REAL_D01
+  python -m nerve --demo-id REAL_D01
 
   # Audit a custom free-text claim with evidence identifiers
-  python -m kg_skeptic --claim-text "TNF activates NF-κB" \\
+  python -m nerve --claim-text "TNF activates NF-κB" \\
       --evidence PMID:123456 PMID:987654
 """
 
@@ -28,15 +28,15 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Mapping, Sequence, cast
 
-from kg_skeptic.app import DEMO_CLAIMS
-from kg_skeptic.models import Claim, EntityMention
-from kg_skeptic.pipeline import AuditResult, ClaimNormalizer, NormalizationResult, SkepticPipeline
-from kg_skeptic.ner import NERBackend
-from kg_skeptic.provenance import CitationProvenance
-from kg_skeptic.rules import RuleTraceEntry
-from kg_skeptic.subgraph import build_pair_subgraph, filter_subgraph_for_visualization
-from kg_skeptic.visualization.edge_inspector import extract_edge_inspector_data
-from kg_skeptic.mcp.kg import KGEdge
+from nerve.app import DEMO_CLAIMS
+from nerve.models import Claim, EntityMention
+from nerve.pipeline import AuditResult, ClaimNormalizer, NormalizationResult, SkepticPipeline
+from nerve.ner import NERBackend
+from nerve.provenance import CitationProvenance
+from nerve.rules import RuleTraceEntry
+from nerve.subgraph import build_pair_subgraph, filter_subgraph_for_visualization
+from nerve.visualization.edge_inspector import extract_edge_inspector_data
+from nerve.mcp.kg import KGEdge
 
 
 def _build_pipeline(ner_backend: NERBackend) -> SkepticPipeline:
@@ -47,7 +47,7 @@ def _build_pipeline(ner_backend: NERBackend) -> SkepticPipeline:
     toggles, and optional suspicion GNN model).
     """
     # Lazy import only when needed to keep CLI overhead minimal.
-    from kg_skeptic.mcp.kg import KGBackend, Neo4jBackend
+    from nerve.mcp.kg import KGBackend, Neo4jBackend
 
     backend: KGBackend | None = None
     uri = os.environ.get("NEO4J_URI")
@@ -101,7 +101,7 @@ def _build_pipeline(ner_backend: NERBackend) -> SkepticPipeline:
 
     # Mirror Streamlit app config for optional integrations.
     use_disgenet = bool(os.environ.get("DISGENET_API_KEY"))
-    monarch_env = os.environ.get("KG_SKEPTIC_USE_MONARCH_KG")
+    monarch_env = os.environ.get("NERVE_USE_MONARCH_KG")
     if monarch_env is None:
         use_monarch_kg = True
     else:
@@ -112,7 +112,7 @@ def _build_pipeline(ner_backend: NERBackend) -> SkepticPipeline:
         "use_monarch_kg": use_monarch_kg,
     }
 
-    suspicion_model_env = os.environ.get("KG_SKEPTIC_SUSPICION_MODEL")
+    suspicion_model_env = os.environ.get("NERVE_SUSPICION_MODEL")
     suspicion_model_path: str | None = None
     if suspicion_model_env:
         suspicion_model_path = suspicion_model_env
@@ -438,7 +438,7 @@ def _audit_result_to_dict(result: AuditResult) -> dict[str, object]:
 
 def _render_text_result(result: AuditResult, *, max_nli_examples: int) -> None:
     claim = result.report.claims[0]
-    print("=== KG-Skeptic Audit ===")
+    print("=== NERVE Audit ===")
     print(f"Claim ID: {claim.id}")
     print(f'Claim: "{claim.text}"')
 
@@ -495,7 +495,7 @@ def _print_subgraph(
     claim edge, shortest paths, evidence-linked, and suspicious edges.
     """
     try:
-        from kg_skeptic.mcp.kg import KGBackend
+        from nerve.mcp.kg import KGBackend
     except Exception:  # pragma: no cover - defensive
         print("\nSubgraph: KG backend types not available.")
         return
@@ -732,7 +732,7 @@ def _print_subgraph(
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="KG-Skeptic CLI audit tool")
+    parser = argparse.ArgumentParser(description="NERVE CLI audit tool")
     parser.add_argument(
         "--list-demos",
         action="store_true",

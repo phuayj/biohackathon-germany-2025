@@ -3,7 +3,7 @@
 from unittest.mock import MagicMock, patch
 import json
 
-from kg_skeptic.mcp.kg import (
+from nerve.mcp.kg import (
     KGTool,
     KGNode,
     KGEdge,
@@ -240,7 +240,7 @@ class TestKGTool:
 class TestMonarchBackend:
     """Test cases for MonarchBackend with mocked API."""
 
-    @patch("kg_skeptic.mcp.kg.urlopen")
+    @patch("nerve.mcp.kg.urlopen")
     def test_query_edge_mocked(self, mock_urlopen: MagicMock) -> None:
         """Test Monarch edge query with mocked response."""
         mock_response = MagicMock()
@@ -274,7 +274,7 @@ class TestMonarchBackend:
         assert result.provenance.source_db == "monarch"
         assert result.edges[0].provenance is not None
 
-    @patch("kg_skeptic.mcp.kg.urlopen")
+    @patch("nerve.mcp.kg.urlopen")
     def test_query_edge_not_found_mocked(self, mock_urlopen: MagicMock) -> None:
         """Test Monarch edge query returning no results."""
         mock_response = MagicMock()

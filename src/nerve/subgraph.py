@@ -22,13 +22,13 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Dict, List, Mapping
 
-from kg_skeptic.mcp.kg import (
+from nerve.mcp.kg import (
     EdgeDirection,
     KGBackend,
     KGEdge,
     KGNode,
 )
-from kg_skeptic.pipeline import _category_from_id
+from nerve.pipeline import _category_from_id
 
 
 ALLOWED_NODE_CATEGORIES: set[str] = {"gene", "disease", "phenotype", "pathway", "publication"}

@@ -1,8 +1,8 @@
-"""Visualization module for KG-Skeptic interactive graph display."""
+"""Visualization module for NERVE interactive graph display."""
 
 from __future__ import annotations
 
-from kg_skeptic.visualization.color_schemes import (
+from nerve.visualization.color_schemes import (
     CATEGORY_COLORS,
     CATEGORY_SHAPES,
     EDGE_STATUS_COLORS,
@@ -12,7 +12,7 @@ from kg_skeptic.visualization.color_schemes import (
     evidence_count_to_width,
     suspicion_to_color,
 )
-from kg_skeptic.visualization.edge_inspector import (
+from nerve.visualization.edge_inspector import (
     DbProvenance,
     EdgeInspectorData,
     ErrorTypePrediction,
@@ -21,7 +21,7 @@ from kg_skeptic.visualization.edge_inspector import (
     SourceReference,
     extract_edge_inspector_data,
 )
-from kg_skeptic.visualization.graph_builder import (
+from nerve.visualization.graph_builder import (
     build_pyvis_network,
     classify_edge_type,
     find_edge_by_key,

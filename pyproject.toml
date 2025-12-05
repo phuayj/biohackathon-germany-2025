@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "kg-skeptic"
+name = "nerve"
 version = "0.0.0"
-description = "Neuro-symbolic, KG-verified skeptic that audits LLM bio-agents."
+description = "NERVE: Neuro-symbolic Evidence Review and Verification Engine for LLM bio-agents."
 authors = [{ name = "Biohackathon Team" }]
 readme = "README.md"
 requires-python = ">=3.13,<3.14"

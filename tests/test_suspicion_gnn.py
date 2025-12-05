@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from kg_skeptic.error_types import ErrorType
-from kg_skeptic.mcp.mini_kg import load_mini_kg_backend
-from kg_skeptic.subgraph import build_pair_subgraph
-from kg_skeptic.suspicion_gnn import (
+from nerve.error_types import ErrorType
+from nerve.mcp.mini_kg import load_mini_kg_backend
+from nerve.subgraph import build_pair_subgraph
+from nerve.suspicion_gnn import (
     ERROR_TYPE_TO_INDEX,
     INDEX_TO_ERROR_TYPE,
     NUM_ERROR_TYPES,

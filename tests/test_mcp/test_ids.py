@@ -3,7 +3,7 @@
 from unittest.mock import MagicMock, patch
 import json
 
-from kg_skeptic.mcp.ids import (
+from nerve.mcp.ids import (
     IDNormalizerTool,
     IDType,
     NormalizedID,
@@ -54,7 +54,7 @@ class TestIDNormalizerTool:
         assert IDType.MONDO.value == "mondo"
         assert IDType.HPO.value == "hpo"
 
-    @patch("kg_skeptic.mcp.ids.urlopen")
+    @patch("nerve.mcp.ids.urlopen")
     def test_normalize_hgnc_by_symbol(self, mock_urlopen: MagicMock) -> None:
         """Test HGNC normalization by gene symbol."""
         mock_response = MagicMock()
@@ -90,7 +90,7 @@ class TestIDNormalizerTool:
         assert result.provenance is not None
         assert result.provenance.source_db == "hgnc"
 
-    @patch("kg_skeptic.mcp.ids.urlopen")
+    @patch("nerve.mcp.ids.urlopen")
     def test_normalize_hgnc_not_found(self, mock_urlopen: MagicMock) -> None:
         """Test HGNC normalization for unknown symbol."""
         mock_response = MagicMock()
@@ -106,7 +106,7 @@ class TestIDNormalizerTool:
         assert result.found is False
         assert result.normalized_id is None
 
-    @patch("kg_skeptic.mcp.ids.urlopen")
+    @patch("nerve.mcp.ids.urlopen")
     def test_normalize_uniprot(self, mock_urlopen: MagicMock) -> None:
         """Test UniProt normalization."""
         mock_response = MagicMock()
@@ -135,7 +135,7 @@ class TestIDNormalizerTool:
         assert "BRCA1" in result.synonyms
         assert result.metadata["reviewed"] is True
 
-    @patch("kg_skeptic.mcp.ids.urlopen")
+    @patch("nerve.mcp.ids.urlopen")
     def test_normalize_mondo(self, mock_urlopen: MagicMock) -> None:
         """Test MONDO disease normalization by ID."""
         mock_response = MagicMock()
@@ -171,7 +171,7 @@ class TestIDNormalizerTool:
         assert "ancestors" in result.metadata
         assert isinstance(result.metadata["ancestors"], list)
 
-    @patch("kg_skeptic.mcp.ids.urlopen")
+    @patch("nerve.mcp.ids.urlopen")
     def test_normalize_hpo(self, mock_urlopen: MagicMock) -> None:
         """Test HPO phenotype normalization."""
         mock_response = MagicMock()
@@ -204,7 +204,7 @@ class TestIDNormalizerTool:
         assert "ancestors" in result.metadata
         assert isinstance(result.metadata["ancestors"], list)
 
-    @patch("kg_skeptic.mcp.ids.urlopen")
+    @patch("nerve.mcp.ids.urlopen")
     def test_hgnc_to_uniprot(self, mock_urlopen: MagicMock) -> None:
         """Test HGNC to UniProt cross-reference."""
         mock_response = MagicMock()

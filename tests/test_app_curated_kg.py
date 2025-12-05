@@ -11,8 +11,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from kg_skeptic.models import Claim
-from kg_skeptic.pipeline import (
+from nerve.models import Claim
+from nerve.pipeline import (
     AuditPayload,
     ClaimNormalizer,
     NormalizedEntity,
@@ -20,8 +20,8 @@ from kg_skeptic.pipeline import (
     NormalizationResult,
     SkepticPipeline,
 )
-from kg_skeptic.provenance import ProvenanceFetcher
-from kg_skeptic.rules import RuleEngine
+from nerve.provenance import ProvenanceFetcher
+from nerve.rules import RuleEngine
 
 
 class DummyNormalizer(ClaimNormalizer):
@@ -96,7 +96,7 @@ def _dummy_rule_engine() -> RuleEngine:
     return engine
 
 
-@patch("kg_skeptic.pipeline.KGTool")
+@patch("nerve.pipeline.KGTool")
 def test_audit_result_carries_monarch_curated_kg_facts(
     mock_kg_tool_cls: MagicMock, tmp_path: Path
 ) -> None:

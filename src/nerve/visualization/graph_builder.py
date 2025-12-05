@@ -1,14 +1,14 @@
-"""Pyvis graph construction from KG-Skeptic Subgraph objects."""
+"""Pyvis graph construction from NERVE Subgraph objects."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 from pyvis.network import Network
 
-from kg_skeptic.mcp.kg import KGEdge
-from kg_skeptic.pipeline import _category_from_id
-from kg_skeptic.subgraph import Subgraph
-from kg_skeptic.visualization.color_schemes import (
+from nerve.mcp.kg import KGEdge
+from nerve.pipeline import _category_from_id
+from nerve.subgraph import Subgraph
+from nerve.visualization.color_schemes import (
     CATEGORY_COLORS,
     CATEGORY_SHAPES,
     EDGE_STATUS_COLORS,
@@ -17,7 +17,7 @@ from kg_skeptic.visualization.color_schemes import (
 )
 
 if TYPE_CHECKING:
-    from kg_skeptic.visualization.edge_inspector import DbProvenance
+    from nerve.visualization.edge_inspector import DbProvenance
 
 EDGE_TYPE_MAP: dict[tuple[str, str], str] = {
     ("gene", "gene"): "G-G",
@@ -65,7 +65,7 @@ def build_pyvis_network(
     """Build an interactive Pyvis network from a Subgraph.
 
     Args:
-        subgraph: The KG-Skeptic Subgraph object
+        subgraph: The NERVE Subgraph object
         suspicion_scores: Map of (subj, pred, obj) -> suspicion score [0,1]
         edge_statuses: Map of (subj, pred, obj) -> status string
         selected_edge_types: Filter to these edge types (e.g., {"G-G", "G-Dis"})

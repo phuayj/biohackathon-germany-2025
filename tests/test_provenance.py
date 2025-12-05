@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from kg_skeptic.provenance import ProvenanceFetcher
-from kg_skeptic.mcp.crossref import RetractionStatus
+from nerve.provenance import ProvenanceFetcher
+from nerve.mcp.crossref import RetractionStatus
 
 
 def test_provenance_fetcher_caches_records(tmp_path: Path) -> None:
@@ -75,7 +75,7 @@ def test_provenance_uses_crossref_for_doi(tmp_path: Path, monkeypatch: pytest.Mo
             assert doi == "10.1234/test"
             return DummyArticle()
 
-    from kg_skeptic import provenance as provenance_mod
+    from nerve import provenance as provenance_mod
 
     monkeypatch.setattr(provenance_mod, "EuropePMCTool", lambda: DummyEuropePMC())
 

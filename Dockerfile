@@ -1,4 +1,4 @@
-# KG-Skeptic: Neuro-Symbolic Auditor for Bio-Agents
+# NERVE: Neuro-Symbolic Auditor for Bio-Agents
 # Multi-stage build for minimal image size
 
 # Stage 1: Build dependencies
@@ -46,13 +46,13 @@ ENV STREAMLIT_SERVER_ADDRESS=0.0.0.0
 ENV STREAMLIT_SERVER_HEADLESS=true
 ENV STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
 
-# KG-Skeptic defaults (can be overridden)
-ENV KG_SKEPTIC_USE_MONARCH_KG=true
+# NERVE defaults (can be overridden)
+ENV NERVE_USE_MONARCH_KG=true
 
 # Create non-root user for security
-RUN useradd --create-home --shell /bin/bash skeptic
-RUN chown -R skeptic:skeptic /app
-USER skeptic
+RUN useradd --create-home --shell /bin/bash nerve
+RUN chown -R nerve:nerve /app
+USER nerve
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
@@ -62,4 +62,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 EXPOSE 8501
 
 # Default: run Streamlit UI
-CMD ["streamlit", "run", "src/kg_skeptic/app.py"]
+CMD ["streamlit", "run", "src/nerve/app.py"]

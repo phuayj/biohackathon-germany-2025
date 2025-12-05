@@ -1,5 +1,5 @@
 """
-End-to-end tests for the skeptic pipeline using live networked services.
+End-to-end tests for the nerve pipeline using live networked services.
 
 These tests call:
 - HGNC / OLS (via IDNormalizerTool) for canonical IDs and ontology ancestors
@@ -14,8 +14,8 @@ import json
 import pytest
 from typing import cast
 
-from kg_skeptic.pipeline import SkepticPipeline
-from kg_skeptic.provenance import ProvenanceFetcher
+from nerve.pipeline import SkepticPipeline
+from nerve.provenance import ProvenanceFetcher
 
 
 def _load_e2e_claim_fixtures() -> list[dict[str, object]]:

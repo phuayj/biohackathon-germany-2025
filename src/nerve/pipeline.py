@@ -1,4 +1,4 @@
-"""End-to-end pipeline for KG-Skeptic.
+"""End-to-end pipeline for NERVE.
 
 Day 2 adds:
 - Claim normalization to typed entities using the mini KG slice
@@ -17,10 +17,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Sequence, TypedDict, cast
 from collections.abc import Iterable, Mapping
 
-from kg_skeptic.mcp.ids import IDNormalizerTool
-from kg_skeptic.mcp.pathways import PathwayTool
-from kg_skeptic.mcp.disgenet import DisGeNETTool
-from kg_skeptic.mcp.kg import (
+from nerve.mcp.ids import IDNormalizerTool
+from nerve.mcp.pathways import PathwayTool
+from nerve.mcp.disgenet import DisGeNETTool
+from nerve.mcp.kg import (
     EdgeQueryResult,
     InMemoryBackend,
     KGBackend,
@@ -29,9 +29,9 @@ from kg_skeptic.mcp.kg import (
     Neo4jBackend,
     Neo4jSession,
 )
-from kg_skeptic.mcp.semmed import LiteratureTriple, SemMedDBTool
-from kg_skeptic.mcp.indra import INDRATool
-from kg_skeptic.mcp.cosmic import COSMICTool
+from nerve.mcp.semmed import LiteratureTriple, SemMedDBTool
+from nerve.mcp.indra import INDRATool
+from nerve.mcp.cosmic import COSMICTool
 from .models import Claim, EntityMention, Report
 from .mcp.mini_kg import load_mini_kg_backend
 from .provenance import CitationProvenance, ProvenanceFetcher
@@ -39,7 +39,7 @@ from .rules import RuleEngine, RuleEvaluation, RuleTraceEntry
 from .ner import ExtractedEntity, NERBackend, NERExtractor, get_extractor
 
 if TYPE_CHECKING:
-    from kg_skeptic.suspicion_gnn import RGCNSuspicionModel
+    from nerve.suspicion_gnn import RGCNSuspicionModel
 
 Config = Mapping[str, object]
 AuditPayload = Mapping[str, object] | str | Claim
@@ -2178,7 +2178,7 @@ class SkepticPipeline:
         suspicion_model_path_raw = self.config.get("suspicion_gnn_model_path")
         if suspicion_model_path_raw is None:
             # Environment override for suspicion GNN model path.
-            suspicion_env = os.environ.get("KG_SKEPTIC_SUSPICION_MODEL")
+            suspicion_env = os.environ.get("NERVE_SUSPICION_MODEL")
             suspicion_model_path_raw = suspicion_env
 
         if suspicion_model_path_raw is None:
@@ -2340,7 +2340,7 @@ class SkepticPipeline:
             return self._suspicion_gnn_backend
 
         try:
-            from kg_skeptic.mcp.mini_kg import load_mini_kg_backend
+            from nerve.mcp.mini_kg import load_mini_kg_backend
 
             self._suspicion_gnn_backend = load_mini_kg_backend()
             return self._suspicion_gnn_backend
@@ -2424,7 +2424,7 @@ class SkepticPipeline:
 
         The model checkpoint is optional and only loaded when a
         ``suspicion_gnn_model_path`` is provided in the config or via
-        the ``KG_SKEPTIC_SUSPICION_MODEL`` environment variable.
+        the ``NERVE_SUSPICION_MODEL`` environment variable.
         """
         if not getattr(self, "_use_suspicion_gnn", False):
             return None
@@ -2437,7 +2437,7 @@ class SkepticPipeline:
 
         try:
             import torch
-            from kg_skeptic.suspicion_gnn import RGCNSuspicionModel
+            from nerve.suspicion_gnn import RGCNSuspicionModel
         except Exception:
             # Torch or the suspicion module is not available in this environment.
             return None
@@ -2584,8 +2584,8 @@ class SkepticPipeline:
 
         try:
             import torch
-            from kg_skeptic.subgraph import build_pair_subgraph
-            from kg_skeptic.suspicion_gnn import subgraph_to_tensors
+            from nerve.subgraph import build_pair_subgraph
+            from nerve.suspicion_gnn import subgraph_to_tensors
         except Exception:
             return {}
 
@@ -2691,7 +2691,7 @@ class SkepticPipeline:
         error_type_predictions: dict[tuple[str, str, str], tuple[str, float]] = {}
         if model.has_error_type_head():
             try:
-                from kg_skeptic.suspicion_gnn import INDEX_TO_ERROR_TYPE
+                from nerve.suspicion_gnn import INDEX_TO_ERROR_TYPE
 
                 with torch.no_grad():
                     error_type_logits = model.forward_error_types(
@@ -3453,7 +3453,7 @@ class SkepticPipeline:
         )
 
     def run(self, audit_payload: AuditPayload) -> AuditResult:
-        """Run the skeptic on a normalized audit payload."""
+        """Run the nerve on a normalized audit payload."""
         normalization = self.normalizer.normalize(audit_payload)
         provenance = self.provenance_fetcher.fetch_many(normalization.citations)
         return self.evaluate_audit(normalization, provenance, audit_payload=audit_payload)

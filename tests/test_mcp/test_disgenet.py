@@ -3,7 +3,7 @@
 from unittest.mock import MagicMock, patch
 import json
 
-from kg_skeptic.mcp.disgenet import DisGeNETTool, GeneDiseaseAssociation
+from nerve.mcp.disgenet import DisGeNETTool, GeneDiseaseAssociation
 
 
 class TestGeneDiseaseAssociation:
@@ -28,7 +28,7 @@ class TestGeneDiseaseAssociation:
 class TestDisGeNETTool:
     """Test cases for DisGeNETTool."""
 
-    @patch("kg_skeptic.mcp.disgenet.urlopen")
+    @patch("nerve.mcp.disgenet.urlopen")
     def test_gene_to_diseases(self, mock_urlopen: MagicMock) -> None:
         """Fetch diseases for gene with mocked response."""
         mock_response = MagicMock()
@@ -66,7 +66,7 @@ class TestDisGeNETTool:
         assert results[0].provenance is not None
         assert results[0].provenance.source_db == "disgenet"
 
-    @patch("kg_skeptic.mcp.disgenet.urlopen")
+    @patch("nerve.mcp.disgenet.urlopen")
     def test_disease_to_genes(self, mock_urlopen: MagicMock) -> None:
         """Fetch genes for disease with mocked response."""
         mock_response = MagicMock()

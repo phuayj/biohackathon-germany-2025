@@ -1,6 +1,6 @@
 """Tests for Neo4j/BioCypher KG backend."""
 
-from kg_skeptic.mcp.kg import EdgeDirection, Neo4jBackend
+from nerve.mcp.kg import EdgeDirection, Neo4jBackend
 
 
 class DummySession:

@@ -91,7 +91,7 @@ def fetch_citations_for_pmids(
     url = f"{ELINK_BASE_URL}?{urlencode(params)}"
 
     headers = {
-        "User-Agent": "kg-skeptic/0.1 (https://github.com/biohackathon-germany)",
+        "User-Agent": "nerve/0.1 (https://github.com/biohackathon-germany)",
     }
 
     request = Request(url, headers=headers)
