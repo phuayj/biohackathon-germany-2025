@@ -179,8 +179,8 @@ class TestSkepticPipeline:
         pipeline = SkepticPipeline(provenance_fetcher=ProvenanceFetcher(cache_dir=tmp_path))
         # Loosen PASS threshold so that even a negatively weighted retraction
         # scenario would nominally PASS based on score alone.
-        pipeline.PASS_THRESHOLD = -1.0
-        pipeline.WARN_THRESHOLD = -2.0
+        pipeline.PASS_THRESHOLD = -2.0
+        pipeline.WARN_THRESHOLD = -3.0
 
         result = pipeline.run(
             {

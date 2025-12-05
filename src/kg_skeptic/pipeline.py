@@ -2042,6 +2042,19 @@ def build_rule_facts(
     # Text-level NLI-style verification over abstracts (when available)
     text_nli_facts = _build_text_nli_facts(claim, triple, provenance)
 
+    # Detect spurious self-referential claims (same entity for subject/object
+    # but the entity label only appears once in the claim text - likely NER error)
+    is_same_entity = triple.subject.id == triple.object.id
+    is_spurious_self_ref = False
+    if is_same_entity and claim_text:
+        # Count occurrences of the entity label in the claim text (case-insensitive)
+        entity_label = triple.subject.label.lower()
+        claim_text_lower = claim_text.lower()
+        occurrence_count = claim_text_lower.count(entity_label)
+        # If entity appears only once but is used for both subject and object,
+        # it's likely a NER extraction error
+        is_spurious_self_ref = occurrence_count < 2
+
     return {
         "claim": {
             "predicate": triple.predicate,
@@ -2053,6 +2066,8 @@ def build_rule_facts(
             "range_category": object_category,
             "domain_valid": domain_valid,
             "range_valid": range_valid,
+            "is_self_referential": is_same_entity,
+            "is_spurious_self_referential": is_spurious_self_ref,
         },
         "ontology": {
             "subject_has_ancestors": bool(triple.subject.ancestors),
@@ -2123,8 +2138,9 @@ class AuditResult:
 class SkepticPipeline:
     """Orchestrator for normalization, provenance fetching, and rule evaluation."""
 
-    PASS_THRESHOLD = 0.8
-    WARN_THRESHOLD = 0.2
+    # Thresholds calibrated for evidence-driven scoring (type_domain_range_valid = 0.0)
+    PASS_THRESHOLD = 0.0
+    WARN_THRESHOLD = -0.4
 
     def __init__(
         self,
@@ -3054,6 +3070,20 @@ class SkepticPipeline:
                     score=0.0,
                     because=f"because the subject/object categories ({domain_cat} → {range_cat}) are incompatible for this predicate (hard gate override)",
                     description="Type violation gate: forces FAIL",
+                )
+            )
+
+        # Spurious self-referential claims (subject == object but entity appears
+        # only once in claim text) force FAIL - likely NER error.
+        is_spurious_self_ref = type_info.get("is_spurious_self_referential", False)
+        if is_spurious_self_ref:
+            verdict = "FAIL"
+            evaluation.trace.add(
+                RuleTraceEntry(
+                    rule_id="gate:spurious_self_referential",
+                    score=0.0,
+                    because="because subject and object are the same entity but the entity only appears once in the claim text (likely NER extraction error)",
+                    description="Spurious self-referential gate: forces FAIL",
                 )
             )
 

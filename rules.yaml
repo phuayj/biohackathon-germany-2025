@@ -1,7 +1,7 @@
 # Day 2 rule set: evidence-aware, ontology-aware scoring
 rules:
   - id: type_domain_range_valid
-    description: Domain/range matches expected biomedical categories (baseline requirement)
+    description: Domain/range matches expected biomedical categories
     weight: 0.0
     when:
       all:
@@ -11,11 +11,11 @@ rules:
         - fact: type.range_valid
           op: equals
           value: true
-    because: "because the subject ({type.domain_category}) -> object ({type.range_category}) relation is structurally valid (baseline)"
+    because: "because the subject ({type.domain_category}) -> object ({type.range_category}) relation is structurally valid"
 
   - id: type_domain_range_violation
     description: Domain/range invalid for predicate
-    weight: -1.2
+    weight: 0.0
     when:
       any:
         - fact: type.domain_valid
@@ -25,6 +25,16 @@ rules:
           op: equals
           value: false
     because: "because the subject/object categories are incompatible ({type.domain_category} -> {type.range_category})"
+
+  - id: spurious_self_referential_claim
+    description: Subject and object are the same entity but only mentioned once (hard gate - forces FAIL)
+    weight: 0.0
+    when:
+      all:
+        - fact: type.is_spurious_self_referential
+          op: equals
+          value: true
+    because: "because subject and object are the same entity but the entity only appears once in the claim text — this is likely a NER extraction error"
 
   - id: ontology_closure_hpo
     description: Entities carry ontology ancestry (HPO/MONDO/etc)
