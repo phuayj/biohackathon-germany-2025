@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="nerve-logo.png" alt="NERVE Logo" width="200">
+</p>
+
 # NERVE: Neuro-symbolic Evidence Review and Verification Engine
 
 A neuro-symbolic, knowledge-graph–verified auditor for MCP-connected LLM bio-agents. NERVE catches ontology violations, weak or contradictory claims, and missing evidence, then proposes minimal fixes that keep the agent's intent intact.

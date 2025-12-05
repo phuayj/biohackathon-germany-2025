@@ -151,7 +151,7 @@
 - [ ] One-page README with "How it works" diagram and API examples.
 
 ### Docs & Artifacts
-- [ ] `RULES.md` documenting each rule's rationale and examples.
+- [x] `RULES.md` documenting each rule's rationale and examples.
 - [ ] `EVAL.md` with datasets, metrics, and ablation charts.
 - [ ] Short screen-capture of flow for judges.
 

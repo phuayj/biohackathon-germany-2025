@@ -1452,14 +1452,26 @@ def render_audit_card(result: AuditResult, allow_feedback: bool = False) -> None
 
 def main() -> None:
     """Main Streamlit app entry point."""
+    # Logo path relative to project root
+    logo_path = Path(__file__).parent.parent.parent / "nerve-logo.png"
+
     st.set_page_config(
         page_title="NERVE Audit Card",
-        page_icon="🔬",
+        page_icon=str(logo_path) if logo_path.exists() else "🔬",
         layout="centered",
     )
 
-    st.title("🔬 NERVE")
-    st.markdown("*Neuro-symbolic auditor for LLM bio-agents*")
+    # Display logo and title
+    if logo_path.exists():
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            st.image(str(logo_path), width=100)
+        with col2:
+            st.title("NERVE")
+            st.markdown("*Neuro-symbolic Evidence Review and Verification Engine*")
+    else:
+        st.title("🔬 NERVE")
+        st.markdown("*Neuro-symbolic auditor for LLM bio-agents*")
     st.divider()
 
     # Disclaimer banner
