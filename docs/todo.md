@@ -294,7 +294,7 @@
 - [x] API examples in README.
 
 ### Documentation
-- [ ] `RULES.md` documenting each rule's rationale and examples.
+- [x] `RULES.md` documenting each rule's rationale and examples.
 - [ ] `EVAL.md` with datasets, metrics, ablation charts.
 - [ ] Short screen-capture of flow for judges.
 - [ ] 20–30s screen capture showing edges changing color/width as evidence updates (live overlay demo).
