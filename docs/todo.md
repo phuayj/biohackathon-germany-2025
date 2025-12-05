@@ -66,6 +66,7 @@
 - [x] Display citations with status (clean/retracted/concern).
 - [x] Templated rationale with "because" messages from rule traces.
 - [x] Clarify GLiNER2 normalization error messaging when entity extraction fails.
+- [x] Add manual entity input fallback when normalization fails so users can retry audits or submit feedback.
 - [x] Recover sibling/conflict claims by pairing HPO/MONDO IDs from text/evidence when NER misses them.
 
 ### Evidence & Predicate Hardening

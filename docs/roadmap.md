@@ -66,6 +66,7 @@
 - [x] "Audit Card": title, normalized triple, badges (Type✓, Closure✓, Retraction✖).
 - [x] Score bar, list of PMIDs/DOIs with status, templated rationale.
 - [x] Clarify GLiNER2 normalization error messaging when entity extraction fails.
+- [x] Add manual entity input fallback when normalization fails so users can retry audits or submit feedback with CURIEs.
 - [x] Recover sibling/conflict claims by pairing HPO/MONDO IDs from text/evidence when NER misses them.
 
 **Definition of Done:** Paste natural-language claim → normalized triple, real evidence, retraction checks, PASS/WARN/FAIL with rule trace and live citations.

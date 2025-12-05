@@ -411,7 +411,9 @@ class TestVerdictGates:
             super().__init__(rules=[])
             self._features = {"base": base_score}
 
-        def evaluate(self, facts: Mapping[str, object]) -> RuleEvaluation:  # pragma: no cover - tiny shim
+        def evaluate(
+            self, facts: Mapping[str, object]
+        ) -> RuleEvaluation:  # pragma: no cover - tiny shim
             _ = facts
             return RuleEvaluation(features=dict(self._features), trace=RuleTrace())
 

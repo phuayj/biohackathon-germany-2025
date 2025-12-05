@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from pathlib import Path
 from dataclasses import replace
 
@@ -1739,6 +1740,10 @@ def main() -> None:
                                 "Try adding clearer gene/disease names or select a neural NER backend in Settings."
                             )
                         st.caption(f"Details: {exc}")
+                        # Store the failed claim for manual entity input
+                        st.session_state.normalization_failed = True
+                        st.session_state.failed_claim_text = claim_text
+                        st.session_state.failed_evidence = evidence
                         st.session_state.audit_run = False
                     except Exception as exc:  # pragma: no cover - UI surface
                         st.error("Audit failed due to an unexpected error.")
@@ -1748,6 +1753,164 @@ def main() -> None:
                         st.session_state.audit_run = True
                         st.session_state.result = result
                         st.session_state.is_custom_claim = True
+                        st.session_state.normalization_failed = False
+
+    # Show manual entity input form when normalization fails
+    if st.session_state.get("normalization_failed") and not st.session_state.audit_run:
+        st.divider()
+        st.subheader("Manual Entity Input")
+        st.info(
+            "The system couldn't automatically detect entities from your claim. "
+            "You can provide the subject and object entities manually to help train the system."
+        )
+
+        failed_claim_text = st.session_state.get("failed_claim_text", "")
+        failed_evidence = st.session_state.get("failed_evidence", [])
+
+        st.markdown(f'**Claim:** "{failed_claim_text}"')
+        if failed_evidence:
+            st.caption(f"Evidence: {', '.join(failed_evidence)}")
+
+        col_subj, col_obj = st.columns(2)
+
+        with col_subj:
+            st.markdown("**Subject Entity** (e.g., gene)")
+            subject_curie = st.text_input(
+                "Subject CURIE",
+                placeholder="e.g., HGNC:1100 (BRCA1)",
+                key="manual_subject_curie",
+                help="Enter a CURIE identifier like HGNC:1100, NCBIGene:675, etc.",
+            )
+            subject_label = st.text_input(
+                "Subject Label",
+                placeholder="e.g., BRCA1",
+                key="manual_subject_label",
+                help="Human-readable name of the entity",
+            )
+
+        with col_obj:
+            st.markdown("**Object Entity** (e.g., disease)")
+            object_curie = st.text_input(
+                "Object CURIE",
+                placeholder="e.g., MONDO:0007254 (breast cancer)",
+                key="manual_object_curie",
+                help="Enter a CURIE identifier like MONDO:0007254, HP:0000001, etc.",
+            )
+            object_label = st.text_input(
+                "Object Label",
+                placeholder="e.g., breast cancer",
+                key="manual_object_label",
+                help="Human-readable name of the entity",
+            )
+
+        st.markdown("**What verdict should this claim receive?**")
+        manual_verdict = st.radio(
+            "Expected verdict",
+            options=["PASS", "WARN", "FAIL"],
+            horizontal=True,
+            key="manual_verdict_radio",
+            label_visibility="collapsed",
+        )
+
+        comment = st.text_area(
+            "Optional comment",
+            placeholder="Any additional context about this claim...",
+            key="manual_entity_comment",
+        )
+
+        col_retry, col_feedback = st.columns(2)
+
+        with col_retry:
+            retry_disabled = not (subject_curie and object_curie)
+            if st.button(
+                "Retry Audit with Entities",
+                type="primary",
+                disabled=retry_disabled,
+                use_container_width=True,
+                key="retry_with_entities_btn",
+                help="Retry the audit using the manually provided entities",
+            ):
+                # Build entities from user input
+                manual_entities = [
+                    EntityMention(
+                        mention=subject_label or subject_curie,
+                        norm_id=subject_curie,
+                        norm_label=subject_label,
+                        source="user_input",
+                        metadata={"role": "subject"},
+                    ),
+                    EntityMention(
+                        mention=object_label or object_curie,
+                        norm_id=object_curie,
+                        norm_label=object_label,
+                        source="user_input",
+                        metadata={"role": "object"},
+                    ),
+                ]
+
+                manual_claim = Claim(
+                    id=f"user-{uuid.uuid4().hex[:8]}",
+                    text=failed_claim_text,
+                    entities=manual_entities,
+                    support_span=None,
+                    evidence=failed_evidence,
+                    metadata={"source": "manual_entity_input"},
+                )
+
+                with st.spinner("Running audit with provided entities..."):
+                    pipeline = _get_pipeline(ner_backend=ner_backend)
+                    try:
+                        result = pipeline.run(manual_claim)
+                        st.session_state.audit_run = True
+                        st.session_state.result = result
+                        st.session_state.is_custom_claim = True
+                        st.session_state.normalization_failed = False
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Audit still failed: {exc}")
+
+        with col_feedback:
+            feedback_disabled = not (subject_curie or object_curie)
+            if st.button(
+                "Submit Feedback Only",
+                disabled=feedback_disabled,
+                use_container_width=True,
+                key="submit_feedback_only_btn",
+                help="Save this claim with entity annotations for training (no audit)",
+            ):
+                subject_entity = None
+                object_entity = None
+                if subject_curie:
+                    subject_entity = {
+                        "curie": subject_curie,
+                        "label": subject_label or subject_curie,
+                    }
+                if object_curie:
+                    object_entity = {"curie": object_curie, "label": object_label or object_curie}
+
+                try:
+                    append_claim_to_dataset(
+                        failed_claim_text,
+                        failed_evidence,
+                        cast(Literal["PASS", "WARN", "FAIL"], manual_verdict),
+                        comment=comment,
+                        subject_entity=subject_entity,
+                        object_entity=object_entity,
+                        normalization_failed=True,
+                    )
+                    st.success("Feedback saved! Thank you for helping improve the system.")
+                    st.session_state.normalization_failed = False
+                    st.session_state.failed_claim_text = None
+                    st.session_state.failed_evidence = None
+                except Exception as e:
+                    st.error(f"Error saving feedback: {e}")
+
+        st.caption(
+            "**Tip:** You can find entity CURIEs at "
+            "[HGNC](https://www.genenames.org/) for genes, "
+            "[MONDO](https://mondo.monarchinitiative.org/) for diseases, "
+            "or [HPO](https://hpo.jax.org/) for phenotypes."
+        )
 
     # Show results if audit has been run
     if st.session_state.audit_run:

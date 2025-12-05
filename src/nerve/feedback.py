@@ -13,6 +13,9 @@ def append_claim_to_dataset(
     label: Literal["PASS", "FAIL", "WARN"],
     output_path: str | Path = "data/annotated_claims.jsonl",
     comment: str | None = None,
+    subject_entity: dict[str, str] | None = None,
+    object_entity: dict[str, str] | None = None,
+    normalization_failed: bool = False,
 ) -> str:
     """
     Appends a user-submitted claim with ground truth label to a JSONL file.
@@ -23,6 +26,9 @@ def append_claim_to_dataset(
         label: The user-provided ground truth label.
         output_path: Path to the JSONL file.
         comment: Optional user comment explaining the feedback.
+        subject_entity: Optional dict with subject entity info (curie, label).
+        object_entity: Optional dict with object entity info (curie, label).
+        normalization_failed: Whether this was submitted due to normalization failure.
 
     Returns:
         The generated ID of the new record.
@@ -43,20 +49,28 @@ def append_claim_to_dataset(
         else:
             structured_evidence.append({"type": "other", "id": ev})
 
-    metadata = {
+    metadata: dict[str, object] = {
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "source": "user_feedback",
     }
     if comment:
         metadata["comment"] = comment
+    if normalization_failed:
+        metadata["normalization_failed"] = True
 
-    record = {
+    record: dict[str, object] = {
         "id": record_id,
         "claim": claim_text,
         "evidence": structured_evidence,
         "expected_decision": label,
         "metadata": metadata,
     }
+
+    # Add user-provided entity annotations if available
+    if subject_entity:
+        record["subject"] = subject_entity
+    if object_entity:
+        record["object"] = object_entity
 
     path = Path(output_path)
     # Ensure directory exists
