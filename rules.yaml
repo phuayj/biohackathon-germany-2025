@@ -165,6 +165,39 @@ rules:
           value: true
     because: "because {tissue.mismatch_details}"
 
+  - id: generic_predicate_penalty
+    description: Claim uses generic 'related_to' predicate
+    weight: -0.5
+    when:
+      all:
+        - fact: extraction.predicate_is_fallback
+          op: equals
+          value: true
+    because: "because the predicate is a generic fallback ('biolink:related_to')"
+
+  - id: monarch_missing_support_penalty
+    description: Monarch KG checked but no support found
+    weight: -0.2
+    when:
+      all:
+        - fact: curated_kg.monarch_checked
+          op: equals
+          value: true
+        - fact: curated_kg.monarch_support
+          op: equals
+          value: false
+    because: "because Monarch KG was checked but returned no supporting edges"
+
+  - id: structured_literature_strong
+    description: Strong support from structured literature sources
+    weight: 0.3
+    when:
+      all:
+        - fact: literature.structured_source_count
+          op: gte
+          value: 3
+    because: "because {literature.structured_source_count} independent structured sources support the claim"
+
   # ---------------------------------------------------------------------------
   # NLI Scoring Rules (Day 3)
   # ---------------------------------------------------------------------------

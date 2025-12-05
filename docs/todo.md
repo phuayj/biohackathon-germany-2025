@@ -258,6 +258,10 @@
 - [x] UI: badges, copy-to-clipboard JSON, "Not medical advice" banner.
 - [ ] Anonymized audit logs for reproducibility.
 - [ ] Improve negation detection beyond hard-coded phrases (data-driven patterns or lightweight NLP cues) alongside variant cue hardening.
+- [ ] **Gene function polarity rule:** Add `gene_function_predicate_mismatch` rule to catch semantically misleading claims like "TP53 causes cancer" (tumor suppressors don't cause disease—their dysfunction does). Requires:
+  - New data source for gene function classification (oncogene vs tumor_suppressor vs both vs unknown). Options: COSMIC Cancer Gene Census, OncoKB, or curated list.
+  - New fact: `gene.function_class` with values `"oncogene" | "tumor_suppressor" | "both" | "unknown"`.
+  - Rule logic: If `gene.function_class == "tumor_suppressor"` and predicate polarity is positive (causes/increases), flag as WARN with suggestion to rephrase as "dysfunction of X causes Y" or "loss of X causes Y".
 - [ ] Refine variant-context detection beyond simple mutation keywords (e.g., better patterns/NER for `has_variant_context` on GeneToDiseaseAssociation edges).
 - [x] Tighten Edge Inspector rule footprint to only show truly edge/evidence-level rules (type/ontology/NLI gates stay at claim level) and ensure wording is edge-specific.
 - [x] Attach explicit evidence/source identifiers to Neo4j/BioCypher edges where possible so Edge Inspector can surface PMIDs/DOIs/GO/Reactome IDs instead of "Sources: (none)".
