@@ -54,6 +54,7 @@
 - [x] **extraction_low_confidence:** Add a rule capturing low-confidence extraction / vague predicates (e.g., `REAL_F05`); after implementation, re-run the same E2E seed fixture test and update `REAL_F05` expectations in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`.
 - [x] **opposite_predicate_same_context:** Add a rule for opposite predicates in the same context (e.g., `REAL_025`); after implementation, re-run the same E2E seed fixture test and update `REAL_025` expectations in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`, removing the temporary WARN override.
 - [x] Fix all mypy strict type-checking errors in `src/`.
+- [x] Fix mypy strict type-checking errors across the `tests/` suite.
 - [x] Replace remaining `Any`-based Neo4j driver casts in `src/nerve/app.py` and `src/nerve/__main__.py` with a typed protocol to keep strict mypy happy long-term.
 
 ### Scoring & Decision
@@ -271,11 +272,19 @@
 - [ ] Add corpus-derived predicate canonicalization (embedding/alias lookup) so opposite-predicate detection covers nuanced phrasing.
 - [ ] Make NLI paper type classifiers data-driven: replace hardcoded REVIEW_INDICATORS, ANIMAL_STUDY_INDICATORS, HUMAN_STUDY_INDICATORS with configurable patterns or lightweight ML-based classification using MeSH terms/publication types.
 
+### MCP Server (Done)
+- [x] **MCP Server Implementation:** Create `src/nerve/mcp_server.py` exposing the full NERVE pipeline as an MCP server using FastMCP.
+- [x] **audit_claim tool:** Main tool that runs the full pipeline from claim text + optional evidence to verdict.
+- [x] **audit_claim_batch tool:** Batch processing of multiple claims.
+- [x] **get_verdict_explanation tool:** Human-readable explanation of audit verdicts.
+- [x] **Resources:** `nerve://config` and `nerve://rules` for introspection.
+- [x] **CLI entry point:** `uv run python -m nerve.mcp_server` with stdio/SSE transport options.
+
 ### Integration Testing
 - [x] Run `UV_CACHE_DIR=.uv-cache uv run pytest` to validate recent type-tightening changes around text NLI facts.
 - [x] Fix all ruff and mypy errors in the codebase and tighten NER backend typing (including PubMedBERT placeholder and Neo4j helpers) so that static checks pass without ignores.
 - [ ] Measure hallucination-reduction when auditor guards a small LLM QA/KG agent.
-- [ ] Integration tests with demo bio-agent via MCP.
+- [x] Integration tests with demo bio-agent via MCP (MCP server now available).
 - [ ] Surface curated KG support in the UI: add an Audit Card snippet that shows whether Monarch and/or DisGeNET back the gene–disease edge (including edge counts and which sources fired), and add non-live + e2e tests to exercise this path.
 
 ---

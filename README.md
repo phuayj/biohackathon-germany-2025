@@ -6,6 +6,8 @@
 
 A neuro-symbolic, knowledge-graph–verified auditor for MCP-connected LLM bio-agents. NERVE catches ontology violations, weak or contradictory claims, and missing evidence, then proposes minimal fixes that keep the agent's intent intact.
 
+**Live Demo:** [https://nerve.yinjunphua.com/](https://nerve.yinjunphua.com/) (Basic auth: `biohack` / `2025`)
+
 BioHackathon Germany 2025 event page: [4th BioHackathon Germany — Detection and extraction of datasets for training machine learning methods from literature](https://www.denbi.de/de-nbi-events/1935-4th-biohackathon-germany-detection-and-extraction-of-datasets-for-training-machine-learning-methods-from-literature).
 
 ## What this does

@@ -1,5 +1,6 @@
 """Tests for the pipeline orchestrator."""
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -13,6 +14,7 @@ from nerve.pipeline import (
     NormalizationResult,
     _build_text_nli_facts,
 )
+from nerve.rules import RuleEngine, RuleEvaluation, RuleTrace
 from nerve.ner import NERBackend
 from nerve.provenance import CitationProvenance, ProvenanceFetcher
 from nerve.models import Claim
@@ -404,24 +406,14 @@ class TestTextLevelNLI:
 class TestVerdictGates:
     """Tests for score-independent verdict gates in SkepticPipeline.evaluate_audit."""
 
-    class _DummyTrace:
-        def __init__(self) -> None:
-            self.entries: list[object] = []
-
-        def add(self, entry: object) -> None:
-            self.entries.append(entry)
-
-    class _DummyEngine:
+    class _DummyEngine(RuleEngine):
         def __init__(self, base_score: float) -> None:
+            super().__init__(rules=[])
             self._features = {"base": base_score}
 
-        def evaluate(self, facts: dict[str, object]) -> object:  # pragma: no cover - tiny shim
-            class _DummyEvaluation:
-                def __init__(self, features: dict[str, float], trace_cls: type) -> None:
-                    self.features = dict(features)
-                    self.trace = trace_cls()
-
-            return _DummyEvaluation(self._features, TestVerdictGates._DummyTrace)
+        def evaluate(self, facts: Mapping[str, object]) -> RuleEvaluation:  # pragma: no cover - tiny shim
+            _ = facts
+            return RuleEvaluation(features=dict(self._features), trace=RuleTrace())
 
     @staticmethod
     def _make_minimal_normalization() -> NormalizationResult:
@@ -519,7 +511,13 @@ class TestVerdictGates:
         """Helper to run evaluate_audit with synthetic facts."""
         from nerve import pipeline as pipeline_mod
 
-        def fake_build_rule_facts(triple, provenance, *, claim=None, context_conflicts=None):
+        def fake_build_rule_facts(
+            triple: NormalizedTriple,
+            provenance: Sequence[CitationProvenance],
+            *,
+            claim: Claim | None = None,
+            context_conflicts: Mapping[str, object] | None = None,
+        ) -> dict[str, object]:
             _ = triple, provenance, claim, context_conflicts
             return facts
 

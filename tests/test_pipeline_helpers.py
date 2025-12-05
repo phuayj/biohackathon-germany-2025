@@ -52,7 +52,7 @@ class TestCategoryAndOntologyHelpers:
 
     def test_normalize_ancestor_ids_filters_and_uppercases(self) -> None:
         raw = [" hp:0000118  ", "MONDO:0001", "no_colon", 123, None]
-        result = _normalize_ancestor_ids(raw)  # type: ignore[arg-type]
+        result = _normalize_ancestor_ids(raw)
         assert result == {"HP:0000118", "MONDO:0001"}
 
     def test_detect_sibling_conflict_shared_non_root_ancestors(self) -> None:
@@ -155,8 +155,12 @@ class TestPredicateHelpers:
         assert facts["claim_predicate_polarity"] == "positive"
         assert facts["context_predicate_polarity"] == "negative"
         assert facts["opposite_predicate_same_context"] is True
-        assert facts["context_positive_predicate_count"] == 0
-        assert facts["context_negative_predicate_count"] > 0
+        positive_count = facts["context_positive_predicate_count"]
+        negative_count = facts["context_negative_predicate_count"]
+        assert isinstance(positive_count, int)
+        assert isinstance(negative_count, int)
+        assert positive_count == 0
+        assert negative_count > 0
 
     def test_detect_opposite_predicate_context_mixed_does_not_flag(self) -> None:
         subject = NormalizedEntity(id="HGNC:1", label="GENE1", category="gene")
@@ -206,7 +210,7 @@ class TestStructuredEvidenceAndTissue:
 
     def test_detect_tissue_mismatch_requires_uberon_and_evidence(self) -> None:
         qualifiers = {"tissue": "UBERON:0000955"}
-        structured = [
+        structured: list[Mapping[str, object]] = [
             {"type": "uberon", "id": "UBERON:0000955"},  # same tissue only
         ]
         result_same = _detect_tissue_mismatch(qualifiers, structured)
@@ -214,17 +218,16 @@ class TestStructuredEvidenceAndTissue:
         assert result_same["is_mismatch"] is False
         assert result_same["expected_tissues"] == []
 
-        structured_mismatch = [
+        structured_mismatch: list[Mapping[str, object]] = [
             {"type": "uberon", "id": "UBERON:0000955"},
             {"type": "uberon", "id": "UBERON:0002107"},
         ]
         result = _detect_tissue_mismatch(qualifiers, structured_mismatch)
         assert result["is_mismatch"] is True
         assert result["expected_tissues"] == ["UBERON:0002107"]
-        assert (
-            "claimed UBERON:0000955 but evidence suggests UBERON:0002107"
-            in result["mismatch_details"]
-        )
+        mismatch_details = result["mismatch_details"]
+        assert isinstance(mismatch_details, str)
+        assert "claimed UBERON:0000955 but evidence suggests UBERON:0002107" in mismatch_details
 
     @pytest.mark.parametrize(
         "text,expected_labels",

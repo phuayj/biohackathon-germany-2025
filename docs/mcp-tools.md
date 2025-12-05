@@ -443,3 +443,104 @@ nerve/mcp/
 ```
 
 All tools use only Python standard library (`urllib`, `json`, `xml.etree`) - no additional dependencies required.
+
+## MCP Server
+
+NERVE also provides an MCP server that exposes the full audit pipeline, allowing LLM agents to verify biomedical claims.
+
+### Running the Server
+
+```bash
+# Run with stdio transport (for Claude Desktop, etc.)
+uv run python -m nerve.mcp_server
+
+# Run with SSE transport
+uv run python -m nerve.mcp_server --transport sse
+```
+
+### Available Tools
+
+#### audit_claim
+
+Audit a biomedical claim for validity against knowledge graphs and literature.
+
+```python
+# Example usage from an MCP client
+result = await client.call_tool("audit_claim", {
+    "claim_text": "BRCA1 mutations cause breast cancer",
+    "evidence": ["PMID:7997877", "PMID:8145850"]
+})
+
+# Returns:
+{
+    "verdict": "PASS",
+    "score": 0.85,
+    "report": {...},
+    "evaluation": {
+        "score": 0.85,
+        "features": {...},
+        "trace": [...]
+    },
+    "normalization": {
+        "triple": {
+            "subject": {"id": "HGNC:1100", "label": "BRCA1", "category": "gene"},
+            "predicate": "biolink:gene_associated_with_condition",
+            "object": {"id": "MONDO:0007254", "label": "breast cancer", "category": "disease"}
+        }
+    },
+    "provenance": [...]
+}
+```
+
+#### audit_claim_batch
+
+Audit multiple claims in a single batch.
+
+```python
+result = await client.call_tool("audit_claim_batch", {
+    "claims": [
+        {"text": "BRCA1 causes breast cancer"},
+        {"text": "TP53 is associated with Li-Fraumeni syndrome", "evidence": ["PMID:1565476"]}
+    ]
+})
+```
+
+#### get_verdict_explanation
+
+Get a human-readable explanation of an audit verdict.
+
+```python
+result = await client.call_tool("get_verdict_explanation", {
+    "claim_text": "BRCA1 mutations cause breast cancer"
+})
+
+# Returns a formatted text explanation:
+# Verdict: PASS
+# Score: 0.85
+#
+# Interpreted as: BRCA1 --[biolink:gene_associated_with_condition]--> breast cancer
+#   Subject: HGNC:1100 (gene)
+#   Object: MONDO:0007254 (disease)
+# ...
+```
+
+### Available Resources
+
+- `nerve://config` - Server configuration (thresholds, enabled features)
+- `nerve://rules` - List of audit rules with descriptions and weights
+
+### Claude Desktop Integration
+
+Add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "nerve": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "nerve.mcp_server"],
+      "cwd": "/path/to/nerve"
+    }
+  }
+}
+```

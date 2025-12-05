@@ -10,6 +10,7 @@
 - [x] Define claim schema in `agent/schemas.py` with subject/predicate/object/qualifiers/provenance.
 - [x] Establish deterministic test harness for rule-based checks.
 - [x] Achieve clean mypy strict type-check runs on the codebase (with typed Neo4j driver integration and NER backend wiring, including PubMedBERT placeholder support).
+- [x] Keep the `tests/` suite mypy-clean under strict settings.
 
 ### MCP Tools (Minimum Viable)
 - [x] `europepmc.search(query)` and `europepmc.fetch(pmid)` → title, abstract, DOI, MeSH, open access status, citations.
@@ -145,6 +146,11 @@
 - [x] **Scene A (clean claim):** PASS with multi-source support; show subgraph; talk through rules (Implemented via Demo Tabs).
 - [x] **Scene B (tainted claim):** FAIL due to retraction; re-run with "Auditor OFF" to show what would have slipped through.
 - [x] **Scene C (fix):** Accept patch suggestion → re-audit → PASS/WARN.
+
+### MCP Server (Done)
+- [x] **MCP Server Implementation:** `src/nerve/mcp_server.py` exposing the full NERVE pipeline as an MCP server.
+- [x] **audit_claim tool:** Main tool that runs the full pipeline from claim text + optional evidence to verdict.
+- [x] **CLI entry point:** `uv run python -m nerve.mcp_server` with stdio/SSE transport options.
 
 ### Packaging
 - [ ] `docker compose up` brings: MCP tools, Streamlit UI, agent service.
