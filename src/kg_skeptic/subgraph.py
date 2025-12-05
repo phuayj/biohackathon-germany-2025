@@ -559,6 +559,39 @@ def build_pair_subgraph(
     for edge in edges:
         edge.properties.setdefault("path_length_to_pathway", path_len_via_pathway)
 
+    # Enrich edges with computed features for GNN inference.
+    # These features match what the suspicion GNN model expects.
+    for edge in edges:
+        props = edge.properties
+
+        # n_sources: number of sources supporting this edge
+        n_sources = len(edge.sources)
+        props.setdefault("n_sources", float(n_sources))
+
+        # n_pmids: count of PMID sources specifically
+        n_pmids = sum(1 for s in edge.sources if s.upper().startswith(("PMID:", "PMC")))
+        props.setdefault("n_pmids", float(n_pmids))
+
+        # confidence: use existing property or default to 1.0 (unknown = assume ok)
+        if "confidence" not in props:
+            props["confidence"] = 1.0
+
+        # evidence_age: use existing property or default to 0 (unknown age)
+        if "evidence_age" not in props:
+            props["evidence_age"] = 0.0
+
+        # has_retracted_support: use existing property or default to 0 (no retraction)
+        if "has_retracted_support" not in props:
+            # Check for retracted_support_ratio as alternative indicator
+            ratio = props.get("retracted_support_ratio", 0.0)
+            if isinstance(ratio, (int, float)) and ratio > 0:
+                props["has_retracted_support"] = 1.0
+            else:
+                props["has_retracted_support"] = 0.0
+
+        # is_perturbed_edge: always 0 for real edges (not synthetic perturbations)
+        props.setdefault("is_perturbed_edge", 0.0)
+
     # Attach rule feature aggregates as edge attributes when available so
     # downstream GNNs can condition on both structural and rule-level
     # signals for this audited pair.

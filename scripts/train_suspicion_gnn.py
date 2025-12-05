@@ -2356,7 +2356,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Enable self-supervised link prediction pretrain (GAE/GraphSAGE-style) on the mini KG "
-            "before supervised suspicion GNN training (spec §D, optional)."
+            "before supervised suspicion GNN training (spec §D, optional). "
+            "WARNING: This adds 64-dim node2vec embeddings that must be available at inference time. "
+            "For Neo4j inference, leave this disabled (default) to use only basic structural features."
         ),
     )
     parser.add_argument(
