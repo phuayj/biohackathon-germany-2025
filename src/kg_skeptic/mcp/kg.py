@@ -833,34 +833,71 @@ class Neo4jBackend(KGBackend):
         # Categories to filter out from node results
         internal_categories = {"biolink:Association", "biolink:Publication"}
 
-        # Inline hop count into the pattern to avoid using a Cypher
-        # parameter inside the variable-length relationship, which can
-        # trigger syntax errors on some Neo4j versions.
-        hop_range = f"1..{int(k)}"
-        if direction is EdgeDirection.OUTGOING:
-            pattern = f" (n)-[r*{hop_range}]->(m) "
-        elif direction is EdgeDirection.INCOMING:
-            pattern = f" (n)<-[r*{hop_range}]-(m) "
-        else:
-            pattern = f" (n)-[r*{hop_range}]-(m) "
+        # Use separate queries for each hop to avoid combinatorial explosion.
+        # Variable-length paths (n)-[*1..k]-(m) are expensive because they
+        # explore ALL paths before LIMIT is applied.
+        # Instead, we query 1-hop neighbors first (limited), then expand.
 
-        query = (
-            "MATCH" + pattern + "WHERE n.id = $center " + "WITH n, m, r UNWIND r AS rel "
-            "RETURN DISTINCT "
-            "n.id AS center_id, "
-            "m.id AS node_id, "
-            "m.name AS node_label, "
-            "m.category AS node_category, "
-            "properties(m) AS node_props, "
-            "startNode(rel).id AS subject_id, "
-            "startNode(rel).name AS subject_label, "
-            "endNode(rel).id AS object_id, "
-            "endNode(rel).name AS object_label, "
-            "type(rel) AS rel_type, "
-            "rel.predicate AS predicate_prop, "
-            "rel AS rel_props "
-            "LIMIT 500"
-        )
+        k_int = int(k)
+
+        if direction is EdgeDirection.OUTGOING:
+            dir_pattern_1 = "(n)-[rel]->(m)"
+            dir_pattern_2 = "(hop1)-[rel]->(m)"
+        elif direction is EdgeDirection.INCOMING:
+            dir_pattern_1 = "(n)<-[rel]-(m)"
+            dir_pattern_2 = "(hop1)<-[rel]-(m)"
+        else:
+            dir_pattern_1 = "(n)-[rel]-(m)"
+            dir_pattern_2 = "(hop1)-[rel]-(m)"
+
+        # Query 1-hop neighbors with limit
+        query_hop1 = f"""
+            MATCH (n) WHERE n.id = $center
+            MATCH {dir_pattern_1}
+            WITH DISTINCT m, rel LIMIT 200
+            RETURN
+                m.id AS node_id,
+                m.name AS node_label,
+                m.category AS node_category,
+                properties(m) AS node_props,
+                startNode(rel).id AS subject_id,
+                startNode(rel).name AS subject_label,
+                endNode(rel).id AS object_id,
+                endNode(rel).name AS object_label,
+                type(rel) AS rel_type,
+                rel.predicate AS predicate_prop,
+                rel AS rel_props
+        """
+
+        # Query 2-hop neighbors (if k >= 2) by expanding from 1-hop
+        query_hop2 = ""
+        if k_int >= 2:
+            query_hop2 = f"""
+                MATCH (n) WHERE n.id = $center
+                MATCH {dir_pattern_1.replace('(m)', '(hop1)')}
+                WITH DISTINCT hop1 LIMIT 100
+                MATCH {dir_pattern_2}
+                WHERE m.id <> $center
+                WITH DISTINCT m, rel LIMIT 200
+                RETURN
+                    m.id AS node_id,
+                    m.name AS node_label,
+                    m.category AS node_category,
+                    properties(m) AS node_props,
+                    startNode(rel).id AS subject_id,
+                    startNode(rel).name AS subject_label,
+                    endNode(rel).id AS object_id,
+                    endNode(rel).name AS object_label,
+                    type(rel) AS rel_type,
+                    rel.predicate AS predicate_prop,
+                    rel AS rel_props
+            """
+
+        # Combine queries with UNION if we have 2+ hops
+        if query_hop2:
+            query = query_hop1 + " UNION " + query_hop2
+        else:
+            query = query_hop1
 
         params: dict[str, _object] = {
             "center": node_id,
@@ -1548,9 +1585,13 @@ class Neo4jBackend(KGBackend):
             else:
                 normalized_pmids.append(f"PMID:{pmid}")
 
-        hop_range = f"0..{int(k_hops)}"
+        # Cap citation hops at 1 to avoid explosion on large citation networks
+        # (181k+ publications). For GNN training, direct citations are most relevant.
+        citation_hops = min(1, int(k_hops))
+        hop_range = f"0..{citation_hops}"
 
         # Query publication nodes and their properties
+        # LIMIT to avoid explosion on dense citation networks
         node_query = f"""
         MATCH (seed:Publication)
         WHERE seed.id IN $pmids
@@ -1560,6 +1601,7 @@ class Neo4jBackend(KGBackend):
             p.retracted AS retracted,
             p.cites_retracted_count AS cites_retracted_count,
             p.title AS title
+        LIMIT 100
         """
 
         seen_nodes: set[str] = set()
@@ -1591,7 +1633,7 @@ class Neo4jBackend(KGBackend):
                 )
             )
 
-        # Query citation edges
+        # Query citation edges - LIMIT to avoid explosion
         edge_query = f"""
         MATCH (seed:Publication)
         WHERE seed.id IN $pmids
@@ -1601,6 +1643,7 @@ class Neo4jBackend(KGBackend):
         RETURN DISTINCT
             citing.id AS citing_id,
             cited.id AS cited_id
+        LIMIT 200
         """
 
         all_ids = list(seen_nodes)

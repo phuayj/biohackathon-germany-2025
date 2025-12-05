@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from kg_skeptic.mcp.citations import normalize_citation_identifier
+
 if TYPE_CHECKING:
     from kg_skeptic.mcp.kg import KGEdge
     from kg_skeptic.provenance import CitationProvenance
@@ -124,17 +126,19 @@ def build_source_references(
     # Build status lookup from provenance
     status_by_id: dict[str, str] = {}
     for prov in provenance:
-        status_by_id[prov.identifier] = prov.status
+        norm_key = normalize_citation_identifier(prov.identifier)
+        status_by_id[norm_key] = prov.status
 
     sources: list[SourceReference] = []
     for src_id in edge.sources:
-        source_type = _classify_source_type(src_id)
-        url = _source_to_url(src_id)
-        status = status_by_id.get(src_id, "unknown")
+        norm_src_id = normalize_citation_identifier(src_id)
+        source_type = _classify_source_type(norm_src_id)
+        url = _source_to_url(norm_src_id)
+        status = status_by_id.get(norm_src_id, "unknown")
 
         sources.append(
             SourceReference(
-                identifier=src_id,
+                identifier=norm_src_id,
                 source_type=source_type,
                 url=url,
                 status=status,

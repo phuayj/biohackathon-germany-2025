@@ -662,12 +662,24 @@ def _edge_is_domain_range_compatible(edge: KGEdge) -> bool:
     subj_cat = _category_from_id(edge.subject)
     obj_cat = _category_from_id(edge.object)
 
-    # Allowed coarse pairs for the mini KG slice.
+    # If either category is unknown, we can't judge domain/range - assume compatible
+    if subj_cat == "unknown" or obj_cat == "unknown":
+        return True
+
+    # Allowed coarse pairs for the KG (symmetric - both directions).
     allowed_pairs = {
         ("gene", "disease"),
         ("gene", "phenotype"),
         ("gene", "gene"),
         ("gene", "pathway"),
+        ("disease", "gene"),
+        ("phenotype", "gene"),
+        ("pathway", "gene"),
+        ("disease", "phenotype"),
+        ("phenotype", "disease"),
+        ("disease", "disease"),
+        ("phenotype", "phenotype"),
+        ("pathway", "pathway"),
     }
     if (subj_cat, obj_cat) not in allowed_pairs:
         return False
@@ -721,16 +733,17 @@ def _edge_is_singleton_and_weak(edge: KGEdge) -> bool:
     if not (num_sources <= 1 and num_pmids <= 1):
         return False
 
-    raw_conf = props.get("confidence", 0.0)
-    if isinstance(raw_conf, (int, float, str)):
+    # Only treat as weak if confidence is explicitly low (not just missing)
+    raw_conf = props.get("confidence")
+    has_low_confidence = False
+    if raw_conf is not None and isinstance(raw_conf, (int, float, str)):
         try:
             confidence = float(raw_conf)
+            has_low_confidence = confidence < 0.7
         except ValueError:
-            confidence = 0.0
-    else:
-        confidence = 0.0
+            pass
 
-    # Far from mechanistic context: low confidence or noisy cohorts.
+    # Far from mechanistic context: explicitly low confidence or noisy cohorts.
     cohort = str(props.get("cohort", "")).lower()
     noisy_cohorts = {
         "case-control",
@@ -741,7 +754,7 @@ def _edge_is_singleton_and_weak(edge: KGEdge) -> bool:
         "synthetic_noise",
     }
 
-    return confidence < 0.7 or cohort in noisy_cohorts
+    return has_low_confidence or cohort in noisy_cohorts
 
 
 def _edge_has_type_or_ontology_violation(edge: KGEdge) -> bool:
@@ -798,7 +811,10 @@ def _edge_is_clean(edge: KGEdge) -> bool:
     return True
 
 
-def _edge_is_suspicious(edge: KGEdge) -> bool:
+_SUSPICIOUS_DEBUG_COUNTS: dict[str, int] = {}
+
+
+def _edge_is_suspicious(edge: KGEdge, debug: bool = False) -> bool:
     """Heuristic label for synthetic "suspicious" edges.
 
     This is intentionally simple and deterministic:
@@ -807,23 +823,31 @@ def _edge_is_suspicious(edge: KGEdge) -> bool:
     - edges from noisy cohorts (e.g., model-organism or PPI) are suspicious.
     """
     props = edge.properties
-    raw_conf = props.get("confidence", 0.0)
-    if isinstance(raw_conf, (int, float, str)):
+    # Only use confidence if explicitly present; missing confidence != suspicious
+    raw_conf = props.get("confidence")
+    has_confidence = raw_conf is not None
+    if has_confidence and isinstance(raw_conf, (int, float, str)):
         try:
             confidence = float(raw_conf)
         except ValueError:
-            confidence = 0.0
+            confidence = 1.0  # If unparseable, assume not suspicious
+            has_confidence = False
     else:
-        confidence = 0.0
+        confidence = 1.0  # Default: assume not suspicious if no confidence
+        has_confidence = False
+
+    def _track(reason: str) -> bool:
+        _SUSPICIOUS_DEBUG_COUNTS[reason] = _SUSPICIOUS_DEBUG_COUNTS.get(reason, 0) + 1
+        return True
 
     # Synthetic perturbations and explicit retraction flags are always suspicious.
     if _edge_has_retracted_support(edge):
-        return True
+        return _track("retracted_support")
 
     # Edges with significant ratio of supporting papers citing retracted work are suspicious.
     citing_retracted_ratio = props.get("citing_retracted_ratio", 0)
     if isinstance(citing_retracted_ratio, (int, float)) and citing_retracted_ratio > 0.1:
-        return True
+        return _track("citing_retracted_ratio")
 
     perturbed_raw = props.get("is_perturbed_edge", 0.0)
     if isinstance(perturbed_raw, (int, float, str)):
@@ -835,7 +859,7 @@ def _edge_is_suspicious(edge: KGEdge) -> bool:
         is_perturbed_flag = 0.0
 
     if is_perturbed_flag > 0.5:
-        return True
+        return _track("is_perturbed_edge")
 
     perturbation_type = str(props.get("perturbation_type", "")).lower()
     if perturbation_type in {
@@ -846,25 +870,29 @@ def _edge_is_suspicious(edge: KGEdge) -> bool:
         "ppi_noise",
         "evidence_ablation",
     }:
-        return True
+        return _track(f"perturbation_type:{perturbation_type}")
 
     # Type/ontology violations and "singleton & weak" edges should be treated
     # as suspicious per spec §2B.
     if _edge_has_type_or_ontology_violation(edge):
-        return True
+        return _track("type_or_ontology_violation")
     if _edge_is_singleton_and_weak(edge):
-        return True
+        return _track("singleton_and_weak")
 
     cohort = str(props.get("cohort", "")).lower()
     predicate = edge.predicate.lower()
 
-    if confidence < 0.7:
-        return True
+    # Only flag low confidence if it's explicitly set (not just missing)
+    if has_confidence and confidence < 0.7:
+        return _track("low_confidence")
     if "correlated_with" in predicate or "related_to" in predicate:
-        return True
+        return _track("coarse_predicate")
     if cohort in {"model-organism", "ppi"}:
-        return True
+        return _track("noisy_cohort")
 
+    _SUSPICIOUS_DEBUG_COUNTS["not_suspicious"] = (
+        _SUSPICIOUS_DEBUG_COUNTS.get("not_suspicious", 0) + 1
+    )
     return False
 
 
@@ -923,20 +951,9 @@ def _label_edges_in_subgraph(
                 # Default to WeakEvidence for suspicious edges without clear type
                 error_type_labels[triple] = ERROR_TYPE_TO_INDEX[ErrorType.WEAK_EVIDENCE]
         else:
-            # Only treat edges as "clean" negatives when they satisfy the
-            # stricter clean-edge criteria; otherwise, fall back to a
-            # conservative suspicious label so the model learns from clearer
-            # positives vs negatives.
-            if _edge_is_clean(edge):
-                suspicion_labels[triple] = 0.0
-                error_type_labels[triple] = -1  # No error type for clean edges
-            else:
-                suspicion_labels[triple] = 1.0
-                error_type = _infer_error_type_from_edge(edge)
-                if error_type is not None:
-                    error_type_labels[triple] = ERROR_TYPE_TO_INDEX[error_type]
-                else:
-                    error_type_labels[triple] = ERROR_TYPE_TO_INDEX[ErrorType.WEAK_EVIDENCE]
+            # Edge is not suspicious - label as clean (negative)
+            suspicion_labels[triple] = 0.0
+            error_type_labels[triple] = -1  # No error type for clean edges
 
     return suspicion_labels, error_type_labels
 
@@ -1309,6 +1326,7 @@ def _build_real_retracted_samples(
     all_predicates: set[str],
     oversample_factor: int = 1,
     include_publications: bool = False,
+    target: int | None = None,
 ) -> tuple[list[GraphSample], int, int]:
     """Build training samples from real retracted support associations.
 
@@ -1318,6 +1336,7 @@ def _build_real_retracted_samples(
         all_predicates: Set to track predicates (mutated).
         oversample_factor: How many times to repeat each real example (for balancing).
         include_publications: If True, include publication nodes and citation edges.
+        target: Stop early once this many samples are collected (None = no limit).
 
     Returns:
         Tuple of (samples, total_pos, total_neg).
@@ -1326,8 +1345,9 @@ def _build_real_retracted_samples(
     total_pos = 0
     total_neg = 0
 
-    # Query associations with retracted support
-    retracted_assocs = backend.get_associations_with_retracted_support(limit=500)
+    # Query associations with retracted support - limit to 2x target if specified
+    query_limit = min(500, target * 2) if target else 500
+    retracted_assocs = backend.get_associations_with_retracted_support(limit=query_limit)
 
     if not retracted_assocs:
         print("  No real retracted support associations found in Neo4j")
@@ -1335,7 +1355,23 @@ def _build_real_retracted_samples(
 
     print(f"  Found {len(retracted_assocs)} associations with retracted support")
 
-    for subject, predicate, obj, retracted_pmids in retracted_assocs:
+    total_assocs = len(retracted_assocs)
+    for assoc_idx, (subject, predicate, obj, retracted_pmids) in enumerate(retracted_assocs):
+        # Early stopping if we've reached target
+        if target and len(samples) >= target:
+            break
+
+        # Progress indicator
+        if assoc_idx % 10 == 0 or assoc_idx == total_assocs - 1:
+            target_info = f" (target: {target})" if target else ""
+            print(
+                f"\r  Processing: {assoc_idx + 1}/{total_assocs} "
+                f"({(assoc_idx + 1) / total_assocs * 100:5.1f}%) "
+                f"| samples: {len(samples)}{target_info}",
+                end="",
+                flush=True,
+            )
+
         # Build subgraph around this association
         subgraph = build_pair_subgraph(backend, subject, obj, k=k_hops)
         if not subgraph.edges:
@@ -1385,6 +1421,7 @@ def _build_real_retracted_samples(
                 total_pos += pos
                 total_neg += neg
 
+    print()  # Newline after progress
     return samples, total_pos, total_neg
 
 
@@ -1515,42 +1552,81 @@ def build_dataset(
         total_pubs, retracted_pubs = retracted_count_result
         print(f"  Publications checked: {total_pubs}, retracted: {retracted_pubs}")
 
-    for subject, obj in selected_pairs:
+    # Build subgraphs for each pair
+    total_pairs = len(selected_pairs)
+    print(f"\nBuilding subgraphs for {total_pairs} gene-disease pairs...")
+
+    # Two-phase approach: fetch subgraphs sequentially (Neo4j session not thread-safe),
+    # then process perturbations in parallel (CPU-bound work).
+
+    # Phase 1: Fetch all base subgraphs from Neo4j (sequential)
+    print("  Phase 1: Fetching subgraphs from Neo4j...")
+    base_subgraphs: list[tuple[str, str, Subgraph]] = []
+    for pair_idx, (subject, obj) in enumerate(selected_pairs):
+        if (pair_idx + 1) % 10 == 0 or pair_idx == 0 or pair_idx == total_pairs - 1:
+            progress = (pair_idx + 1) / total_pairs
+            bar_width = 30
+            filled = int(bar_width * progress)
+            bar = "█" * filled + "░" * (bar_width - filled)
+            print(
+                f"\r    [{bar}] {pair_idx + 1}/{total_pairs} fetched",
+                end="",
+                flush=True,
+            )
+
         base_subgraph = build_pair_subgraph(
             backend, subject, obj, k=k_hops, include_publications=include_publications
         )
-        if not base_subgraph.edges:
-            continue
+        if base_subgraph.edges:
+            base_subgraphs.append((subject, obj, base_subgraph))
 
-        # Always include a clean sample.
+    print(f"\n    Fetched {len(base_subgraphs)} non-empty subgraphs")
+
+    # Phase 2: Process perturbations in parallel (CPU-bound)
+    print("  Phase 2: Processing perturbations...")
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import multiprocessing
+
+    # Use threads for now (processes have pickling overhead)
+    num_workers = min(4, len(base_subgraphs), multiprocessing.cpu_count())
+
+    def process_subgraph_perturbations(
+        data: tuple[int, str, str, Subgraph],
+    ) -> tuple[list[GraphSample], set[str], int, int]:
+        """Process all perturbations for a single subgraph."""
+        idx, subject, obj, base_subgraph = data
+        pair_samples: list[GraphSample] = []
+        pair_predicates: set[str] = set()
+        pair_pos = 0
+        pair_neg = 0
+
+        # Clean sample
         sample, pos, neg = _process_subgraph_to_sample(
             base_subgraph,
-            all_predicates,
+            pair_predicates,
             {"kind": "clean", "subject": subject, "object": obj},
         )
         if sample is not None:
-            samples.append(sample)
-            total_pos += pos
-            total_neg += neg
+            pair_samples.append(sample)
+            pair_pos += pos
+            pair_neg += neg
 
-        # Direction-flipped perturbation.
+        # Direction-flipped perturbation
         flipped_edges = _synthesize_direction_flip_edges(base_subgraph, rng)
         if flipped_edges:
-            dir_subgraph = _build_perturbed_subgraph(
-                base_subgraph,
-                extra_edges=flipped_edges,
-            )
+            dir_subgraph = _build_perturbed_subgraph(base_subgraph, extra_edges=flipped_edges)
             sample, pos, neg = _process_subgraph_to_sample(
                 dir_subgraph,
-                all_predicates,
+                pair_predicates,
                 {"kind": "perturbed_direction_flip", "subject": subject, "object": obj},
             )
             if sample is not None:
-                samples.append(sample)
-                total_pos += pos
-                total_neg += neg
+                pair_samples.append(sample)
+                pair_pos += pos
+                pair_neg += neg
 
-        # Sibling-phenotype swap perturbation.
+        # Sibling-phenotype swap
         sibling_edges = _synthesize_sibling_phenotype_swaps(
             base_subgraph,
             rng,
@@ -1560,90 +1636,141 @@ def build_dataset(
             hpo_sibling_map=hpo_sibling_map,
         )
         if sibling_edges:
-            sib_subgraph = _build_perturbed_subgraph(
-                base_subgraph,
-                extra_edges=sibling_edges,
-            )
+            sib_subgraph = _build_perturbed_subgraph(base_subgraph, extra_edges=sibling_edges)
             sample, pos, neg = _process_subgraph_to_sample(
                 sib_subgraph,
-                all_predicates,
+                pair_predicates,
                 {"kind": "perturbed_sibling_phenotype", "subject": subject, "object": obj},
             )
             if sample is not None:
-                samples.append(sample)
-                total_pos += pos
-                total_neg += neg
+                pair_samples.append(sample)
+                pair_pos += pos
+                pair_neg += neg
 
-        # Retracted-support annotations: skip synthetic if using real retractions
-        # (we'll add real retracted samples after the loop with proper balancing)
+        # Synthetic retracted support (if not using real)
         if not use_real_retracted:
-            # Synthetic retracted-support annotations on a subset of edges.
             retracted_overrides = _synthesize_retracted_support_overrides(base_subgraph, rng)
             if retracted_overrides:
                 retract_subgraph = _build_perturbed_subgraph(
-                    base_subgraph,
-                    edge_overrides=retracted_overrides,
+                    base_subgraph, edge_overrides=retracted_overrides
                 )
                 sample, pos, neg = _process_subgraph_to_sample(
                     retract_subgraph,
-                    all_predicates,
+                    pair_predicates,
                     {"kind": "perturbed_retracted_support", "subject": subject, "object": obj},
                 )
                 if sample is not None:
-                    samples.append(sample)
-                    total_pos += pos
-                    total_neg += neg
+                    pair_samples.append(sample)
+                    pair_pos += pos
+                    pair_neg += neg
 
-        # Predicate swap perturbation
-        pred_swap_edges = _synthesize_predicate_swap(base_subgraph, rng)
-        if pred_swap_edges:
+        # Predicate swap
+        predicate_swapped_edges = _synthesize_predicate_swap(base_subgraph, rng)
+        if predicate_swapped_edges:
             pswap_subgraph = _build_perturbed_subgraph(
-                base_subgraph,
-                extra_edges=pred_swap_edges,
+                base_subgraph, extra_edges=predicate_swapped_edges
             )
             sample, pos, neg = _process_subgraph_to_sample(
                 pswap_subgraph,
-                all_predicates,
+                pair_predicates,
                 {"kind": "perturbed_predicate_swap", "subject": subject, "object": obj},
             )
             if sample is not None:
-                samples.append(sample)
-                total_pos += pos
-                total_neg += neg
+                pair_samples.append(sample)
+                pair_pos += pos
+                pair_neg += neg
 
-        # PPI Noise perturbation
+        # PPI Noise
         ppi_noise_edges = _synthesize_ppi_noise(base_subgraph, rng)
         if ppi_noise_edges:
-            noise_subgraph = _build_perturbed_subgraph(
-                base_subgraph,
-                extra_edges=ppi_noise_edges,
-            )
+            noise_subgraph = _build_perturbed_subgraph(base_subgraph, extra_edges=ppi_noise_edges)
             sample, pos, neg = _process_subgraph_to_sample(
                 noise_subgraph,
-                all_predicates,
+                pair_predicates,
                 {"kind": "perturbed_ppi_noise", "subject": subject, "object": obj},
             )
             if sample is not None:
-                samples.append(sample)
-                total_pos += pos
-                total_neg += neg
+                pair_samples.append(sample)
+                pair_pos += pos
+                pair_neg += neg
 
-        # Evidence Ablation perturbation
+        # Evidence Ablation
         ablation_overrides = _synthesize_evidence_ablation(base_subgraph, rng)
         if ablation_overrides:
             ablation_subgraph = _build_perturbed_subgraph(
-                base_subgraph,
-                edge_overrides=ablation_overrides,
+                base_subgraph, edge_overrides=ablation_overrides
             )
             sample, pos, neg = _process_subgraph_to_sample(
                 ablation_subgraph,
-                all_predicates,
+                pair_predicates,
                 {"kind": "perturbed_evidence_ablation", "subject": subject, "object": obj},
             )
             if sample is not None:
-                samples.append(sample)
-                total_pos += pos
-                total_neg += neg
+                pair_samples.append(sample)
+                pair_pos += pos
+                pair_neg += neg
+
+        return pair_samples, pair_predicates, pair_pos, pair_neg
+
+    # Process in parallel using threads (avoids pickling issues with processes)
+    if num_workers > 1 and len(base_subgraphs) > 1:
+        print(f"    Using {num_workers} parallel workers...")
+        import threading
+
+        lock = threading.Lock()
+        completed = 0
+        total_to_process = len(base_subgraphs)
+
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            futures = {
+                executor.submit(process_subgraph_perturbations, (i, subj, obj, sg)): i
+                for i, (subj, obj, sg) in enumerate(base_subgraphs)
+            }
+            for future in as_completed(futures):
+                pair_samples, pair_predicates, pair_pos, pair_neg = future.result()
+                with lock:
+                    samples.extend(pair_samples)
+                    all_predicates.update(pair_predicates)
+                    total_pos += pair_pos
+                    total_neg += pair_neg
+                    completed += 1
+
+                    if completed % 5 == 0 or completed == total_to_process:
+                        progress = completed / total_to_process
+                        bar_width = 30
+                        filled = int(bar_width * progress)
+                        bar = "█" * filled + "░" * (bar_width - filled)
+                        print(
+                            f"\r    [{bar}] {completed}/{total_to_process} processed "
+                            f"| {len(samples)} samples",
+                            end="",
+                            flush=True,
+                        )
+    else:
+        # Sequential fallback
+        for i, (subject, obj, base_subgraph) in enumerate(base_subgraphs):
+            pair_samples, pair_predicates, pair_pos, pair_neg = process_subgraph_perturbations(
+                (i, subject, obj, base_subgraph)
+            )
+            samples.extend(pair_samples)
+            all_predicates.update(pair_predicates)
+            total_pos += pair_pos
+            total_neg += pair_neg
+
+            if (i + 1) % 5 == 0 or i == 0 or i == len(base_subgraphs) - 1:
+                progress = (i + 1) / len(base_subgraphs)
+                bar_width = 30
+                filled = int(bar_width * progress)
+                bar = "█" * filled + "░" * (bar_width - filled)
+                print(
+                    f"\r    [{bar}] {i + 1}/{len(base_subgraphs)} processed "
+                    f"| {len(samples)} samples",
+                    end="",
+                    flush=True,
+                )
+
+    # Finish progress bar
+    print()  # newline after progress bar
 
     # Add real retracted support samples with oversampling for balance
     if use_real_retracted and isinstance(backend, Neo4jBackend):
@@ -1658,6 +1785,7 @@ def build_dataset(
             k_hops,
             all_predicates,
             oversample_factor=1,  # Start with 1x
+            target=target_retracted_samples,  # Stop early once target is reached
         )
 
         if real_samples:
@@ -1718,6 +1846,13 @@ def build_dataset(
         f"with {total_pos} positive and {total_neg} negative edges "
         f"across {len(predicate_to_index)} relation types."
     )
+
+    # Debug: show why edges are being flagged as suspicious
+    if _SUSPICIOUS_DEBUG_COUNTS:
+        print("\nSuspicious edge breakdown:")
+        for reason, count in sorted(_SUSPICIOUS_DEBUG_COUNTS.items(), key=lambda x: -x[1]):
+            print(f"  {reason}: {count}")
+        _SUSPICIOUS_DEBUG_COUNTS.clear()
 
     return samples, predicate_to_index
 

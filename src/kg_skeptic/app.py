@@ -42,6 +42,7 @@ from kg_skeptic.visualization import (
     suspicion_to_color,
 )
 from kg_skeptic.visualization.edge_inspector import DbProvenance
+from kg_skeptic.mcp.citations import normalize_citation_identifier
 
 
 def _load_demo_claims_from_fixtures() -> list[tuple[str, Claim]]:
@@ -579,47 +580,6 @@ def render_text_nli_panel(facts: Mapping[str, object] | None) -> None:
     _render_examples("NEI", "nei_examples", "#546e7a")
 
 
-def _normalize_citation_identifier(identifier: str) -> str:
-    """Normalize citation identifiers for matching across provenance and edges."""
-    value = identifier.strip()
-    if not value:
-        return value
-
-    lower = value.lower()
-
-    # Normalize DOI URLs and prefixes to bare DOI strings.
-    if lower.startswith("https://doi.org/") or lower.startswith("http://doi.org/"):
-        value = value.split("doi.org/", 1)[-1]
-        lower = value.lower()
-    if lower.startswith("doi:"):
-        value = value.split(":", 1)[-1].strip()
-        lower = value.lower()
-
-    upper = value.upper()
-
-    # Normalize PMCID-style identifiers.
-    if upper.startswith("PMCID:"):
-        code = upper.split(":", 1)[-1].strip()
-        if not code.startswith("PMC"):
-            code = f"PMC{code}"
-        return code
-    if upper.startswith("PMC"):
-        return upper
-
-    # Normalize PMID-style identifiers.
-    if upper.startswith("PMID:"):
-        digits = upper.split(":", 1)[-1].strip()
-        return f"PMID:{digits}"
-    if value.isdigit():
-        return f"PMID:{value}"
-
-    # Bare DOIs starting with 10.* are returned as-is.
-    if value.startswith("10."):
-        return value
-
-    return value
-
-
 def render_edge_inspector(
     edge: KGEdge,
     subgraph: Subgraph,
@@ -915,13 +875,13 @@ def render_subgraph_visualization(
 
     prov_status_by_id: dict[str, str] = {}
     for record in provenance:
-        citation_key = _normalize_citation_identifier(record.identifier)
+        citation_key = normalize_citation_identifier(record.identifier)
         prov_status_by_id[citation_key] = record.status
 
     evidence_ids: set[str] = set(prov_status_by_id.keys())
 
     for edge in subgraph.edges:
-        normalized_sources = [_normalize_citation_identifier(src) for src in edge.sources]
+        normalized_sources = [normalize_citation_identifier(src) for src in edge.sources]
         statuses = [prov_status_by_id.get(src, "unknown") for src in normalized_sources]
         if "retracted" in statuses:
             status = "retracted"

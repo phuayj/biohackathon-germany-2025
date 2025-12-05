@@ -19,6 +19,7 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
+from http.client import IncompleteRead
 from typing import Iterator, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -39,6 +40,8 @@ ELINK_BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi"
 BATCH_SIZE = 100  # PMIDs per elink request (more conservative than efetch)
 RATE_LIMIT_DELAY = 0.34  # ~3 requests/sec without API key
 RATE_LIMIT_DELAY_WITH_KEY = 0.1  # ~10 requests/sec with API key
+MAX_RETRIES = 3
+RETRY_BACKOFF_BASE = 2  # Exponential backoff: 2, 4, 8 seconds
 
 
 @dataclass
@@ -55,6 +58,7 @@ def fetch_citations_for_pmids(
     api_key: Optional[str] = None,
     timeout: int = 60,
     direction: str = "cited_by",
+    max_retries: int = MAX_RETRIES,
 ) -> str:
     """
     Fetch citation data for a batch of PMIDs using elink.
@@ -64,6 +68,7 @@ def fetch_citations_for_pmids(
         api_key: Optional NCBI API key for higher rate limits.
         timeout: Request timeout in seconds.
         direction: "cited_by" for papers citing these, "cites" for papers these cite.
+        max_retries: Maximum number of retry attempts for transient errors.
 
     Returns:
         XML response text.
@@ -91,11 +96,36 @@ def fetch_citations_for_pmids(
 
     request = Request(url, headers=headers)
 
-    try:
-        with urlopen(request, timeout=timeout) as response:
-            return response.read().decode("utf-8")
-    except (URLError, HTTPError) as e:
-        raise RuntimeError(f"Failed to fetch citation data: {e}") from e
+    last_error: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                return response.read().decode("utf-8")
+        except IncompleteRead as e:
+            last_error = e
+            if attempt < max_retries:
+                wait_time = RETRY_BACKOFF_BASE ** (attempt + 1)
+                logger.warning(f"IncompleteRead on attempt {attempt + 1}, retrying in {wait_time}s...")
+                time.sleep(wait_time)
+        except HTTPError as e:
+            # Retry on 5xx server errors
+            if e.code >= 500 and attempt < max_retries:
+                last_error = e
+                wait_time = RETRY_BACKOFF_BASE ** (attempt + 1)
+                logger.warning(f"HTTP {e.code} on attempt {attempt + 1}, retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                raise RuntimeError(f"Failed to fetch citation data: {e}") from e
+        except URLError as e:
+            last_error = e
+            if attempt < max_retries:
+                wait_time = RETRY_BACKOFF_BASE ** (attempt + 1)
+                logger.warning(f"URLError on attempt {attempt + 1}, retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                raise RuntimeError(f"Failed to fetch citation data: {e}") from e
+
+    raise RuntimeError(f"Failed after {max_retries + 1} attempts: {last_error}") from last_error
 
 
 def parse_citation_links(xml_text: str, direction: str = "cited_by") -> dict[str, list[str]]:
