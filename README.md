@@ -10,6 +10,85 @@ BioHackathon Germany 2025 event page: [4th BioHackathon Germany — Detection an
 - Produces concise critiques with rule-based explanations and confidence scores (PASS/WARN/FAIL verdicts).
 - Keeps the verification layer explainable via symbolic rules and provenance, not only another opaque LLM.
 
+## How it works
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           KG-SKEPTIC ARCHITECTURE                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+  │  LLM Agent   │     │  Free-Text   │     │   Fixture    │
+  │   Output     │     │    Claim     │     │    Claim     │
+  └──────┬───────┘     └──────┬───────┘     └──────┬───────┘
+         │                    │                    │
+         └────────────────────┼────────────────────┘
+                              ▼
+  ┌───────────────────────────────────────────────────────────────────────────┐
+  │  1. CLAIM EXTRACTION (NER + Normalization)                                │
+  │  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐                      │
+  │  │  GLiNER2    │──▶│  ID Lookup  │──▶│  Canonical  │                      │
+  │  │  NER Model  │   │  HGNC/HPO/  │   │   Triple    │                      │
+  │  │             │   │  MONDO/etc  │   │  (S, P, O)  │                      │
+  │  └─────────────┘   └─────────────┘   └─────────────┘                      │
+  └───────────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+  ┌───────────────────────────────────────────────────────────────────────────┐
+  │  2. EVIDENCE GATHERING (MCP Tools)                                        │
+  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐              │
+  │  │EuropePMC│ │CrossRef │ │DisGeNET │ │ Monarch │ │ SemMed  │              │
+  │  │ search  │ │retract. │ │gene-dis │ │   KG    │ │ triples │              │
+  │  └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘              │
+  │       └───────────┴───────────┴───────────┴───────────┘                   │
+  │                              │                                            │
+  │                              ▼                                            │
+  │                    ┌─────────────────┐                                    │
+  │                    │  Evidence Pool  │                                    │
+  │                    │  PMIDs, scores, │                                    │
+  │                    │  KG edges, NLI  │                                    │
+  │                    └─────────────────┘                                    │
+  └───────────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+  ┌───────────────────────────────────────────────────────────────────────────┐
+  │  3. RULE ENGINE (Symbolic Reasoning)                                      │
+  │  ┌────────────────────────────────────────────────────────────────────┐   │
+  │  │  rules.yaml (152 lines)                                            │   │
+  │  │  ├── type_domain_range      (Biolink validity)                     │   │
+  │  │  ├── retraction_gate        (FAIL if retracted)                    │   │
+  │  │  ├── ontology_closure_hpo   (HPO ancestry check)                   │   │
+  │  │  ├── multi_source_bonus     (+0.3 for ≥2 sources)                  │   │
+  │  │  ├── nli_contradiction_gate (FAIL if strong refute)                │   │
+  │  │  └── ... 20+ more rules                                            │   │
+  │  └────────────────────────────────────────────────────────────────────┘   │
+  └───────────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+  ┌───────────────────────────────────────────────────────────────────────────┐
+  │  4. SUSPICION GNN (Neural Scoring - Optional)                             │
+  │  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐                      │
+  │  │  2-hop Ego  │──▶│   R-GCN     │──▶│  Per-Edge   │                      │
+  │  │  Subgraph   │   │  (16 dim)   │   │  Suspicion  │                      │
+  │  └─────────────┘   └─────────────┘   └─────────────┘                      │
+  └───────────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+  ┌───────────────────────────────────────────────────────────────────────────┐
+  │  5. VERDICT & AUDIT CARD                                                  │
+  │  ┌──────────────────────────────────────────────────────────────────────┐ │
+  │  │  ┌────────┐  Score: 0.72  Rules: 3 fired  Evidence: 4 PMIDs        │ │
+  │  │  │  PASS  │  ────────────────────────────────────────────────────── │ │
+  │  │  └────────┘  Claim: BRCA1 → associated_with → Breast Cancer         │ │
+  │  │              ✓ type_domain_range   ✓ multi_source   ✓ curated_kg   │ │
+  │  └──────────────────────────────────────────────────────────────────────┘ │
+  └───────────────────────────────────────────────────────────────────────────┘
+
+  Legend:
+    ──▶  Data flow           ┌───┐  Component
+    MCP  Model Context Protocol tools for external API access
+```
+
 ## Pipeline overview
 1. **Ingest**: Pull agent outputs via MCP (tool calls, chain-of-thought, artifacts). Normalize into an audit payload.
 2. **Claim extraction**: Turn outputs into atomic claims with typed entities and provenance.
@@ -157,11 +236,164 @@ The sidebar will show "Using Neo4j KG backend" when connected. If configuration 
 - **Provenance layer**: Cached lookups to Europe PMC; graceful fallback when APIs are unavailable.
 - **Streamlit UI**: Interactive audit cards with entity badges, evidence status, rule traces, and verdict visualization.
 
+## Docker deployment
+
+Deploy KG-Skeptic with a single command using Docker Compose.
+
+### Quick start (one command)
+
+```bash
+docker compose up
+```
+
+This starts:
+- **UI service** (port 8501): Streamlit web interface
+- **Neo4j** (ports 7474, 7687): Graph database backend
+
+Access the UI at http://localhost:8501
+
+### Configuration
+
+Create a `.env` file for custom settings:
+
+```bash
+# .env
+NEO4J_PASSWORD=your_secure_password
+DISGENET_API_KEY=your_disgenet_token  # Optional: enhances gene-disease evidence
+```
+
+### Running batch audits (CLI)
+
+```bash
+# Run a single audit
+docker compose --profile cli run cli --demo-id REAL_D01
+
+# Audit a custom claim
+docker compose --profile cli run cli \
+  --claim-text "TP53 mutations cause lung cancer" \
+  --evidence PMID:12345
+
+# JSON output
+docker compose --profile cli run cli --demo-id REAL_D01 --format json > output/audit.json
+```
+
+### Building from source
+
+```bash
+# Build the image locally
+docker compose build
+
+# Run with live code changes (development)
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+```
+
+### Services overview
+
+| Service | Port | Description |
+|---------|------|-------------|
+| `ui` | 8501 | Streamlit web interface |
+| `neo4j` | 7474, 7687 | Graph database (HTTP browser, Bolt) |
+| `cli` | - | Batch processing (on-demand via `--profile cli`) |
+
+## API examples
+
+### Python: Programmatic auditing
+
+```python
+from kg_skeptic.pipeline import run_audit_pipeline
+from kg_skeptic.models import Claim
+
+# Audit a structured claim
+claim = Claim(
+    subject="BRCA1",
+    predicate="biolink:gene_associated_with_condition",
+    object="breast cancer",
+    provenance=["PMID:12345678", "PMID:87654321"],
+)
+
+result = run_audit_pipeline(claim)
+
+print(f"Verdict: {result.verdict}")  # PASS, WARN, or FAIL
+print(f"Score: {result.score:.2f}")
+print(f"Rules fired: {[r.name for r in result.rule_traces if r.fired]}")
+```
+
+### Python: Free-text claim
+
+```python
+from kg_skeptic.pipeline import run_audit_pipeline
+
+# Audit free-text (NER extracts entities automatically)
+result = run_audit_pipeline(
+    "TP53 mutations are associated with Li-Fraumeni syndrome",
+    evidence=["PMID:25108026"],
+)
+
+# Access normalized entities
+print(f"Subject: {result.claim.subject_id}")  # e.g., HGNC:11998
+print(f"Object: {result.claim.object_id}")    # e.g., MONDO:0010545
+```
+
+### Python: Batch processing
+
+```python
+from kg_skeptic.pipeline import run_audit_pipeline
+import json
+
+claims = [
+    {"text": "BRCA1 causes breast cancer", "evidence": ["PMID:12345"]},
+    {"text": "TP53 is associated with Li-Fraumeni syndrome", "evidence": ["PMID:25108026"]},
+    {"text": "EGFR mutations drive lung cancer", "evidence": ["PMID:15118073"]},
+]
+
+results = []
+for c in claims:
+    result = run_audit_pipeline(c["text"], evidence=c["evidence"])
+    results.append({
+        "claim": c["text"],
+        "verdict": result.verdict,
+        "score": result.score,
+        "rules_fired": [r.name for r in result.rule_traces if r.fired],
+    })
+
+# Export as JSON
+with open("audit_results.json", "w") as f:
+    json.dump(results, f, indent=2)
+```
+
+### CLI: JSON output for automation
+
+```bash
+# Single audit with JSON output
+uv run python -m kg_skeptic --demo-id REAL_D01 --format json > audit.json
+
+# Process with jq
+uv run python -m kg_skeptic --demo-id REAL_D01 --format json | jq '.verdict'
+```
+
+### MCP tools (for agent integration)
+
+```python
+from kg_skeptic.mcp import europepmc, ids, kg
+
+# Search literature
+papers = europepmc.search("BRCA1 breast cancer", limit=5)
+
+# Normalize identifiers
+gene_info = ids.normalize_gene("BRCA1")  # Returns HGNC ID, aliases, etc.
+disease_info = ids.normalize_disease("breast cancer")  # Returns MONDO ID
+
+# Query knowledge graph
+edges = kg.query_edge(subject="HGNC:1100", predicate="biolink:gene_associated_with_condition")
+
+# Get ego network for subgraph visualization
+subgraph = kg.ego(node_id="HGNC:1100", hops=2)
+```
+
 ## Planned features
-- **Subgraph builder**: Fetch 2–3 hop ego-nets for visual suspicion analysis.
-- **Suspicion GNN**: R-GCN model to score edge suspicion and highlight problematic hops.
-- **Patch suggestions**: Propose minimal fixes (alternate citations, corrected ontology terms).
-- **Docker packaging**: One-command deployment via `docker compose up`.
+- **Evaluation dataset**: Seeded claims for precision/recall benchmarking.
+- **Calibration**: Grid-search rule weights and isotonic scaling.
+- **Batch mode UI**: Upload claim list, download CSV of audit results.
 
 ## Training the Suspicion GNN
 

@@ -1,0 +1,61 @@
+# Git
+.git
+.gitignore
+.github
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.egg-info
+dist
+build
+.eggs
+
+# Virtual environments
+.venv
+venv
+ENV
+env
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# Documentation (not needed in runtime)
+docs/
+*.md
+!README.md
+
+# Tests (not needed in runtime)
+tests/
+pytest.ini
+.coverage
+htmlcov
+
+# Development files
+.env
+.env.local
+*.log
+Makefile
+
+# Large cache files (mounted as volume instead)
+data/cache/
+
+# UV cache
+.uv-cache
+
+# Output directory
+output/
+
+# Misc
+.DS_Store
+Thumbs.db

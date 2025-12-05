@@ -288,10 +288,10 @@
 - [x] **Scene C (fix):** Accept patch suggestion → re-audit → PASS/WARN.
 - [x] **A/B "Frozen vs Live" demo:** Run same claim in frozen mode (cached) vs live mode (refetch + overlay) to show graph reacting to evidence changes.
 
-### Packaging
-- [ ] `docker compose up` brings: MCP tools, Streamlit UI, agent service.
-- [ ] One-page README with "How it works" diagram.
-- [ ] API examples in README.
+### Packaging (Done)
+- [x] `docker compose up` brings: MCP tools, Streamlit UI, agent service.
+- [x] One-page README with "How it works" diagram.
+- [x] API examples in README.
 
 ### Documentation
 - [ ] `RULES.md` documenting each rule's rationale and examples.
