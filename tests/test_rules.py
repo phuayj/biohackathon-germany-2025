@@ -96,58 +96,58 @@ def test_retraction_and_minimal_evidence_rules(sample_facts: dict[str, dict[str,
     assert "retraction_gate" in {entry.rule_id for entry in result.trace.entries}
 
 
-class TestRuleConditionEvaluation:
+class TestAtomEvaluation:
     def test_exists_op(self) -> None:
-        from nerve.rules import RuleCondition
+        from nerve.logic import Atom
 
-        cond = RuleCondition(fact="a.b", op="exists")
+        cond = Atom(fact="a.b", op="exists")
         assert cond.evaluate({"a": {"b": 1}}) is True
         assert cond.evaluate({"a": {"b": 0}}) is False  # 0 is falsy
         assert cond.evaluate({"a": {"b": None}}) is False
         assert cond.evaluate({"a": {}}) is False
 
     def test_equals_op(self) -> None:
-        from nerve.rules import RuleCondition
+        from nerve.logic import Atom
 
-        cond = RuleCondition(fact="status", op="equals", value="active")
+        cond = Atom(fact="status", op="equals", value="active")
         assert cond.evaluate({"status": "active"}) is True
         assert cond.evaluate({"status": "inactive"}) is False
 
     def test_contains_op(self) -> None:
-        from nerve.rules import RuleCondition
+        from nerve.logic import Atom
 
-        cond = RuleCondition(fact="tags", op="contains", value="urgent")
+        cond = Atom(fact="tags", op="contains", value="urgent")
         assert cond.evaluate({"tags": ["urgent", "review"]}) is True
         assert cond.evaluate({"tags": ["review"]}) is False
         assert cond.evaluate({"tags": None}) is False
 
     def test_numeric_ops(self) -> None:
-        from nerve.rules import RuleCondition
+        from nerve.logic import Atom
 
         # Greater than
-        gt = RuleCondition(fact="count", op="gt", value=5)
+        gt = Atom(fact="count", op="gt", value=5)
         assert gt.evaluate({"count": 6}) is True
         assert gt.evaluate({"count": 5}) is False
 
         # Greater than or equal
-        gte = RuleCondition(fact="count", op="gte", value=5)
+        gte = Atom(fact="count", op="gte", value=5)
         assert gte.evaluate({"count": 5}) is True
         assert gte.evaluate({"count": 4}) is False
 
         # Less than
-        lt = RuleCondition(fact="count", op="lt", value=5)
+        lt = Atom(fact="count", op="lt", value=5)
         assert lt.evaluate({"count": 4}) is True
         assert lt.evaluate({"count": 5}) is False
 
         # Less than or equal
-        lte = RuleCondition(fact="count", op="lte", value=5)
+        lte = Atom(fact="count", op="lte", value=5)
         assert lte.evaluate({"count": 5}) is True
         assert lte.evaluate({"count": 6}) is False
 
     def test_negation(self) -> None:
-        from nerve.rules import RuleCondition
+        from nerve.logic import Atom
 
-        cond = RuleCondition(fact="status", op="equals", value="error", negate=True)
+        cond = Atom(fact="status", op="equals", value="error", negate=True)
         assert cond.evaluate({"status": "ok"}) is True
         assert cond.evaluate({"status": "error"}) is False
 

@@ -314,33 +314,33 @@ class TestTemporalOperatorsInRuleEngine:
     """Tests for temporal operators in the rule engine."""
 
     def test_within_years_operator(self) -> None:
-        from nerve.rules import RuleCondition
+        from nerve.logic import Atom
 
-        cond = RuleCondition(fact="age", op="within_years", value=5)
+        cond = Atom(fact="age", op="within_years", value=5)
         assert cond.evaluate({"age": 3}) is True
         assert cond.evaluate({"age": 5}) is True
         assert cond.evaluate({"age": 6}) is False
 
     def test_older_than_years_operator(self) -> None:
-        from nerve.rules import RuleCondition
+        from nerve.logic import Atom
 
-        cond = RuleCondition(fact="age", op="older_than_years", value=10)
+        cond = Atom(fact="age", op="older_than_years", value=10)
         assert cond.evaluate({"age": 15}) is True
         assert cond.evaluate({"age": 10}) is False
         assert cond.evaluate({"age": 5}) is False
 
     def test_before_year_operator(self) -> None:
-        from nerve.rules import RuleCondition
+        from nerve.logic import Atom
 
-        cond = RuleCondition(fact="year", op="before_year", value=2020)
+        cond = Atom(fact="year", op="before_year", value=2020)
         assert cond.evaluate({"year": 2019}) is True
         assert cond.evaluate({"year": 2020}) is False
         assert cond.evaluate({"year": 2021}) is False
 
     def test_after_year_operator(self) -> None:
-        from nerve.rules import RuleCondition
+        from nerve.logic import Atom
 
-        cond = RuleCondition(fact="year", op="after_year", value=2020)
+        cond = Atom(fact="year", op="after_year", value=2020)
         assert cond.evaluate({"year": 2021}) is True
         assert cond.evaluate({"year": 2020}) is False
         assert cond.evaluate({"year": 2019}) is False
