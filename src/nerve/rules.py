@@ -14,13 +14,15 @@ Supports defeasible logic via Dung-style abstract argumentation:
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Container, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Iterable, cast
 
 import yaml
+
+from .logic import And, Atom, Expression, Or, get_fact_value
 
 
 class ArgumentLabel(str, Enum):
@@ -35,92 +37,6 @@ DEFAULT_RULES_PATH = Path(__file__).resolve().parents[2] / "rules.yaml"
 
 
 Facts = Mapping[str, object]
-
-
-def _get_fact_value(facts: Facts, path: str) -> object | None:
-    """Retrieve a value from nested dictionaries using dot-separated paths."""
-    current: object | None = facts
-    for part in path.split("."):
-        if isinstance(current, Mapping) and part in current:
-            if isinstance(current, Mapping):
-                current = current[part]
-            else:
-                return None
-        else:
-            return None
-    return current
-
-
-def _evaluate_op(value: object | None, op: str, expected: object | None) -> bool:
-    """Evaluate a simple operation on a fact value.
-
-    Supports standard comparison operators plus temporal-specific operators:
-    - within_years: value <= expected (for age comparisons)
-    - older_than_years: value > expected (for staleness checks)
-    - before_year: value < expected (year comparison)
-    - after_year: value > expected (year comparison)
-    """
-    if op == "exists":
-        return bool(value)
-    if op == "equals":
-        return value == expected
-    if op == "contains":
-        if value is None or expected is None:
-            return False
-        if isinstance(value, Container):
-            return expected in value
-        return False
-    if op in {"gt", "gte", "lt", "lte"}:
-        if not isinstance(value, (int, float)) or not isinstance(expected, (int, float)):
-            return False
-        if op == "gt":
-            return value > expected
-        if op == "gte":
-            return value >= expected
-        if op == "lt":
-            return value < expected
-        if op == "lte":
-            return value <= expected
-    if op == "within_years":
-        if not isinstance(value, (int, float)) or not isinstance(expected, (int, float)):
-            return False
-        return value <= expected
-    if op == "older_than_years":
-        if not isinstance(value, (int, float)) or not isinstance(expected, (int, float)):
-            return False
-        return value > expected
-    if op == "before_year":
-        if not isinstance(value, (int, float)) or not isinstance(expected, (int, float)):
-            return False
-        return value < expected
-    if op == "after_year":
-        if not isinstance(value, (int, float)) or not isinstance(expected, (int, float)):
-            return False
-        return value > expected
-    raise ValueError(f"Unsupported operator '{op}'")
-
-
-@dataclass
-class RuleCondition:
-    """A single predicate applied to the facts dictionary."""
-
-    fact: str
-    op: str = "exists"
-    value: object | None = None
-    negate: bool = False
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, object]) -> "RuleCondition":
-        return cls(
-            fact=cast(str, data["fact"]),
-            op=cast(str, data.get("op", "exists")),
-            value=data.get("value"),
-            negate=bool(data.get("negate", False)),
-        )
-
-    def evaluate(self, facts: Facts) -> bool:
-        result = _evaluate_op(_get_fact_value(facts, self.fact), self.op, self.value)
-        return not result if self.negate else result
 
 
 @dataclass
@@ -163,7 +79,7 @@ class _FactFormatter(dict[str, object]):
                 self[key] = value
 
     def __missing__(self, key: str) -> object:
-        value = _get_fact_value(self.facts, key)
+        value = get_fact_value(self.facts, key)
         if value is None:
             return "?"
         if isinstance(value, Mapping):
@@ -205,8 +121,7 @@ class Rule:
     description: str
     weight: float = 1.0
     because: str | None = None
-    all: list[RuleCondition] = field(default_factory=list)
-    any: list[RuleCondition] = field(default_factory=list)
+    condition: Expression = field(default_factory=lambda: And())
     priority: float = 0.0
     defeats: list[str] = field(default_factory=list)
     rebuts: list[str] = field(default_factory=list)
@@ -230,12 +145,31 @@ class Rule:
         else:
             raise ValueError(f"Unsupported conditions format for rule '{data.get('id')}'")
 
-        all_conds: list[Mapping[str, object]] = [
-            cond for cond in all_conds_raw if isinstance(cond, Mapping)
+        def make_atom(d: Mapping[str, object]) -> Atom:
+            return Atom(
+                fact=cast(str, d["fact"]),
+                op=cast(str, d.get("op", "exists")),
+                value=d.get("value"),
+                negate=bool(d.get("negate", False)),
+            )
+
+        all_exprs: list[Expression] = [
+            make_atom(c) for c in all_conds_raw if isinstance(c, Mapping)
         ]
-        any_conds: list[Mapping[str, object]] = [
-            cond for cond in any_conds_raw if isinstance(cond, Mapping)
+        any_exprs: list[Expression] = [
+            make_atom(c) for c in any_conds_raw if isinstance(c, Mapping)
         ]
+
+        # Construct the composite expression: (AND(all) AND OR(any))
+        # Note: If 'any' is present, at least one must be true.
+        parts: list[Expression] = []
+        if all_exprs:
+            parts.append(And(all_exprs))
+        if any_exprs:
+            parts.append(Or(any_exprs))
+
+        # If parts is empty, And([]) returns True, which matches default behavior
+        final_condition = And(parts)
 
         raw_weight = data.get("weight", 1.0)
         if isinstance(raw_weight, (int, float)):
@@ -277,8 +211,7 @@ class Rule:
             description=cast(str, data.get("description", data["id"])),
             weight=weight,
             because=cast(str | None, data.get("because")),
-            all=[RuleCondition.from_dict(c) for c in all_conds],
-            any=[RuleCondition.from_dict(c) for c in any_conds],
+            condition=final_condition,
             priority=priority,
             defeats=defeats,
             rebuts=rebuts,
@@ -287,11 +220,7 @@ class Rule:
 
     def fires(self, facts: Facts) -> bool:
         """Determine whether the rule fires given the facts."""
-        if self.all and not all(cond.evaluate(facts) for cond in self.all):
-            return False
-        if self.any:
-            return any(cond.evaluate(facts) for cond in self.any)
-        return True
+        return self.condition.evaluate(facts)
 
     def render_because(self, facts: Facts) -> str:
         template = self.because or f"{self.description} (rule: {self.id})"
