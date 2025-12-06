@@ -27,7 +27,7 @@ from nerve.ner import NERBackend
 from nerve.mcp.kg import KGBackend, KGEdge, Neo4jBackend, MonarchBackend
 from nerve.mcp.mini_kg import load_mini_kg_backend
 from nerve.provenance import CitationProvenance
-from nerve.rules import RuleEvaluation, RuleTraceEntry
+from nerve.rules import ArgumentLabel, RuleEvaluation, RuleTraceEntry
 from nerve.subgraph import Subgraph, build_pair_subgraph
 from nerve.visualization import (
     CATEGORY_COLORS,
@@ -443,20 +443,34 @@ def render_entity_badge(entity: EntityMention) -> None:
 
 
 def render_rule_trace(evaluation: RuleEvaluation) -> None:
-    """Render the rule trace with fired rules."""
+    """Render the rule trace with fired rules and argumentation status."""
     if not evaluation.trace.entries:
         st.info("No rules fired for this claim.")
         return
 
+    has_argumentation = evaluation.argument_labels is not None
+
     for entry in evaluation.trace.entries:
         icon = "✅" if entry.score > 0 else "⚠️" if entry.score == 0 else "❌"
         score_color = "green" if entry.score > 0 else "red"
+
+        label_badge = ""
+        if has_argumentation and entry.label == ArgumentLabel.OUT:
+            icon = "🚫"
+            label_badge = ' <span style="background-color: #616161; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em;">DEFEATED</span>'
+        elif has_argumentation and entry.label == ArgumentLabel.UNDECIDED:
+            icon = "❓"
+            label_badge = ' <span style="background-color: #ff9800; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em;">UNDECIDED</span>'
+
         st.markdown(
             f"{icon} **{entry.rule_id}** "
-            f'<span style="color: {score_color};">({entry.score:+.1f})</span>',
+            f'<span style="color: {score_color};">({entry.score:+.1f})</span>{label_badge}',
             unsafe_allow_html=True,
         )
         st.caption(f"  ↳ {entry.because}")
+
+        if entry.defeated_by:
+            st.caption(f"  ⚔️ defeated by: {', '.join(entry.defeated_by)}")
 
 
 def render_provenance(provenance: list[CitationProvenance]) -> None:

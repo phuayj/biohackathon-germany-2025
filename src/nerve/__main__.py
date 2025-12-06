@@ -33,7 +33,7 @@ from nerve.models import Claim, EntityMention
 from nerve.pipeline import AuditResult, ClaimNormalizer, NormalizationResult, SkepticPipeline
 from nerve.ner import NERBackend
 from nerve.provenance import CitationProvenance
-from nerve.rules import RuleTraceEntry
+from nerve.rules import ArgumentLabel, RuleTraceEntry
 from nerve.subgraph import build_pair_subgraph, filter_subgraph_for_visualization
 from nerve.visualization.edge_inspector import extract_edge_inspector_data
 from nerve.mcp.kg import KGEdge
@@ -346,12 +346,22 @@ def _print_rule_trace(result: AuditResult) -> None:
         print("\nRules fired: none.")
         return
 
+    has_argumentation = result.evaluation.argument_labels is not None
+
     print("\nRules fired:")
     for entry in entries:
         sign = "+" if entry.score > 0 else "" if entry.score == 0 else ""
         score_str = f"{sign}{entry.score:.1f}"
-        print(f"- {entry.rule_id} ({score_str})")
+
+        label_str = ""
+        if has_argumentation and entry.label != ArgumentLabel.IN:
+            label_str = f" [{entry.label.value.upper()}]"
+
+        print(f"- {entry.rule_id} ({score_str}){label_str}")
         print(f"    because {entry.because}")
+
+        if entry.defeated_by:
+            print(f"    defeated by: {', '.join(entry.defeated_by)}")
 
 
 def _print_suspicion_summary(result: AuditResult) -> None:
@@ -409,20 +419,36 @@ def _print_suspicion_summary(result: AuditResult) -> None:
 def _audit_result_to_dict(result: AuditResult) -> dict[str, object]:
     """Convert an AuditResult into a JSON-serializable dict."""
     normalization: NormalizationResult = result.normalization
+
+    trace_entries = []
+    for entry in result.evaluation.trace.entries:
+        entry_dict: dict[str, object] = {
+            "rule_id": entry.rule_id,
+            "score": entry.score,
+            "because": entry.because,
+            "description": entry.description,
+            "label": entry.label.value,
+        }
+        if entry.defeated_by:
+            entry_dict["defeated_by"] = entry.defeated_by
+        trace_entries.append(entry_dict)
+
+    evaluation_dict: dict[str, object] = {
+        "features": dict(result.evaluation.features),
+        "trace": trace_entries,
+    }
+
+    if result.evaluation.argument_labels is not None:
+        evaluation_dict["argument_labels"] = {
+            k: v.value for k, v in result.evaluation.argument_labels.items()
+        }
+
+    if result.evaluation.attacks is not None:
+        evaluation_dict["attacks"] = {k: list(v) for k, v in result.evaluation.attacks.items()}
+
     return {
         "report": result.report.to_dict(),
-        "evaluation": {
-            "features": dict(result.evaluation.features),
-            "trace": [
-                {
-                    "rule_id": entry.rule_id,
-                    "score": entry.score,
-                    "because": entry.because,
-                    "description": entry.description,
-                }
-                for entry in result.evaluation.trace.entries
-            ],
-        },
+        "evaluation": evaluation_dict,
         "score": result.score,
         "verdict": result.verdict,
         "facts": result.facts,

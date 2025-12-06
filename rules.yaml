@@ -1,4 +1,9 @@
 # Day 2 rule set: evidence-aware, ontology-aware scoring
+# Supports defeasible logic with priorities and defeat relations:
+#   priority: higher = stronger/more specific (default 0)
+#   defeats:  list of rule IDs this rule defeats (one-way attack)
+#   rebuts:   list of rule IDs this rule rebuts (symmetric attack)
+#   undercuts: list of rule IDs this rule undercuts (attacks applicability)
 rules:
   - id: type_domain_range_valid
     description: Domain/range matches expected biomedical categories
@@ -29,12 +34,16 @@ rules:
   - id: spurious_self_referential_claim
     description: Subject and object are the same entity but only mentioned once (hard gate - forces FAIL)
     weight: 0.0
+    priority: 90
     when:
       all:
         - fact: type.is_spurious_self_referential
           op: equals
           value: true
     because: "because subject and object are the same entity but the entity only appears once in the claim text — this is likely a NER extraction error"
+    undercuts:
+      - type_domain_range_valid
+      - ontology_closure_hpo
 
   - id: ontology_closure_hpo
     description: Entities carry ontology ancestry (HPO/MONDO/etc)
@@ -62,12 +71,23 @@ rules:
   - id: retraction_gate
     description: Fail hard if any supporting citation is retracted
     weight: -1.5
+    priority: 100
     when:
       any:
         - fact: evidence.retracted_count
           op: gt
           value: 0
     because: "because one or more citations are retracted: {evidence.retracted}"
+    defeats:
+      - nli_multi_source_support
+      - nli_single_source_support
+      - nli_strong_support_margin
+      - structured_literature_support
+      - structured_literature_strong
+      - disgenet_support_bonus
+      - cosmic_cancer_gene_bonus
+      - ontology_closure_hpo
+      - multi_source_bonus
 
   - id: expression_of_concern
     description: Down-weight citations marked as expressions of concern
@@ -82,6 +102,7 @@ rules:
   - id: self_negation_conflict
     description: Claim explicitly negates the predicate or cites refuting evidence
     weight: -1.3
+    priority: 80
     when:
       any:
         - fact: conflicts.qualifier_negated
@@ -91,6 +112,10 @@ rules:
           op: equals
           value: true
     because: "because the claim carries a negation qualifier or refuting evidence (sources: {conflicts.negation_sources}; refuting={conflicts.refuting_evidence})"
+    defeats:
+      - nli_multi_source_support
+      - nli_single_source_support
+      - disgenet_support_bonus
 
   - id: opposite_predicate_same_context
     description: Predicate direction conflicts with known context for this subject/object pair
@@ -234,6 +259,7 @@ rules:
   - id: nli_multi_source_support
     description: Multiple independent sources provide NLI support
     weight: 0.5
+    priority: 40
     when:
       all:
         - fact: text_nli.n_support
@@ -244,6 +270,7 @@ rules:
   - id: nli_single_source_support
     description: At least one source provides NLI support
     weight: 0.2
+    priority: 30
     when:
       all:
         - fact: text_nli.n_support
@@ -257,6 +284,7 @@ rules:
   - id: nli_strong_support_margin
     description: Literature margin strongly supports the claim
     weight: 0.4
+    priority: 50
     when:
       all:
         - fact: text_nli.m_lit
@@ -267,12 +295,17 @@ rules:
   - id: nli_contradiction_detected
     description: At least one source contradicts the claim
     weight: -0.6
+    priority: 60
     when:
       all:
         - fact: text_nli.n_contradict
           op: gte
           value: 1
     because: "because {text_nli.n_contradict} paper(s) contradict the claim (N_con ≥ 1)"
+    rebuts:
+      - nli_multi_source_support
+      - nli_single_source_support
+      - nli_strong_support_margin
 
   - id: nli_negative_margin
     description: Literature margin is negative (more contradiction than support)
@@ -343,3 +376,229 @@ rules:
           op: equals
           value: true
     because: "because {gene.gene_symbol} is in the COSMIC Cancer Gene Census (validated cancer gene)"
+
+  # ---------------------------------------------------------------------------
+  # OWL-Style Description Logic Rules
+  # ---------------------------------------------------------------------------
+  # These rules check formal ontology constraints: class disjointness,
+  # property domain/range, property chains, and restrictions.
+
+  - id: dl_disjoint_pair_violation
+    description: Subject and object classes are disjoint (OWL constraint)
+    weight: -1.2
+    priority: 85
+    when:
+      all:
+        - fact: dl.disjoint_pair_violation
+          op: equals
+          value: true
+    because: "because the subject ({type.domain_category}) and object ({type.range_category}) classes are declared disjoint in the ontology ({dl.disjoint_pair_types})"
+    defeats:
+      - ontology_closure_hpo
+      - disgenet_support_bonus
+      - structured_literature_support
+
+  - id: dl_domain_violation
+    description: Subject type violates property domain constraint (OWL)
+    weight: -0.8
+    priority: 75
+    when:
+      all:
+        - fact: dl.domain_valid
+          op: equals
+          value: false
+    because: "because the subject type ({type.domain_category}) is not in the expected domain ({dl.domain_expected}) for predicate {claim.predicate}"
+
+  - id: dl_range_violation
+    description: Object type violates property range constraint (OWL)
+    weight: -0.8
+    priority: 75
+    when:
+      all:
+        - fact: dl.range_valid
+          op: equals
+          value: false
+    because: "because the object type ({type.range_category}) is not in the expected range ({dl.range_expected}) for predicate {claim.predicate}"
+
+  - id: dl_property_chain_support
+    description: Property chain in KG supports the claimed relation
+    weight: 0.3
+    priority: 30
+    when:
+      all:
+        - fact: dl.property_chain_support
+          op: equals
+          value: true
+    because: "because a property chain in the knowledge graph entails the claimed relation ({dl.property_chain_paths})"
+
+  - id: dl_property_chain_conflict
+    description: Property chain implies a different object than claimed
+    weight: -0.7
+    priority: 70
+    when:
+      all:
+        - fact: dl.property_chain_conflict
+          op: equals
+          value: true
+    because: "because the knowledge graph implies a different target ({dl.property_chain_conflict_details}) than the claimed object"
+    rebuts:
+      - dl_property_chain_support
+
+  - id: dl_universal_violation
+    description: Claim violates universal restriction (∀ property.Filler)
+    weight: -0.9
+    priority: 75
+    when:
+      all:
+        - fact: dl.universal_violation
+          op: equals
+          value: true
+    because: "because the object type ({dl.universal_violation_details}) violates a universal restriction for the predicate"
+    defeats:
+      - disgenet_support_bonus
+      - structured_literature_support
+
+  - id: dl_existential_warning
+    description: Claim may lack required existential filler
+    weight: -0.2
+    when:
+      all:
+        - fact: dl.existential_violation
+          op: equals
+          value: true
+    because: "because the claim may lack required supporting evidence ({dl.existential_violation_details})"
+
+  # ---------------------------------------------------------------------------
+  # Temporal Logic Rules
+  # ---------------------------------------------------------------------------
+  # These rules reason about time-based validity of claims:
+  # - Evidence freshness/staleness (age of supporting publications)
+  # - Retraction/concern timelines (temporal ordering of events)
+  # - Decay scoring for old unsupported claims
+
+  - id: temporal_recent_support_bonus
+    description: At least one supporting citation is recent (≤ 5 years)
+    weight: 0.2
+    when:
+      all:
+        - fact: temporal.has_support
+          op: equals
+          value: true
+        - fact: temporal.support_newest_age_years
+          op: within_years
+          value: 5
+    because: "because at least one supporting paper is recent (≤ 5 years old, newest from {temporal.support_newest_year})"
+
+  - id: temporal_only_old_support_penalty
+    description: All supporting citations are old (> 10 years)
+    weight: -0.2
+    when:
+      all:
+        - fact: temporal.has_support
+          op: equals
+          value: true
+        - fact: temporal.support_newest_age_years
+          op: older_than_years
+          value: 10
+    because: "because all supporting evidence is more than 10 years old (newest from {temporal.support_newest_year})"
+
+  - id: temporal_stale_unsupported_claim
+    description: Old claim with no supporting citations (freshness decay)
+    weight: -0.5
+    when:
+      all:
+        - fact: temporal.has_support
+          op: equals
+          value: false
+        - fact: temporal.claim_age_years
+          op: gte
+          value: 5
+    because: "because the claim is at least 5 years old and still lacks supporting citations"
+
+  - id: temporal_longstanding_support_bonus
+    description: Long-standing uncontested support (10+ year span, no retractions)
+    weight: 0.3
+    priority: 40
+    when:
+      all:
+        - fact: temporal.longstanding_uncontested_support
+          op: equals
+          value: true
+    because: "because this claim has long-standing uncontested support (support span: {temporal.support_span_years} years, no retractions or concerns)"
+
+  - id: temporal_retraction_after_publication
+    description: Evidence was retracted after initial publication
+    weight: -0.4
+    priority: 60
+    when:
+      all:
+        - fact: temporal.has_retraction_after_publication
+          op: equals
+          value: true
+    because: "because supporting evidence was retracted after publication (earliest retraction lag: {temporal.earliest_retraction_lag_years} years)"
+    rebuts:
+      - temporal_longstanding_support_bonus
+      - temporal_recent_support_bonus
+
+  - id: temporal_quick_retraction
+    description: Evidence retracted quickly after publication (within 2 years)
+    weight: -0.6
+    priority: 70
+    when:
+      all:
+        - fact: temporal.earliest_retraction_lag_years
+          op: lte
+          value: 2
+    because: "because evidence was retracted quickly after publication ({temporal.earliest_retraction_lag_years} years) — suggests fundamental issues"
+    defeats:
+      - temporal_longstanding_support_bonus
+      - nli_multi_source_support
+
+  - id: temporal_concern_without_resolution
+    description: Expression of concern raised but no subsequent support
+    weight: -0.3
+    when:
+      all:
+        - fact: temporal.has_concern
+          op: equals
+          value: true
+        - fact: temporal.has_support_after_concern
+          op: equals
+          value: false
+    because: "because an expression of concern was raised ({temporal.latest_concern_year}) with no subsequent supporting evidence"
+
+  - id: temporal_support_after_concern_mitigates
+    description: New support appeared after concern was raised (mitigating)
+    weight: 0.15
+    when:
+      all:
+        - fact: temporal.has_concern
+          op: equals
+          value: true
+        - fact: temporal.has_support_after_concern
+          op: equals
+          value: true
+    because: "because new supporting evidence appeared after the expression of concern"
+
+  - id: temporal_no_support_since_retraction
+    description: No new supporting evidence since retraction
+    weight: -0.25
+    when:
+      all:
+        - fact: temporal.has_retraction
+          op: equals
+          value: true
+        - fact: temporal.no_support_after_retraction
+          op: equals
+          value: true
+    because: "because no new supporting evidence has appeared since the retraction ({temporal.latest_retraction_year})"
+
+  - id: temporal_was_supported_until_retraction
+    description: Claim was supported before retraction (historical validity)
+    weight: 0.0
+    when:
+      all:
+        - fact: temporal.was_supported_before_retraction
+          op: equals
+          value: true
+    because: "because this claim was historically supported before retraction (support from {temporal.oldest_support_year}, retracted {temporal.earliest_retraction_year}) — pattern: 'valid until retraction'"

@@ -37,6 +37,8 @@ from .mcp.mini_kg import load_mini_kg_backend
 from .provenance import CitationProvenance, ProvenanceFetcher
 from .rules import RuleEngine, RuleEvaluation, RuleTraceEntry
 from .ner import ExtractedEntity, NERBackend, NERExtractor, get_extractor
+from .ontology_constraints import check_dl_constraints
+from .temporal import get_temporal_facts_for_rules
 
 if TYPE_CHECKING:
     from nerve.suspicion_gnn import RGCNSuspicionModel
@@ -2064,6 +2066,28 @@ def build_rule_facts(
         # it's likely a NER extraction error
         is_spurious_self_ref = occurrence_count < 2
 
+    # OWL-style Description Logic constraint checking
+    dl_facts = check_dl_constraints(
+        predicate=predicate,
+        subject_id=triple.subject.id,
+        subject_category=subject_category,
+        object_id=triple.object.id,
+        object_category=object_category,
+        kg_edges=None,  # Could pass subgraph edges if available
+        has_evidence=citation_count > 0,
+    )
+
+    # Temporal logic facts for time-based reasoning
+    n_support_for_temporal = text_nli_facts.get("n_support", 0)
+    n_support_int = (
+        int(n_support_for_temporal) if isinstance(n_support_for_temporal, (int, float)) else 0
+    )
+    temporal_facts = get_temporal_facts_for_rules(
+        citations=provenance,
+        claim_year=None,  # Could extract from claim metadata if available
+        n_support=n_support_int,
+    )
+
     return {
         "claim": {
             "predicate": triple.predicate,
@@ -2127,6 +2151,8 @@ def build_rule_facts(
         },
         "tissue": tissue_facts,
         "text_nli": text_nli_facts,
+        "dl": dl_facts,
+        "temporal": temporal_facts,
     }
 
 
@@ -3126,7 +3152,7 @@ class SkepticPipeline:
         facts["literature"] = self._build_structured_literature_facts(normalization.triple)
         # Attach gene function classification (COSMIC Cancer Gene Census).
         facts["gene"] = self._build_gene_facts(normalization.triple)
-        evaluation = self.engine.evaluate(facts)
+        evaluation = self.engine.evaluate(facts, argumentation="grounded")
         score = sum(evaluation.features.values())
         verdict = self._verdict_for_score(score)
 

@@ -4,16 +4,32 @@ The engine is intentionally small (no network or heavy deps) so we can determini
 score audit payloads during early development. Rules are declared in YAML and compiled
 into ``Rule`` objects that operate on a facts dictionary produced by upstream pipeline
 steps.
+
+Supports defeasible logic via Dung-style abstract argumentation:
+- Rules can have priorities (higher = stronger/more specific)
+- Rules can explicitly defeat, rebut, or undercut other rules
+- Grounded semantics computes which arguments are IN/OUT/UNDECIDED
 """
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Container, Mapping
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Iterable, cast
 
 import yaml
+
+
+class ArgumentLabel(str, Enum):
+    """Labelling for arguments in abstract argumentation framework."""
+
+    IN = "in"
+    OUT = "out"
+    UNDECIDED = "undecided"
+
 
 DEFAULT_RULES_PATH = Path(__file__).resolve().parents[2] / "rules.yaml"
 
@@ -36,7 +52,14 @@ def _get_fact_value(facts: Facts, path: str) -> object | None:
 
 
 def _evaluate_op(value: object | None, op: str, expected: object | None) -> bool:
-    """Evaluate a simple operation on a fact value."""
+    """Evaluate a simple operation on a fact value.
+
+    Supports standard comparison operators plus temporal-specific operators:
+    - within_years: value <= expected (for age comparisons)
+    - older_than_years: value > expected (for staleness checks)
+    - before_year: value < expected (year comparison)
+    - after_year: value > expected (year comparison)
+    """
     if op == "exists":
         return bool(value)
     if op == "equals":
@@ -58,6 +81,22 @@ def _evaluate_op(value: object | None, op: str, expected: object | None) -> bool
             return value < expected
         if op == "lte":
             return value <= expected
+    if op == "within_years":
+        if not isinstance(value, (int, float)) or not isinstance(expected, (int, float)):
+            return False
+        return value <= expected
+    if op == "older_than_years":
+        if not isinstance(value, (int, float)) or not isinstance(expected, (int, float)):
+            return False
+        return value > expected
+    if op == "before_year":
+        if not isinstance(value, (int, float)) or not isinstance(expected, (int, float)):
+            return False
+        return value < expected
+    if op == "after_year":
+        if not isinstance(value, (int, float)) or not isinstance(expected, (int, float)):
+            return False
+        return value > expected
     raise ValueError(f"Unsupported operator '{op}'")
 
 
@@ -92,6 +131,8 @@ class RuleTraceEntry:
     score: float
     because: str
     description: str
+    label: ArgumentLabel = ArgumentLabel.IN
+    defeated_by: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -166,6 +207,10 @@ class Rule:
     because: str | None = None
     all: list[RuleCondition] = field(default_factory=list)
     any: list[RuleCondition] = field(default_factory=list)
+    priority: float = 0.0
+    defeats: list[str] = field(default_factory=list)
+    rebuts: list[str] = field(default_factory=list)
+    undercuts: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "Rule":
@@ -203,6 +248,30 @@ class Rule:
         else:
             weight = 1.0
 
+        raw_priority = data.get("priority", 0.0)
+        if isinstance(raw_priority, (int, float)):
+            priority = float(raw_priority)
+        elif isinstance(raw_priority, str):
+            try:
+                priority = float(raw_priority)
+            except ValueError:
+                priority = 0.0
+        else:
+            priority = 0.0
+
+        def _as_str_list(value: object | None) -> list[str]:
+            if value is None:
+                return []
+            if isinstance(value, str):
+                return [value]
+            if isinstance(value, list):
+                return [str(v) for v in value]
+            return []
+
+        defeats = _as_str_list(data.get("defeats"))
+        rebuts = _as_str_list(data.get("rebuts"))
+        undercuts = _as_str_list(data.get("undercuts"))
+
         return cls(
             id=cast(str, data["id"]),
             description=cast(str, data.get("description", data["id"])),
@@ -210,6 +279,10 @@ class Rule:
             because=cast(str | None, data.get("because")),
             all=[RuleCondition.from_dict(c) for c in all_conds],
             any=[RuleCondition.from_dict(c) for c in any_conds],
+            priority=priority,
+            defeats=defeats,
+            rebuts=rebuts,
+            undercuts=undercuts,
         )
 
     def fires(self, facts: Facts) -> bool:
@@ -234,13 +307,97 @@ class RuleEvaluation:
 
     features: dict[str, float]
     trace: RuleTrace
+    argument_labels: dict[str, ArgumentLabel] | None = None
+    attacks: dict[str, set[str]] | None = None
+
+
+class ArgumentationFramework:
+    """Dung-style abstract argumentation over fired rules.
+
+    - Nodes: fired rules (Rule.id)
+    - Attacks: directed edges between rules, filtered by priority
+
+    Supports grounded semantics (skeptical reasoning).
+    """
+
+    def __init__(
+        self,
+        rules_by_id: dict[str, Rule],
+        fired_rule_ids: set[str],
+    ) -> None:
+        self.rules_by_id = rules_by_id
+        self.fired = fired_rule_ids
+        self.attacks: dict[str, set[str]] = defaultdict(set)
+        self.attackers: dict[str, set[str]] = defaultdict(set)
+        self._build_attacks()
+
+    def _build_attacks(self) -> None:
+        """Build attack graph from defeats/rebuts/undercuts with priority filtering."""
+        for rid in self.fired:
+            r = self.rules_by_id[rid]
+
+            def add_attack(attacker_id: str, target_id: str, *, symmetric: bool = False) -> None:
+                if target_id not in self.fired:
+                    return
+                a = self.rules_by_id[attacker_id]
+                t = self.rules_by_id[target_id]
+                if a.priority < t.priority:
+                    return
+                self.attacks[attacker_id].add(target_id)
+                self.attackers[target_id].add(attacker_id)
+                if symmetric and t.priority >= a.priority:
+                    self.attacks[target_id].add(attacker_id)
+                    self.attackers[attacker_id].add(target_id)
+
+            for target in r.defeats:
+                add_attack(rid, target, symmetric=False)
+            for target in r.undercuts:
+                add_attack(rid, target, symmetric=False)
+            for target in r.rebuts:
+                add_attack(rid, target, symmetric=True)
+
+    def grounded_labelling(self) -> dict[str, ArgumentLabel]:
+        """Compute grounded labelling via iterative fixpoint.
+
+        IN  : all attackers are OUT
+        OUT : at least one attacker is IN
+        UNDECIDED: otherwise
+        """
+        labels: dict[str, ArgumentLabel] = {rid: ArgumentLabel.UNDECIDED for rid in self.fired}
+
+        changed = True
+        while changed:
+            changed = False
+            for rid in list(self.fired):
+                if labels[rid] != ArgumentLabel.UNDECIDED:
+                    continue
+
+                attackers = self.attackers.get(rid, set())
+                if not attackers:
+                    labels[rid] = ArgumentLabel.IN
+                    changed = True
+                elif all(labels[a] == ArgumentLabel.OUT for a in attackers):
+                    labels[rid] = ArgumentLabel.IN
+                    changed = True
+                elif any(labels[a] == ArgumentLabel.IN for a in attackers):
+                    labels[rid] = ArgumentLabel.OUT
+                    changed = True
+
+        return labels
+
+    def get_attackers_in(self, rule_id: str, labels: dict[str, ArgumentLabel]) -> list[str]:
+        """Return list of attackers that are labelled IN."""
+        return sorted(
+            a for a in self.attackers.get(rule_id, set()) if labels.get(a) == ArgumentLabel.IN
+        )
 
 
 class RuleEngine:
-    """Lightweight, deterministic rule engine."""
+    """Lightweight, deterministic rule engine with optional defeasible reasoning."""
 
     def __init__(self, rules: list[Rule]) -> None:
         self.rules = rules
+        self._rules_by_id = {r.id: r for r in rules}
 
     @classmethod
     def from_yaml(cls, path: str | Path | None = None) -> "RuleEngine":
@@ -268,16 +425,36 @@ class RuleEngine:
         rules = [Rule.from_dict(rule_data) for rule_data in rules_list]
         return cls(rules)
 
-    def evaluate(self, facts: Facts) -> RuleEvaluation:
-        """Evaluate all rules against the facts."""
+    def has_defeasible_metadata(self) -> bool:
+        """Check if any rule uses priority/defeats/rebuts/undercuts."""
+        return any(r.priority != 0.0 or r.defeats or r.rebuts or r.undercuts for r in self.rules)
+
+    def evaluate(
+        self,
+        facts: Facts,
+        *,
+        argumentation: str | None = None,
+    ) -> RuleEvaluation:
+        """Evaluate all rules against the facts.
+
+        Args:
+            facts: Dictionary of facts to evaluate rules against.
+            argumentation: If "grounded", compute Dung-style grounded semantics
+                          and zero out defeated rules. None = no argumentation.
+
+        Returns:
+            RuleEvaluation with features, trace, and optional argumentation info.
+        """
         features: dict[str, float] = {}
         trace = RuleTrace()
+        fired_rule_ids: set[str] = set()
 
         for rule in self.rules:
             fired = rule.fires(facts)
             score = rule.weight if fired else 0.0
             features[rule.id] = float(score)
             if fired:
+                fired_rule_ids.add(rule.id)
                 trace.add(
                     RuleTraceEntry(
                         rule_id=rule.id,
@@ -287,4 +464,31 @@ class RuleEngine:
                     )
                 )
 
-        return RuleEvaluation(features=features, trace=trace)
+        argument_labels: dict[str, ArgumentLabel] | None = None
+        attacks: dict[str, set[str]] | None = None
+
+        if argumentation and self.has_defeasible_metadata() and fired_rule_ids:
+            af = ArgumentationFramework(self._rules_by_id, fired_rule_ids)
+
+            if argumentation == "grounded":
+                argument_labels = af.grounded_labelling()
+            else:
+                raise ValueError(f"Unknown argumentation semantics '{argumentation}'")
+
+            attacks = dict(af.attacks)
+
+            for entry in trace.entries:
+                label = argument_labels.get(entry.rule_id, ArgumentLabel.IN)
+                entry.label = label
+                entry.defeated_by = af.get_attackers_in(entry.rule_id, argument_labels)
+
+                if label == ArgumentLabel.OUT:
+                    features[entry.rule_id] = 0.0
+                    entry.score = 0.0
+
+        return RuleEvaluation(
+            features=features,
+            trace=trace,
+            argument_labels=argument_labels,
+            attacks=attacks,
+        )

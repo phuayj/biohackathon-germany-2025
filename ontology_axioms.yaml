@@ -1,0 +1,215 @@
+# OWL-style ontology axioms for NERVE biomedical claim verification
+# These axioms define formal constraints that are evaluated against claims.
+#
+# Supported axiom types:
+#   - classes: Define class disjointness (A ⊓ B = ⊥)
+#   - object_properties: Define domain/range constraints for predicates
+#   - property_chains: Define property chain axioms (P ∘ Q ⊑ R)
+#   - restrictions: Define existential/universal restrictions
+
+# ---------------------------------------------------------------------------
+# Class Disjointness Axioms
+# ---------------------------------------------------------------------------
+# Entities of one class cannot simultaneously be of a disjoint class.
+# Used to detect NER/normalization errors where an entity is mis-typed.
+
+classes:
+  gene:
+    description: "A gene or gene product (protein)"
+    iri_prefixes: ["HGNC:", "NCBIGENE:", "ENSEMBL:", "UNIPROT:"]
+    # Note: gene is NOT disjoint with pathway because genes participate in pathways
+    disjoint_with: ["disease", "phenotype", "tissue", "publication"]
+
+  disease:
+    description: "A disease or disorder"
+    iri_prefixes: ["MONDO:", "DOID:", "OMIM:"]
+    disjoint_with: ["gene", "phenotype", "pathway", "tissue", "publication"]
+
+  phenotype:
+    description: "An observable phenotypic feature"
+    iri_prefixes: ["HP:", "MP:"]
+    disjoint_with: ["gene", "disease", "pathway", "tissue", "publication"]
+
+  pathway:
+    description: "A biological pathway or process"
+    iri_prefixes: ["GO:", "REACT:", "R-HSA-", "KEGG:"]
+    # Note: pathway is NOT disjoint with gene because genes participate in pathways
+    disjoint_with: ["disease", "phenotype", "tissue", "publication"]
+
+  tissue:
+    description: "An anatomical structure or tissue"
+    iri_prefixes: ["UBERON:", "CL:", "BTO:"]
+    disjoint_with: ["gene", "disease", "phenotype", "pathway", "publication"]
+
+  publication:
+    description: "A scientific publication"
+    iri_prefixes: ["PMID:", "DOI:", "PMC:"]
+    disjoint_with: ["gene", "disease", "phenotype", "pathway", "tissue"]
+
+# ---------------------------------------------------------------------------
+# Object Property Domain/Range Axioms
+# ---------------------------------------------------------------------------
+# Define the valid subject (domain) and object (range) types for predicates.
+# Violations indicate structural errors in the claim.
+
+object_properties:
+  # Gene-Disease associations
+  biolink:gene_associated_with_condition:
+    description: "Gene is associated with a disease or phenotype"
+    domain: ["gene"]
+    range: ["disease", "phenotype"]
+
+  biolink:causes:
+    description: "Subject causes the object condition"
+    domain: ["gene", "disease", "pathway"]
+    range: ["disease", "phenotype"]
+
+  # Gene expression
+  biolink:expressed_in:
+    description: "Gene is expressed in a tissue or cell type"
+    domain: ["gene"]
+    range: ["tissue"]
+
+  # Gene-Pathway relationships
+  biolink:participates_in:
+    description: "Gene participates in a pathway or process"
+    domain: ["gene"]
+    range: ["pathway"]
+
+  biolink:part_of:
+    description: "Entity is part of another entity"
+    domain: ["pathway", "tissue", "phenotype"]
+    range: ["pathway", "tissue", "phenotype"]
+
+  # Phenotype relationships
+  biolink:has_phenotype:
+    description: "Disease or gene has an associated phenotype"
+    domain: ["disease", "gene"]
+    range: ["phenotype"]
+
+  # Tissue/location relationships
+  biolink:located_in:
+    description: "Entity is located in a tissue or cellular component"
+    domain: ["gene", "pathway"]
+    range: ["tissue"]
+
+  # Regulatory relationships
+  biolink:regulates:
+    description: "Subject regulates the object"
+    domain: ["gene", "pathway"]
+    range: ["gene", "pathway"]
+
+  biolink:positively_regulates:
+    description: "Subject positively regulates (activates) the object"
+    domain: ["gene", "pathway"]
+    range: ["gene", "pathway"]
+
+  biolink:negatively_regulates:
+    description: "Subject negatively regulates (inhibits) the object"
+    domain: ["gene", "pathway"]
+    range: ["gene", "pathway"]
+
+  # Interaction relationships
+  biolink:interacts_with:
+    description: "Gene/protein interacts with another gene/protein"
+    domain: ["gene"]
+    range: ["gene"]
+
+  # Fallback/generic
+  biolink:related_to:
+    description: "Generic relationship (weak/fallback predicate)"
+    domain: ["gene", "disease", "phenotype", "pathway", "tissue"]
+    range: ["gene", "disease", "phenotype", "pathway", "tissue"]
+
+# ---------------------------------------------------------------------------
+# Property Chain Axioms
+# ---------------------------------------------------------------------------
+# If (X, P1, Y) and (Y, P2, Z), then (X, P_super, Z) can be inferred.
+# Used to check consistency between claimed relationships and KG context.
+
+property_chains:
+  # Gene participates in pathway, pathway located in tissue => gene expressed in tissue
+  - id: gene_pathway_tissue_expression
+    description: "Gene participating in tissue-located pathway implies expression"
+    chain:
+      - predicate: "biolink:participates_in"
+        subject_type: "gene"
+        object_type: "pathway"
+      - predicate: "biolink:located_in"
+        subject_type: "pathway"
+        object_type: "tissue"
+    inferred_predicate: "biolink:expressed_in"
+    inferred_subject_type: "gene"
+    inferred_object_type: "tissue"
+
+  # Gene causes phenotype, phenotype part of disease => gene associated with disease
+  - id: gene_phenotype_disease_association
+    description: "Gene causing phenotype that is part of disease implies association"
+    chain:
+      - predicate: "biolink:causes"
+        subject_type: "gene"
+        object_type: "phenotype"
+      - predicate: "biolink:part_of"
+        subject_type: "phenotype"
+        object_type: "disease"
+    inferred_predicate: "biolink:gene_associated_with_condition"
+    inferred_subject_type: "gene"
+    inferred_object_type: "disease"
+
+  # Gene regulates gene, regulated gene associated with disease => first gene associated
+  - id: gene_regulates_disease_gene
+    description: "Gene regulating disease-associated gene implies association"
+    chain:
+      - predicate: "biolink:regulates"
+        subject_type: "gene"
+        object_type: "gene"
+      - predicate: "biolink:gene_associated_with_condition"
+        subject_type: "gene"
+        object_type: "disease"
+    inferred_predicate: "biolink:gene_associated_with_condition"
+    inferred_subject_type: "gene"
+    inferred_object_type: "disease"
+
+# ---------------------------------------------------------------------------
+# Existential and Universal Restrictions
+# ---------------------------------------------------------------------------
+# Existential: Class ⊑ ∃ property.Filler (instances must have at least one filler)
+# Universal: Class ⊑ ∀ property.Filler (all fillers must be of specified type)
+
+restrictions:
+  # Diseases should have associated phenotypes (existential)
+  - id: disease_has_phenotype
+    kind: existential
+    description: "Diseases should have at least one phenotype annotation"
+    on_class: "disease"
+    property: "biolink:has_phenotype"
+    filler: "phenotype"
+    severity: "warn"  # Soft constraint - KG may be incomplete
+
+  # Gene expression targets must be tissues (universal)
+  - id: expression_target_is_tissue
+    kind: universal
+    description: "Expression targets must be tissues or cell types"
+    on_property: "biolink:expressed_in"
+    domain: "gene"
+    allowed_fillers: ["tissue"]
+    severity: "error"  # Hard constraint
+
+  # Gene-disease associations should have evidence (existential, soft)
+  - id: association_has_evidence
+    kind: existential
+    description: "Gene-disease associations should have supporting evidence"
+    on_class: "gene"
+    property: "biolink:gene_associated_with_condition"
+    filler: "disease"
+    requires_evidence: true
+    severity: "warn"
+
+  # Pathway participation requires gene as subject (universal)
+  - id: pathway_participant_is_gene
+    kind: universal
+    description: "Pathway participants must be genes or proteins"
+    on_property: "biolink:participates_in"
+    domain: "gene"
+    allowed_fillers: ["pathway"]
+    severity: "error"

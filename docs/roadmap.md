@@ -24,6 +24,8 @@
 
 ### Rule Engine Stub
 - [x] Implement engine that loads `rules.yaml`, returns rule features (floats) and RuleTrace.
+- [x] Implement defeasible logic with Dung-style argumentation (priorities, defeats/rebuts/undercuts, grounded semantics).
+- [x] Implement OWL-style Description Logic constraints (`ontology_axioms.yaml`): disjointness, domain/range, property chains, restrictions.
 
 ### UI "Hello Audit Card"
 - [x] Static card with placeholders.
@@ -53,7 +55,7 @@
 - [x] **Retract-gate:** If any supporting citation retracted → `trust=0`, FAIL; expression of concern → −0.5, WARN.
 - [x] **Source redundancy:** Multiple independent sources → bonus; single source → penalty.
 - [x] **Ontology sibling conflict:** Warn on sibling-like subject/object pairs and expose a dedicated label.
-- [ ] **Time freshness (optional):** Old unsupported claims decay slightly.
+- [x] **Time freshness:** Temporal logic with freshness decay, retraction timelines, and "valid until retraction" patterns.
 - [x] Add explicit rule for self-negation (`REAL_F04`); re-run `uv run pytest -m e2e tests/test_pipeline_e2e.py::TestSkepticPipelineE2E::test_seed_claim_fixture_jsonl` and clean up the temporary WARN override.
 - [x] Add explicit rule for low-confidence extraction (`REAL_F05`); once implemented, re-run `uv run pytest -m e2e tests/test_pipeline_e2e.py::TestSkepticPipelineE2E::test_seed_claim_fixture_jsonl` and clean up the temporary WARN override.
 - [x] Add explicit rule for opposite-predicate conflicts (`REAL_025`); once implemented, re-run `uv run pytest -m e2e tests/test_pipeline_e2e.py::TestSkepticPipelineE2E::test_seed_claim_fixture_jsonl` and clean up the temporary WARN override in `tests/test_pipeline_e2e.py` / `tests/fixtures/e2e_claim_fixtures.jsonl`.

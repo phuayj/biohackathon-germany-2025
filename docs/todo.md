@@ -15,6 +15,8 @@
 
 ### Rule Engine (Done)
 - [x] Implement rule DSL (50–100 lines) covering type constraints, ontology closure (is-a/part-of), inheritance/tissue plausibility, and a clear "because" message per rule.
+- [x] Implement defeasible logic via Dung-style abstract argumentation: priorities, defeats/rebuts/undercuts relations, grounded semantics.
+- [x] Implement OWL-style Description Logic constraints: class disjointness, property domain/range, property chains, existential/universal restrictions.
 
 ### UI "Hello Audit Card" (Done)
 - [x] Static card with placeholders in Streamlit.
@@ -49,7 +51,7 @@
 - [x] **ontology_closure_hpo:** HPO consistency with known disease phenotypes.
 - [x] **multi_source_bonus:** +0.3 if ≥2 independent sources.
 - [x] **ontology_sibling_conflict:** WARN when subject/object are ontology siblings (e.g., HPO siblings) instead of parent/child; expose `WARN_ontology_sibling_conflict` label. Once implemented, update `REAL_O01` expectations in `tests/test_pipeline_e2e.py`.
-- [ ] **time_freshness (optional):** Decay for old unsupported claims.
+- [x] **time_freshness:** Temporal logic with freshness decay, retraction timelines, "valid until retraction" patterns, and temporal operators (within_years, older_than_years, before_year, after_year).
 - [x] **self_negation_conflict:** Model explicit self-negation / refuting-evidence conflicts (e.g., `REAL_F04`); once implemented, re-run `uv run pytest -m e2e tests/test_pipeline_e2e.py::TestSkepticPipelineE2E::test_seed_claim_fixture_jsonl` and update expectations for `REAL_F04` in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`.
 - [x] **extraction_low_confidence:** Add a rule capturing low-confidence extraction / vague predicates (e.g., `REAL_F05`); after implementation, re-run the same E2E seed fixture test and update `REAL_F05` expectations in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`.
 - [x] **opposite_predicate_same_context:** Add a rule for opposite predicates in the same context (e.g., `REAL_025`); after implementation, re-run the same E2E seed fixture test and update `REAL_025` expectations in `tests/test_pipeline_e2e.py` and `tests/fixtures/e2e_claim_fixtures.jsonl`, removing the temporary WARN override.
