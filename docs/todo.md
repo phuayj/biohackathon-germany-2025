@@ -240,17 +240,27 @@
 - [ ] Ablation: no retraction gate vs with.
 
 #### NLI Calibration
-- [ ] **Calibrate NLI probabilities:** Fit isotonic/Platt scaling on seeded claims so `p_sup` and `p_con` are well-behaved.
+- [x] **Calibrate NLI probabilities:** Fit isotonic/Platt scaling on seeded claims so `p_sup` and `p_con` are well-behaved (`nerve.nli_calibration` module).
 - [ ] **Dedupe bias control:** Cap per-paper contribution in scoring (β cap) to prevent single paper dominance.
 - [ ] **Hedging sensitivity:** If claim text is hedged ("may cause"), raise PASS threshold by +0.05.
 - [ ] Min-max or Z-normalize NLI features (`M̂_lit`, `N̂_sup`) on seeded set before combining with other features.
 
 #### GNN Spec Compliance (Phase 3 — Calibration & Losses)
-- [ ] Add temperature scaling for suspicion score calibration per spec §3.3.
-- [ ] Add focal loss as alternative to BCE for class imbalance per spec §3.2.
-- [ ] Add margin ranking loss option (suspicious > clean pairs) per spec §3.2.
-- [ ] Add baseline model (LogReg/XGBoost on edge features) for comparison per spec §4.
-- [ ] Add knowledge distillation from baseline to GNN per spec §4 (optional).
+- [x] Add temperature scaling for suspicion score calibration per spec §3.3 (`TemperatureScaler` class with `calibrate_temperature()` function).
+- [x] Add focal loss as alternative to BCE for class imbalance per spec §3.2 (`FocalLoss` class with configurable gamma/alpha).
+- [x] Add margin ranking loss option (suspicious > clean pairs) per spec §3.2 (`MarginRankingLoss` and `CombinedSuspicionLoss` classes).
+- [x] Add baseline model (LogReg/XGBoost on edge features) for comparison per spec §4 (`LogisticRegressionBaseline`, `XGBoostBaseline`, `compare_gnn_vs_baseline()`).
+- [x] Add knowledge distillation from baseline to GNN per spec §4 (`KnowledgeDistillationLoss`, `distill_baseline_to_gnn()`).
+
+#### GNN Formalization (Done)
+- [x] Add `SuspicionModelConfig` and `TrainingConfig` dataclasses for typed hyperparameter management.
+- [x] Add `SuspicionModel` Protocol for type-safe model swapping.
+- [x] Add `LEAKY_EDGE_KEYS` filter to prevent label leakage during training.
+- [x] Add edge feature normalization (`log1p` for counts, clamping for ratios).
+- [x] Add `mc_dropout_predict()` for MC Dropout uncertainty estimation.
+- [x] Add `UncertaintyEstimate` dataclass with mean, std, and samples.
+- [x] Update `rank_suspicion()` to accept optional `TemperatureScaler` for calibrated inference.
+- [x] Add `RGCNSuspicionModel.from_config()` factory method.
 
 ### Patch Suggestions
 - [ ] **OntologyMismatch:** Suggest nearest child/parent HPO term with evidence.
@@ -289,6 +299,7 @@
 - [ ] Measure hallucination-reduction when auditor guards a small LLM QA/KG agent.
 - [x] Integration tests with demo bio-agent via MCP (MCP server now available).
 - [ ] Surface curated KG support in the UI: add an Audit Card snippet that shows whether Monarch and/or DisGeNET back the gene–disease edge (including edge counts and which sources fired), and add non-live + e2e tests to exercise this path.
+- [x] Re-ran ruff and mypy sweeps after calibration/test refinements to keep the tree green.
 
 ---
 

@@ -17,6 +17,11 @@ Key pieces:
   ``(subject, predicate, object)`` triples.
 - ``predict_error_types``: convenience wrapper that runs the model on a
   subgraph and returns per-edge error type predictions.
+- ``SuspicionModelConfig``: typed configuration for model hyperparameters.
+- ``TemperatureScaler``: post-hoc calibration for suspicion probabilities.
+- ``FocalLoss``: class-imbalance aware loss function.
+- ``MarginRankingLoss``: ranking loss for suspicious > clean edge ordering.
+- ``CombinedSuspicionLoss``: flexible combined loss with BCE/focal/margin.
 
 The implementation only depends on PyTorch; it produces tensors that
 are "PyG‑ready" in the sense that they can be wrapped in
@@ -26,8 +31,20 @@ take a hard dependency on PyG inside this library.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple, cast
+import math
+from dataclasses import asdict, dataclass, field
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    cast,
+)
 
 try:
     import torch
@@ -40,6 +57,10 @@ except ImportError as exc:  # pragma: no cover - exercised via tests with import
         "for example via `pip install torch` in an environment that "
         "supports it, then re‑import `nerve.suspicion_gnn`."
     ) from exc
+
+if TYPE_CHECKING:
+    from sklearn.linear_model import LogisticRegression as SklearnLogisticRegression
+    from xgboost import XGBClassifier as XGBoostClassifier
 
 from nerve.error_types import ErrorType
 from nerve.subgraph import Subgraph
@@ -56,6 +77,125 @@ ERROR_TYPE_TO_INDEX: Dict[ErrorType, int] = {
 }
 
 INDEX_TO_ERROR_TYPE: Dict[int, ErrorType] = {v: k for k, v in ERROR_TYPE_TO_INDEX.items()}
+
+# Keys that should NOT be used as features to prevent label leakage
+LEAKY_EDGE_KEYS: set[str] = {
+    "is_perturbed_edge",
+    "perturbation_type",
+    "debug_label_reason",
+    "is_suspicious",
+    "suspicion_label",
+    "error_type_label",
+}
+
+
+# ---------------------------------------------------------------------------
+# Configuration dataclasses
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SuspicionModelConfig:
+    """Typed configuration for RGCNSuspicionModel hyperparameters.
+
+    This dataclass makes it easy to serialize/deserialize model configs
+    alongside checkpoints and ensures consistent typing.
+    """
+
+    in_channels: int
+    num_relations: int
+    edge_in_channels: int = 0
+    hidden_channels: int = 32
+    dropout: float = 0.3
+    num_error_types: int = NUM_ERROR_TYPES
+
+    def to_dict(self) -> Dict[str, object]:
+        """Convert to dictionary for serialization."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "SuspicionModelConfig":
+        """Create from dictionary."""
+
+        def _int(key: str, default: int) -> int:
+            val = data.get(key, default)
+            if isinstance(val, int):
+                return val
+            if isinstance(val, (float, str)):
+                return int(val)
+            return default
+
+        def _float(key: str, default: float) -> float:
+            val = data.get(key, default)
+            if isinstance(val, (int, float)):
+                return float(val)
+            if isinstance(val, str):
+                return float(val)
+            return default
+
+        return cls(
+            in_channels=_int("in_channels", 0),
+            num_relations=_int("num_relations", 1),
+            edge_in_channels=_int("edge_in_channels", 0),
+            hidden_channels=_int("hidden_channels", 32),
+            dropout=_float("dropout", 0.3),
+            num_error_types=_int("num_error_types", NUM_ERROR_TYPES),
+        )
+
+
+@dataclass
+class TrainingConfig:
+    """Configuration for suspicion GNN training."""
+
+    epochs: int = 5
+    batch_size: int = 1
+    lr: float = 1e-3
+    weight_decay: float = 1e-4
+    val_fraction: float = 0.2
+    use_focal_loss: bool = False
+    focal_gamma: float = 2.0
+    focal_alpha: float = 0.25
+    lambda_error: float = 0.5
+    early_stopping_patience: int = 5
+    mc_dropout_samples: int = 0
+    balance_edges: bool = True
+
+    def to_dict(self) -> Dict[str, object]:
+        """Convert to dictionary for serialization."""
+        return asdict(self)
+
+
+# ---------------------------------------------------------------------------
+# Protocol for suspicion models (enables swapping implementations)
+# ---------------------------------------------------------------------------
+
+
+class SuspicionModel(Protocol):
+    """Protocol for suspicion models to enable type-safe swapping."""
+
+    def forward_both(
+        self,
+        x: Tensor,
+        edge_index: Tensor,
+        edge_type: Tensor,
+        edge_attr: Optional[Tensor] = None,
+    ) -> Tuple[Tensor, Optional[Tensor]]:
+        """Compute both suspicion logits and error type logits."""
+        ...
+
+    def predict_proba(
+        self,
+        x: Tensor,
+        edge_index: Tensor,
+        edge_type: Tensor,
+        edge_attr: Optional[Tensor] = None,
+    ) -> Tensor:
+        """Return per-edge suspicion probabilities."""
+        ...
+
+    def has_error_type_head(self) -> bool:
+        """Check if model has error type classification head."""
+        ...
 
 
 @dataclass
@@ -100,10 +240,15 @@ NUMERIC_EDGE_KEYS_DEFAULT: tuple[str, ...] = (
 
 
 def _extract_numeric_edge_feature_names(edges: Sequence[Mapping[str, object]]) -> List[str]:
-    """Infer a stable list of numeric edge feature keys."""
+    """Infer a stable list of numeric edge feature keys.
+
+    Filters out LEAKY_EDGE_KEYS to prevent label leakage during training.
+    """
     keys: set[str] = set()
     for props in edges:
         for key, value in props.items():
+            if key in LEAKY_EDGE_KEYS:
+                continue
             if isinstance(value, (int, float)):
                 keys.add(key)
 
@@ -122,6 +267,26 @@ def _extract_numeric_edge_feature_names(edges: Sequence[Mapping[str, object]]) -
         ordered.append(key)
 
     return ordered
+
+
+# Edge features that benefit from log1p transformation (heavy-tailed counts)
+LOG_TRANSFORM_EDGE_KEYS: set[str] = {"n_sources", "n_pmids", "citation_count"}
+
+# Edge features that should be clamped to [0, 1] (ratios/fractions)
+RATIO_EDGE_KEYS: set[str] = {
+    "confidence",
+    "retracted_support_ratio",
+    "citing_retracted_ratio",
+}
+
+
+def _normalize_edge_feature(key: str, value: float) -> float:
+    """Apply appropriate normalization to an edge feature value."""
+    if key in LOG_TRANSFORM_EDGE_KEYS and value > 0:
+        return math.log1p(value)
+    if key in RATIO_EDGE_KEYS:
+        return max(0.0, min(1.0, value))
+    return value
 
 
 def _safe_float(value: float) -> float:
@@ -232,7 +397,8 @@ def subgraph_to_tensors(subgraph: Subgraph) -> SubgraphTensors:
             for name in edge_feature_names:
                 raw_val: object = props.get(name, 0.0)
                 if isinstance(raw_val, (int, float)):
-                    edge_row.append(float(raw_val))
+                    normalized = _normalize_edge_feature(name, float(raw_val))
+                    edge_row.append(normalized)
                 else:
                     edge_row.append(0.0)
             edge_attr_rows.append(edge_row)
@@ -516,12 +682,368 @@ class RGCNSuspicionModel(nn.Module):
         """Check if the model has an error type classification head."""
         return self.error_type_head is not None
 
+    @classmethod
+    def from_config(cls, config: SuspicionModelConfig) -> "RGCNSuspicionModel":
+        """Create model from a SuspicionModelConfig."""
+        return cls(
+            in_channels=config.in_channels,
+            num_relations=config.num_relations,
+            hidden_channels=config.hidden_channels,
+            edge_in_channels=config.edge_in_channels,
+            dropout=config.dropout,
+            num_error_types=config.num_error_types,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Loss functions
+# ---------------------------------------------------------------------------
+
+
+class FocalLoss(nn.Module):
+    """Focal loss for class-imbalanced binary classification.
+
+    Focal loss down-weights easy examples and focuses on hard negatives,
+    which is useful when suspicious edges are a minority.
+
+    Args:
+        gamma: Focusing parameter (higher = more focus on hard examples).
+               Recommended range: 1.0 to 3.0, default 2.0.
+        alpha: Class balance weight for positive class (0 to 1).
+               Lower values down-weight positives. Default 0.25.
+    """
+
+    def __init__(self, gamma: float = 2.0, alpha: float = 0.25) -> None:
+        super().__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+
+    def forward(self, logits: Tensor, targets: Tensor) -> Tensor:
+        """Compute focal loss.
+
+        Args:
+            logits: Predicted logits [N]
+            targets: Binary targets [N] in {0, 1}
+
+        Returns:
+            Scalar focal loss
+        """
+        bce = F.binary_cross_entropy_with_logits(logits, targets, reduction="none")
+        probs = torch.sigmoid(logits)
+        pt = probs * targets + (1 - probs) * (1 - targets)
+        alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
+        focal_weight = alpha_t * (1 - pt).pow(self.gamma)
+        return (focal_weight * bce).mean()
+
+
+class MarginRankingLoss(nn.Module):
+    """Margin ranking loss for suspicion ordering (suspicious > clean).
+
+    This loss encourages the model to rank suspicious edges higher than
+    clean edges by a margin. It samples positive-negative pairs and applies
+    a hinge-style margin loss.
+
+    Useful when the goal is relative ranking rather than absolute calibration.
+
+    Args:
+        margin: Minimum score difference between positive and negative edges.
+                Default 1.0 (standard margin).
+        num_pairs_per_sample: Maximum number of (pos, neg) pairs to sample
+                              per forward pass. Set to 0 for all pairs.
+    """
+
+    def __init__(self, margin: float = 1.0, num_pairs_per_sample: int = 100) -> None:
+        super().__init__()
+        self.margin = margin
+        self.num_pairs_per_sample = num_pairs_per_sample
+
+    def forward(self, logits: Tensor, targets: Tensor) -> Tensor:
+        """Compute margin ranking loss.
+
+        Args:
+            logits: Predicted logits [N]
+            targets: Binary targets [N] in {0, 1}
+
+        Returns:
+            Scalar margin ranking loss (0 if no valid pairs)
+        """
+        pos_mask = targets > 0.5
+        neg_mask = targets <= 0.5
+
+        pos_indices = pos_mask.nonzero(as_tuple=True)[0]
+        neg_indices = neg_mask.nonzero(as_tuple=True)[0]
+
+        if len(pos_indices) == 0 or len(neg_indices) == 0:
+            return torch.tensor(0.0, device=logits.device, requires_grad=True)
+
+        pos_logits = logits[pos_indices]
+        neg_logits = logits[neg_indices]
+
+        # Create all pairs or sample a subset
+        num_pos = len(pos_indices)
+        num_neg = len(neg_indices)
+        total_pairs = num_pos * num_neg
+
+        if self.num_pairs_per_sample > 0 and total_pairs > self.num_pairs_per_sample:
+            # Sample random pairs for efficiency
+            pair_indices = torch.randperm(total_pairs, device=logits.device)[
+                : self.num_pairs_per_sample
+            ]
+            pos_idx = pair_indices // num_neg
+            neg_idx = pair_indices % num_neg
+        else:
+            # Use all pairs via broadcasting
+            pos_idx = torch.arange(num_pos, device=logits.device).repeat_interleave(num_neg)
+            neg_idx = torch.arange(num_neg, device=logits.device).repeat(num_pos)
+
+        # Margin ranking: pos should be > neg by margin
+        # Loss = max(0, margin - (pos - neg))
+        diff = pos_logits[pos_idx] - neg_logits[neg_idx]
+        loss = F.relu(self.margin - diff)
+        return loss.mean()
+
+
+class CombinedSuspicionLoss(nn.Module):
+    """Combined loss for suspicion training with configurable components.
+
+    Supports combining BCE, focal loss, and margin ranking loss with
+    configurable weights for flexible training objectives.
+
+    Args:
+        use_focal: Whether to use focal loss instead of BCE.
+        use_margin_ranking: Whether to add margin ranking loss.
+        focal_gamma: Gamma parameter for focal loss.
+        focal_alpha: Alpha parameter for focal loss.
+        margin: Margin for margin ranking loss.
+        margin_weight: Weight for margin ranking loss component.
+        pos_weight: Optional positive class weight for BCE.
+    """
+
+    def __init__(
+        self,
+        use_focal: bool = False,
+        use_margin_ranking: bool = False,
+        focal_gamma: float = 2.0,
+        focal_alpha: float = 0.25,
+        margin: float = 1.0,
+        margin_weight: float = 0.5,
+        pos_weight: Optional[Tensor] = None,
+    ) -> None:
+        super().__init__()
+        self.use_focal = use_focal
+        self.use_margin_ranking = use_margin_ranking
+        self.margin_weight = margin_weight
+
+        if use_focal:
+            self.base_loss: nn.Module = FocalLoss(gamma=focal_gamma, alpha=focal_alpha)
+        elif pos_weight is not None:
+            self.base_loss = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        else:
+            self.base_loss = nn.BCEWithLogitsLoss()
+
+        self.margin_loss: Optional[MarginRankingLoss] = None
+        if use_margin_ranking:
+            self.margin_loss = MarginRankingLoss(margin=margin)
+
+    def forward(self, logits: Tensor, targets: Tensor) -> Tensor:
+        """Compute combined loss.
+
+        Args:
+            logits: Predicted logits [N]
+            targets: Binary targets [N] in {0, 1}
+
+        Returns:
+            Scalar combined loss
+        """
+        loss: Tensor = self.base_loss(logits, targets)
+
+        if self.margin_loss is not None:
+            margin_loss = self.margin_loss(logits, targets)
+            loss = loss + self.margin_weight * margin_loss
+
+        return loss
+
+
+# ---------------------------------------------------------------------------
+# Calibration
+# ---------------------------------------------------------------------------
+
+
+class TemperatureScaler(nn.Module):
+    """Temperature scaling for calibrating suspicion probabilities.
+
+    Post-hoc calibration that learns a single temperature parameter T
+    such that sigmoid(logits / T) produces well-calibrated probabilities.
+
+    Usage:
+        1. Train the main model
+        2. Freeze the model
+        3. Fit TemperatureScaler on a validation set
+        4. Use scaler.predict_proba(logits) for calibrated predictions
+    """
+
+    def __init__(self, init_temperature: float = 1.0) -> None:
+        super().__init__()
+        self.log_temperature = nn.Parameter(
+            torch.log(torch.tensor(init_temperature, dtype=torch.float32))
+        )
+
+    @property
+    def temperature(self) -> Tensor:
+        """Current temperature value (always positive)."""
+        return self.log_temperature.exp()
+
+    def forward(self, logits: Tensor) -> Tensor:
+        """Apply temperature scaling to logits."""
+        return logits / self.temperature
+
+    def predict_proba(self, logits: Tensor) -> Tensor:
+        """Return calibrated probabilities."""
+        return torch.sigmoid(self.forward(logits))
+
+
+def calibrate_temperature(
+    model: RGCNSuspicionModel,
+    val_tensors: Sequence[SubgraphTensors],
+    val_labels: Sequence[Tensor],
+    *,
+    device: Optional[torch.device] = None,
+    lr: float = 0.1,
+    max_iter: int = 50,
+) -> TemperatureScaler:
+    """Fit a TemperatureScaler on validation data.
+
+    Args:
+        model: Trained suspicion model (will be frozen)
+        val_tensors: Validation subgraph tensors
+        val_labels: Per-edge suspicion labels for each subgraph
+        device: Torch device for computation
+        lr: Learning rate for L-BFGS optimizer
+        max_iter: Maximum optimization iterations
+
+    Returns:
+        Fitted TemperatureScaler
+    """
+    model_device = device or next(model.parameters()).device
+    model.eval()
+
+    all_logits: List[Tensor] = []
+    all_labels: List[Tensor] = []
+
+    with torch.no_grad():
+        for tensors, labels in zip(val_tensors, val_labels):
+            x = tensors.x.to(model_device)
+            edge_index = tensors.edge_index.to(model_device)
+            edge_type = tensors.edge_type.to(model_device)
+            edge_attr = (
+                tensors.edge_attr.to(model_device) if tensors.edge_attr is not None else None
+            )
+
+            logits, _ = model.forward_both(x, edge_index, edge_type, edge_attr=edge_attr)
+            all_logits.append(logits.detach())
+            all_labels.append(labels.float().to(model_device))
+
+    if not all_logits:
+        return TemperatureScaler()
+
+    logits_cat = torch.cat(all_logits)
+    labels_cat = torch.cat(all_labels)
+
+    scaler = TemperatureScaler().to(model_device)
+    optimizer = torch.optim.LBFGS([scaler.log_temperature], lr=lr, max_iter=max_iter)
+    criterion = nn.BCEWithLogitsLoss()
+
+    def closure() -> float:
+        optimizer.zero_grad()
+        loss: Tensor = criterion(scaler(logits_cat), labels_cat)
+        loss.backward()  # type: ignore[no-untyped-call]
+        return float(loss.item())
+
+    optimizer.step(closure)  # type: ignore[no-untyped-call]
+    return scaler
+
+
+# ---------------------------------------------------------------------------
+# Uncertainty estimation
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class UncertaintyEstimate:
+    """Uncertainty estimate for edge predictions."""
+
+    mean_score: float
+    std_score: float
+    samples: List[float] = field(default_factory=list)
+
+
+def mc_dropout_predict(
+    model: RGCNSuspicionModel,
+    tensors: SubgraphTensors,
+    n_samples: int = 20,
+    *,
+    device: Optional[torch.device] = None,
+) -> Dict[Tuple[str, str, str], UncertaintyEstimate]:
+    """Compute uncertainty estimates via MC Dropout.
+
+    Runs multiple stochastic forward passes with dropout enabled,
+    then computes mean and standard deviation of predictions.
+
+    Args:
+        model: Trained suspicion model with dropout
+        tensors: Subgraph tensors
+        n_samples: Number of stochastic forward passes
+        device: Torch device
+
+    Returns:
+        Mapping from edge triples to UncertaintyEstimate
+    """
+    if tensors.edge_index.numel() == 0:
+        return {}
+
+    model_device = device or next(model.parameters()).device
+    x = tensors.x.to(model_device)
+    edge_index = tensors.edge_index.to(model_device)
+    edge_type = tensors.edge_type.to(model_device)
+    edge_attr = tensors.edge_attr.to(model_device) if tensors.edge_attr is not None else None
+
+    model.train()  # Enable dropout
+    predictions: List[Tensor] = []
+
+    with torch.no_grad():
+        for _ in range(n_samples):
+            logits, _ = model.forward_both(x, edge_index, edge_type, edge_attr=edge_attr)
+            probs = torch.sigmoid(logits)
+            predictions.append(probs.unsqueeze(0))
+
+    stacked = torch.cat(predictions, dim=0)  # [n_samples, n_edges]
+    mean = stacked.mean(dim=0).cpu()
+    std = stacked.std(dim=0).cpu()
+
+    result: Dict[Tuple[str, str, str], UncertaintyEstimate] = {}
+    for i, triple in enumerate(tensors.edge_triples):
+        samples = stacked[:, i].cpu().tolist()
+        result[triple] = UncertaintyEstimate(
+            mean_score=float(mean[i].item()),
+            std_score=float(std[i].item()),
+            samples=samples,
+        )
+
+    model.eval()  # Restore eval mode
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Inference utilities
+# ---------------------------------------------------------------------------
+
 
 def rank_suspicion(
     subgraph: Subgraph,
     model: RGCNSuspicionModel,
     *,
     device: Optional[torch.device] = None,
+    scaler: Optional[TemperatureScaler] = None,
 ) -> Dict[Tuple[str, str, str], float]:
     """Run a suspicion model over a :class:`Subgraph`.
 
@@ -535,6 +1057,8 @@ def rank_suspicion(
     device:
         Optional torch device; if provided the tensors and model will be
         moved to this device before inference.
+    scaler:
+        Optional TemperatureScaler for calibrated probabilities.
 
     Returns
     -------
@@ -555,7 +1079,12 @@ def rank_suspicion(
     model = model.to(model_device)
     model.eval()
     with torch.no_grad():
-        scores = model.predict_proba(x, edge_index, edge_type, edge_attr=edge_attr)
+        logits, _ = model.forward_both(x, edge_index, edge_type, edge_attr=edge_attr)
+        if scaler is not None:
+            scaler = scaler.to(model_device)
+            scores = scaler.predict_proba(logits)
+        else:
+            scores = torch.sigmoid(logits)
 
     scores_cpu = scores.detach().cpu().tolist()
     result: Dict[Tuple[str, str, str], float] = {}
@@ -708,3 +1237,609 @@ def rank_suspicion_with_error_types(
         )
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Baseline Models (LogReg/XGBoost for comparison)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class BaselineModelResult:
+    """Result from baseline model predictions."""
+
+    edge_triples: List[Tuple[str, str, str]]
+    scores: List[float]
+    labels: List[float]
+    auroc: float = 0.0
+    auprc: float = 0.0
+
+
+class LogisticRegressionBaseline:
+    """Simple logistic regression baseline operating on edge features.
+
+    This baseline extracts edge-level features (edge_attr + one-hot edge types)
+    and trains a logistic regression classifier. Useful as a non-graph baseline
+    to measure the value added by the GNN's message passing.
+
+    The model uses sklearn's LogisticRegression internally.
+    """
+
+    def __init__(
+        self,
+        C: float = 1.0,
+        class_weight: Optional[str] = "balanced",
+        max_iter: int = 1000,
+    ) -> None:
+        """Initialize the baseline model.
+
+        Args:
+            C: Inverse regularization strength.
+            class_weight: Class weight strategy ("balanced" or None).
+            max_iter: Maximum iterations for solver.
+        """
+        self.C = C
+        self.class_weight = class_weight
+        self.max_iter = max_iter
+        self._model: SklearnLogisticRegression | None = None
+        self._num_relations: int = 0
+        self._feature_dim: int = 0
+
+    def _extract_features(self, tensors: SubgraphTensors) -> Tensor:
+        """Extract edge-level features including one-hot edge types."""
+        num_edges = tensors.edge_index.shape[1]
+        if num_edges == 0:
+            return torch.empty((0, 0), dtype=torch.float32)
+
+        # One-hot encode edge types
+        num_relations = max(self._num_relations, int(tensors.edge_type.max().item()) + 1)
+        self._num_relations = num_relations
+
+        one_hot = torch.zeros((num_edges, num_relations), dtype=torch.float32)
+        one_hot[torch.arange(num_edges), tensors.edge_type] = 1.0
+
+        # Combine with edge attributes if available
+        if tensors.edge_attr is not None:
+            features = torch.cat([tensors.edge_attr, one_hot], dim=-1)
+        else:
+            features = one_hot
+
+        self._feature_dim = features.shape[1]
+        return features
+
+    def fit(
+        self,
+        tensors_list: Sequence[SubgraphTensors],
+        labels_list: Sequence[Tensor],
+    ) -> "LogisticRegressionBaseline":
+        """Fit the logistic regression model on training data.
+
+        Args:
+            tensors_list: List of SubgraphTensors from training subgraphs.
+            labels_list: Corresponding per-edge suspicion labels.
+
+        Returns:
+            self
+        """
+        try:
+            from sklearn.linear_model import LogisticRegression
+        except ImportError as e:
+            raise RuntimeError(
+                "LogisticRegressionBaseline requires scikit-learn. "
+                "Install with: pip install scikit-learn"
+            ) from e
+
+        # First pass: determine max relations for consistent one-hot encoding
+        for tensors in tensors_list:
+            if tensors.edge_index.numel() > 0:
+                self._num_relations = max(
+                    self._num_relations,
+                    int(tensors.edge_type.max().item()) + 1,
+                )
+
+        # Collect all features and labels
+        all_features: List[Tensor] = []
+        all_labels: List[Tensor] = []
+
+        for tensors, labels in zip(tensors_list, labels_list):
+            if tensors.edge_index.numel() == 0:
+                continue
+            features = self._extract_features(tensors)
+            all_features.append(features)
+            all_labels.append(labels)
+
+        if not all_features:
+            raise ValueError("No training data with edges provided.")
+
+        X = torch.cat(all_features, dim=0).numpy()
+        y = torch.cat(all_labels, dim=0).numpy()
+
+        self._model = LogisticRegression(
+            C=self.C,
+            class_weight=self.class_weight,
+            max_iter=self.max_iter,
+            solver="lbfgs",
+        )
+        self._model.fit(X, y)
+        return self
+
+    def predict_proba(self, tensors: SubgraphTensors) -> Tensor:
+        """Predict suspicion probabilities for edges.
+
+        Args:
+            tensors: SubgraphTensors for a single subgraph.
+
+        Returns:
+            Tensor of suspicion probabilities [num_edges].
+        """
+        if self._model is None:
+            raise RuntimeError("Model not fitted. Call fit() first.")
+
+        if tensors.edge_index.numel() == 0:
+            return torch.empty((0,), dtype=torch.float32)
+
+        features = self._extract_features(tensors)
+
+        # Pad or truncate features to match training dimension
+        if features.shape[1] < self._feature_dim:
+            padding = torch.zeros(
+                (features.shape[0], self._feature_dim - features.shape[1]),
+                dtype=torch.float32,
+            )
+            features = torch.cat([features, padding], dim=-1)
+        elif features.shape[1] > self._feature_dim:
+            features = features[:, : self._feature_dim]
+
+        X = features.numpy()
+        probs = self._model.predict_proba(X)[:, 1]
+        return torch.tensor(probs, dtype=torch.float32)
+
+    def evaluate(
+        self,
+        tensors_list: Sequence[SubgraphTensors],
+        labels_list: Sequence[Tensor],
+    ) -> BaselineModelResult:
+        """Evaluate the model on test data.
+
+        Args:
+            tensors_list: List of test SubgraphTensors.
+            labels_list: Corresponding per-edge suspicion labels.
+
+        Returns:
+            BaselineModelResult with scores and metrics.
+        """
+        all_triples: List[Tuple[str, str, str]] = []
+        all_scores: List[float] = []
+        all_labels: List[float] = []
+
+        for tensors, labels in zip(tensors_list, labels_list):
+            if tensors.edge_index.numel() == 0:
+                continue
+            probs = self.predict_proba(tensors)
+            all_triples.extend(tensors.edge_triples)
+            all_scores.extend(probs.tolist())
+            all_labels.extend(labels.tolist())
+
+        # Compute metrics if sklearn is available
+        auroc = 0.0
+        auprc = 0.0
+        if all_scores and len(set(all_labels)) > 1:
+            try:
+                from sklearn.metrics import average_precision_score, roc_auc_score
+
+                auroc = roc_auc_score(all_labels, all_scores)
+                auprc = average_precision_score(all_labels, all_scores)
+            except (ImportError, ValueError):
+                pass
+
+        return BaselineModelResult(
+            edge_triples=all_triples,
+            scores=all_scores,
+            labels=all_labels,
+            auroc=auroc,
+            auprc=auprc,
+        )
+
+
+class XGBoostBaseline:
+    """XGBoost baseline for edge suspicion classification.
+
+    Similar to LogisticRegressionBaseline but uses XGBoost for potentially
+    better handling of feature interactions and class imbalance.
+
+    Requires xgboost to be installed.
+    """
+
+    def __init__(
+        self,
+        n_estimators: int = 100,
+        max_depth: int = 4,
+        learning_rate: float = 0.1,
+        scale_pos_weight: Optional[float] = None,
+    ) -> None:
+        """Initialize XGBoost baseline.
+
+        Args:
+            n_estimators: Number of boosting rounds.
+            max_depth: Maximum tree depth.
+            learning_rate: Learning rate (eta).
+            scale_pos_weight: Weight for positive class (computed from data if None).
+        """
+        self.n_estimators = n_estimators
+        self.max_depth = max_depth
+        self.learning_rate = learning_rate
+        self.scale_pos_weight = scale_pos_weight
+        self._model: XGBoostClassifier | None = None
+        self._num_relations: int = 0
+        self._feature_dim: int = 0
+
+    def _extract_features(self, tensors: SubgraphTensors) -> Tensor:
+        """Extract edge-level features including one-hot edge types."""
+        num_edges = tensors.edge_index.shape[1]
+        if num_edges == 0:
+            return torch.empty((0, 0), dtype=torch.float32)
+
+        num_relations = max(self._num_relations, int(tensors.edge_type.max().item()) + 1)
+        self._num_relations = num_relations
+
+        one_hot = torch.zeros((num_edges, num_relations), dtype=torch.float32)
+        one_hot[torch.arange(num_edges), tensors.edge_type] = 1.0
+
+        if tensors.edge_attr is not None:
+            features = torch.cat([tensors.edge_attr, one_hot], dim=-1)
+        else:
+            features = one_hot
+
+        self._feature_dim = features.shape[1]
+        return features
+
+    def fit(
+        self,
+        tensors_list: Sequence[SubgraphTensors],
+        labels_list: Sequence[Tensor],
+    ) -> "XGBoostBaseline":
+        """Fit the XGBoost model on training data.
+
+        Args:
+            tensors_list: List of SubgraphTensors from training subgraphs.
+            labels_list: Corresponding per-edge suspicion labels.
+
+        Returns:
+            self
+        """
+        try:
+            import xgboost as xgb
+        except ImportError as e:
+            raise RuntimeError(
+                "XGBoostBaseline requires xgboost. Install with: pip install xgboost"
+            ) from e
+
+        # First pass: determine max relations
+        for tensors in tensors_list:
+            if tensors.edge_index.numel() > 0:
+                self._num_relations = max(
+                    self._num_relations,
+                    int(tensors.edge_type.max().item()) + 1,
+                )
+
+        all_features: List[Tensor] = []
+        all_labels: List[Tensor] = []
+
+        for tensors, labels in zip(tensors_list, labels_list):
+            if tensors.edge_index.numel() == 0:
+                continue
+            features = self._extract_features(tensors)
+            all_features.append(features)
+            all_labels.append(labels)
+
+        if not all_features:
+            raise ValueError("No training data with edges provided.")
+
+        X = torch.cat(all_features, dim=0).numpy()
+        y = torch.cat(all_labels, dim=0).numpy()
+
+        # Compute scale_pos_weight if not provided
+        scale_pos_weight = self.scale_pos_weight
+        if scale_pos_weight is None:
+            pos_count = float(y.sum())
+            neg_count = float(len(y) - pos_count)
+            scale_pos_weight = neg_count / max(1.0, pos_count)
+
+        self._model = xgb.XGBClassifier(
+            n_estimators=self.n_estimators,
+            max_depth=self.max_depth,
+            learning_rate=self.learning_rate,
+            scale_pos_weight=scale_pos_weight,
+            use_label_encoder=False,
+            eval_metric="logloss",
+        )
+        self._model.fit(X, y)
+        return self
+
+    def predict_proba(self, tensors: SubgraphTensors) -> Tensor:
+        """Predict suspicion probabilities for edges."""
+        if self._model is None:
+            raise RuntimeError("Model not fitted. Call fit() first.")
+
+        if tensors.edge_index.numel() == 0:
+            return torch.empty((0,), dtype=torch.float32)
+
+        features = self._extract_features(tensors)
+
+        if features.shape[1] < self._feature_dim:
+            padding = torch.zeros(
+                (features.shape[0], self._feature_dim - features.shape[1]),
+                dtype=torch.float32,
+            )
+            features = torch.cat([features, padding], dim=-1)
+        elif features.shape[1] > self._feature_dim:
+            features = features[:, : self._feature_dim]
+
+        X = features.numpy()
+        probs = self._model.predict_proba(X)[:, 1]
+        return torch.tensor(probs, dtype=torch.float32)
+
+    def evaluate(
+        self,
+        tensors_list: Sequence[SubgraphTensors],
+        labels_list: Sequence[Tensor],
+    ) -> BaselineModelResult:
+        """Evaluate the model on test data."""
+        all_triples: List[Tuple[str, str, str]] = []
+        all_scores: List[float] = []
+        all_labels: List[float] = []
+
+        for tensors, labels in zip(tensors_list, labels_list):
+            if tensors.edge_index.numel() == 0:
+                continue
+            probs = self.predict_proba(tensors)
+            all_triples.extend(tensors.edge_triples)
+            all_scores.extend(probs.tolist())
+            all_labels.extend(labels.tolist())
+
+        auroc = 0.0
+        auprc = 0.0
+        if all_scores and len(set(all_labels)) > 1:
+            try:
+                from sklearn.metrics import average_precision_score, roc_auc_score
+
+                auroc = roc_auc_score(all_labels, all_scores)
+                auprc = average_precision_score(all_labels, all_scores)
+            except (ImportError, ValueError):
+                pass
+
+        return BaselineModelResult(
+            edge_triples=all_triples,
+            scores=all_scores,
+            labels=all_labels,
+            auroc=auroc,
+            auprc=auprc,
+        )
+
+
+def compare_gnn_vs_baseline(
+    model: RGCNSuspicionModel,
+    baseline: "LogisticRegressionBaseline | XGBoostBaseline",
+    test_tensors: Sequence[SubgraphTensors],
+    test_labels: Sequence[Tensor],
+    *,
+    device: Optional[torch.device] = None,
+) -> Dict[str, Dict[str, float]]:
+    """Compare GNN model against a baseline on test data.
+
+    Args:
+        model: Trained RGCNSuspicionModel.
+        baseline: Trained baseline model.
+        test_tensors: Test SubgraphTensors.
+        test_labels: Per-edge suspicion labels.
+        device: Torch device for GNN inference.
+
+    Returns:
+        Dictionary with "gnn" and "baseline" keys containing metrics.
+    """
+    try:
+        from sklearn.metrics import average_precision_score, roc_auc_score
+    except ImportError:
+        return {"gnn": {}, "baseline": {}}
+
+    model_device = device or next(model.parameters()).device
+    model.eval()
+
+    gnn_scores: List[float] = []
+    gnn_labels: List[float] = []
+
+    with torch.no_grad():
+        for tensors, labels in zip(test_tensors, test_labels):
+            if tensors.edge_index.numel() == 0:
+                continue
+            x = tensors.x.to(model_device)
+            edge_index = tensors.edge_index.to(model_device)
+            edge_type = tensors.edge_type.to(model_device)
+            edge_attr = (
+                tensors.edge_attr.to(model_device) if tensors.edge_attr is not None else None
+            )
+            logits, _ = model.forward_both(x, edge_index, edge_type, edge_attr=edge_attr)
+            probs = torch.sigmoid(logits).cpu().tolist()
+            gnn_scores.extend(probs)
+            gnn_labels.extend(labels.tolist())
+
+    baseline_result = baseline.evaluate(test_tensors, test_labels)
+
+    gnn_metrics: Dict[str, float] = {}
+    baseline_metrics: Dict[str, float] = {}
+
+    if gnn_scores and len(set(gnn_labels)) > 1:
+        try:
+            gnn_metrics["auroc"] = roc_auc_score(gnn_labels, gnn_scores)
+            gnn_metrics["auprc"] = average_precision_score(gnn_labels, gnn_scores)
+        except ValueError:
+            pass
+
+    baseline_metrics["auroc"] = baseline_result.auroc
+    baseline_metrics["auprc"] = baseline_result.auprc
+
+    return {"gnn": gnn_metrics, "baseline": baseline_metrics}
+
+
+# ---------------------------------------------------------------------------
+# Knowledge Distillation
+# ---------------------------------------------------------------------------
+
+
+class KnowledgeDistillationLoss(nn.Module):
+    """Knowledge distillation loss for transferring baseline knowledge to GNN.
+
+    Combines hard target loss (BCE) with soft target loss (KL divergence)
+    to train the GNN while incorporating baseline model predictions.
+
+    The idea is that the baseline model captures useful patterns in edge
+    features, and the GNN can learn these while also learning graph structure.
+
+    Args:
+        alpha: Weight for distillation loss (vs hard target loss).
+               0 = pure hard targets, 1 = pure distillation. Default 0.5.
+        temperature: Temperature for softening probability distributions.
+                     Higher = softer distributions. Default 2.0.
+        use_focal: Whether to use focal loss for hard targets.
+        focal_gamma: Gamma for focal loss (if used).
+    """
+
+    def __init__(
+        self,
+        alpha: float = 0.5,
+        temperature: float = 2.0,
+        use_focal: bool = False,
+        focal_gamma: float = 2.0,
+    ) -> None:
+        super().__init__()
+        self.alpha = alpha
+        self.temperature = temperature
+
+        if use_focal:
+            self.hard_loss = cast(
+                Callable[[Tensor, Tensor], Tensor],
+                FocalLoss(gamma=focal_gamma),
+            )
+        else:
+            self.hard_loss = cast(
+                Callable[[Tensor, Tensor], Tensor],
+                nn.BCEWithLogitsLoss(),
+            )
+
+    def forward(
+        self,
+        student_logits: Tensor,
+        targets: Tensor,
+        teacher_probs: Tensor,
+    ) -> Tensor:
+        """Compute combined distillation loss.
+
+        Args:
+            student_logits: Logits from GNN (student) [N]
+            targets: Hard binary targets [N]
+            teacher_probs: Soft probabilities from baseline (teacher) [N]
+
+        Returns:
+            Combined loss (scalar)
+        """
+        # Hard target loss (standard BCE or focal)
+        hard_loss = self.hard_loss(student_logits, targets)
+
+        # Soft target loss (binary KL divergence with temperature)
+        # Convert logits to probabilities with temperature
+        student_probs_temp = torch.sigmoid(student_logits / self.temperature)
+        teacher_probs_temp = torch.clamp(teacher_probs, 1e-7, 1 - 1e-7)
+
+        # Binary KL divergence: D_KL(teacher || student)
+        kl_loss = self._binary_kl_div(teacher_probs_temp, student_probs_temp)
+
+        # Scale by temperature^2 to balance gradients (Hinton et al.)
+        soft_loss = kl_loss * (self.temperature**2)
+
+        # Combine losses
+        combined = (1 - self.alpha) * hard_loss + self.alpha * soft_loss
+        return combined
+
+    def _binary_kl_div(self, p: Tensor, q: Tensor) -> Tensor:
+        """Compute binary KL divergence D_KL(p || q)."""
+        # KL(p || q) = p * log(p/q) + (1-p) * log((1-p)/(1-q))
+        eps = 1e-7
+        p = torch.clamp(p, eps, 1 - eps)
+        q = torch.clamp(q, eps, 1 - eps)
+
+        kl = p * torch.log(p / q) + (1 - p) * torch.log((1 - p) / (1 - q))
+        return kl.mean()
+
+
+def distill_baseline_to_gnn(
+    baseline: "LogisticRegressionBaseline | XGBoostBaseline",
+    student_model: RGCNSuspicionModel,
+    train_tensors: Sequence[SubgraphTensors],
+    train_labels: Sequence[Tensor],
+    *,
+    epochs: int = 10,
+    lr: float = 1e-3,
+    alpha: float = 0.5,
+    temperature: float = 2.0,
+    device: Optional[torch.device] = None,
+) -> RGCNSuspicionModel:
+    """Train GNN using knowledge distillation from baseline.
+
+    Args:
+        baseline: Pre-trained baseline model (LogReg or XGBoost).
+        student_model: GNN to train with distillation.
+        train_tensors: Training SubgraphTensors.
+        train_labels: Per-edge suspicion labels.
+        epochs: Number of training epochs.
+        lr: Learning rate.
+        alpha: Distillation weight (0=pure hard, 1=pure soft).
+        temperature: Temperature for softening distributions.
+        device: Torch device.
+
+    Returns:
+        Trained student GNN model.
+    """
+    model_device = device or next(student_model.parameters()).device
+    student_model = student_model.to(model_device)
+    student_model.train()
+
+    loss_fn = KnowledgeDistillationLoss(alpha=alpha, temperature=temperature)
+    optimizer = torch.optim.Adam(student_model.parameters(), lr=lr)
+
+    for epoch in range(epochs):
+        total_loss = 0.0
+        num_edges = 0
+
+        for tensors, labels in zip(train_tensors, train_labels):
+            if tensors.edge_index.numel() == 0:
+                continue
+
+            x = tensors.x.to(model_device)
+            edge_index = tensors.edge_index.to(model_device)
+            edge_type = tensors.edge_type.to(model_device)
+            edge_attr = (
+                tensors.edge_attr.to(model_device) if tensors.edge_attr is not None else None
+            )
+            y = labels.to(model_device)
+
+            # Get teacher (baseline) soft predictions
+            with torch.no_grad():
+                teacher_probs = baseline.predict_proba(tensors).to(model_device)
+
+            optimizer.zero_grad()
+            student_logits, _ = student_model.forward_both(
+                x, edge_index, edge_type, edge_attr=edge_attr
+            )
+
+            loss = loss_fn(student_logits, y, teacher_probs)
+            loss.backward()
+            optimizer.step()
+
+            total_loss += float(loss.item()) * y.numel()
+            num_edges += y.numel()
+
+        avg_loss = total_loss / max(1, num_edges)
+        print(f"Distillation Epoch {epoch + 1}/{epochs}: Loss={avg_loss:.4f}")
+
+    student_model.eval()
+    return student_model

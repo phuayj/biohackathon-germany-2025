@@ -4,15 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Mapping
+from typing import MutableMapping
 
 import pytest
 
 from nerve.temporal import (
-    CURRENT_YEAR,
-    FRESHNESS_THRESHOLD_YEARS,
-    LONGSTANDING_THRESHOLD_YEARS,
-    STALENESS_THRESHOLD_YEARS,
     TemporalEvidenceSummary,
     _extract_citation_years,
     _parse_year,
@@ -20,6 +16,7 @@ from nerve.temporal import (
     get_temporal_facts_for_rules,
     summarize_temporal,
 )
+from nerve.rules import RuleEngine
 
 
 @dataclass
@@ -29,7 +26,7 @@ class MockCitationProvenance:
     identifier: str = "PMID:12345"
     kind: str = "pmid"
     status: str = "clean"
-    metadata: dict[str, object] = field(default_factory=dict)
+    metadata: MutableMapping[str, object] = field(default_factory=dict)
 
 
 class TestParseYear:
@@ -282,7 +279,9 @@ class TestGetTemporalFactsForRules:
         facts = get_temporal_facts_for_rules(citations, now=date(2025, 1, 1))
         assert "freshness_decay_factor" in facts
         assert "staleness_factor" in facts
-        assert facts["freshness_decay_factor"] > 0.8
+        freshness = facts["freshness_decay_factor"]
+        assert isinstance(freshness, float)
+        assert freshness > 0.8
 
     def test_without_decay(self) -> None:
         citations = [
@@ -351,12 +350,10 @@ class TestTemporalRulesIntegration:
     """Integration tests for temporal rules in the rule engine."""
 
     @pytest.fixture
-    def engine(self):
-        from nerve.rules import RuleEngine
-
+    def engine(self) -> RuleEngine:
         return RuleEngine.from_yaml()
 
-    def test_recent_support_bonus_fires(self, engine) -> None:
+    def test_recent_support_bonus_fires(self, engine: RuleEngine) -> None:
         facts = {
             "temporal": {
                 "has_support": True,
@@ -367,7 +364,7 @@ class TestTemporalRulesIntegration:
         result = engine.evaluate(facts)
         assert result.features.get("temporal_recent_support_bonus", 0) > 0
 
-    def test_old_support_penalty_fires(self, engine) -> None:
+    def test_old_support_penalty_fires(self, engine: RuleEngine) -> None:
         facts = {
             "temporal": {
                 "has_support": True,
@@ -378,7 +375,7 @@ class TestTemporalRulesIntegration:
         result = engine.evaluate(facts)
         assert result.features.get("temporal_only_old_support_penalty", 0) < 0
 
-    def test_longstanding_support_bonus_fires(self, engine) -> None:
+    def test_longstanding_support_bonus_fires(self, engine: RuleEngine) -> None:
         facts = {
             "temporal": {
                 "longstanding_uncontested_support": True,
@@ -388,7 +385,7 @@ class TestTemporalRulesIntegration:
         result = engine.evaluate(facts)
         assert result.features.get("temporal_longstanding_support_bonus", 0) > 0
 
-    def test_retraction_after_publication_fires(self, engine) -> None:
+    def test_retraction_after_publication_fires(self, engine: RuleEngine) -> None:
         facts = {
             "temporal": {
                 "has_retraction_after_publication": True,
@@ -398,7 +395,7 @@ class TestTemporalRulesIntegration:
         result = engine.evaluate(facts)
         assert result.features.get("temporal_retraction_after_publication", 0) < 0
 
-    def test_quick_retraction_defeats_support(self, engine) -> None:
+    def test_quick_retraction_defeats_support(self, engine: RuleEngine) -> None:
         facts = {
             "temporal": {
                 "earliest_retraction_lag_years": 1.0,

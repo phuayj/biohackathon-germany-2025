@@ -119,8 +119,10 @@
 
 ### Calibration
 - [ ] Grid-search rule weights & thresholds.
-- [ ] Isotonic or Platt scaling for probabilistic confidence (optional).
+- [x] Isotonic or Platt scaling for probabilistic confidence (`nerve.nli_calibration` module with `IsotonicCalibrator`, `PlattCalibrator`).
+- [x] GNN calibration and baseline comparison (`MarginRankingLoss`, `LogisticRegressionBaseline`, `XGBoostBaseline`, `KnowledgeDistillationLoss`).
 - [ ] Ablations: no GNN vs with GNN; no retraction gate vs with.
+- [x] Keep lint/type checks green after calibration utilities and temporal tests updates.
 
 ### Patch Suggestions (Minimal Fixes)
 - [ ] **OntologyMismatch:** Suggest nearest child/parent HPO term with evidence.

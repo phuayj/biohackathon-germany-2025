@@ -412,9 +412,12 @@ class TestVerdictGates:
             self._features = {"base": base_score}
 
         def evaluate(
-            self, facts: Mapping[str, object]
+            self,
+            facts: Mapping[str, object],
+            *,
+            argumentation: str | None = None,
         ) -> RuleEvaluation:  # pragma: no cover - tiny shim
-            _ = facts
+            _ = facts, argumentation
             return RuleEvaluation(features=dict(self._features), trace=RuleTrace())
 
     @staticmethod

@@ -22,10 +22,24 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import date
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, MutableMapping, Protocol, Sequence
+
+
+class CitationLike(Protocol):
+    """Minimal citation protocol for temporal processing."""
+
+    status: str
+    metadata: MutableMapping[str, object]
+
 
 if TYPE_CHECKING:
-    from nerve.provenance import CitationProvenance
+    from typing import TypeAlias
+
+    from nerve.provenance import CitationProvenance as _CitationProvenance
+
+    CitationInput: TypeAlias = _CitationProvenance | CitationLike
+else:
+    CitationInput = CitationLike
 
 CURRENT_YEAR = date.today().year
 
@@ -59,7 +73,7 @@ def _parse_year(date_str: str | None) -> int | None:
 
 
 def _extract_citation_years(
-    citation: "CitationProvenance",
+    citation: CitationInput,
 ) -> tuple[int | None, int | None, int | None]:
     """Extract publication, concern, and retraction years from citation metadata.
 
@@ -321,7 +335,7 @@ class TemporalEvidenceSummary:
 
 
 def summarize_temporal(
-    citations: Sequence["CitationProvenance"],
+    citations: Sequence[CitationInput],
     now: date | None = None,
     claim_year: int | None = None,
     n_support: int = 0,
@@ -415,7 +429,7 @@ def compute_freshness_decay(
 
 
 def get_temporal_facts_for_rules(
-    citations: Sequence["CitationProvenance"],
+    citations: Sequence[CitationInput],
     now: date | None = None,
     claim_year: int | None = None,
     n_support: int = 0,

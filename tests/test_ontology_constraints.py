@@ -2,16 +2,11 @@
 
 from __future__ import annotations
 
-import pytest
 
 from nerve.ontology_constraints import (
-    ClassAxiom,
     DLCheckResult,
     OntologyAxioms,
     OntologyConstraintChecker,
-    PropertyAxiom,
-    PropertyChainAxiom,
-    RestrictionAxiom,
     check_dl_constraints,
 )
 
