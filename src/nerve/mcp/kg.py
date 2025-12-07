@@ -572,7 +572,7 @@ class Neo4jBackend(KGBackend):
                 mapping: dict[str, _object] = {}
                 if hasattr(rec, "data") and callable(getattr(rec, "data")):
                     # Official neo4j driver Record
-                    mapping = dict(rec.data())
+                    mapping = dict(getattr(rec, "data")())
                 elif hasattr(rec, "keys") and callable(getattr(rec, "keys")):
                     # Fallback for record-like objects with keys() method
                     mapping_like = cast(Mapping[str, _object], rec)

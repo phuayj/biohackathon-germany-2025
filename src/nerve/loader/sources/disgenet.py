@@ -15,7 +15,8 @@ from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from nerve.loader.config import Config
-    from nerve.loader.protocol import LoadStats
+    from nerve.loader.protocol import LoadStats, Neo4jDriver, Neo4jSession
+    from nerve.mcp.disgenet import DisGeNETTool, GeneDiseaseAssociation
 
 # Demo genes to query (from e2e fixtures)
 DEMO_GENES: dict[str, str] = {
@@ -64,7 +65,7 @@ class DisGeNETSource:
 
     def load(
         self,
-        driver: object,
+        driver: Neo4jDriver,
         config: Config,
         mode: Literal["replace", "merge"],
     ) -> LoadStats:
@@ -100,7 +101,7 @@ class DisGeNETSource:
         if sample is not None:
             genes = genes[: min(sample, len(genes))]
 
-        with driver.session() as session:  # type: ignore[union-attr]
+        with driver.session() as session:
             for hgnc_id, symbol in genes:
                 # Map to NCBI Gene ID
                 ncbi_id = hgnc_to_ncbi.get(hgnc_id)
@@ -161,18 +162,18 @@ def _load_hgnc_to_ncbi_mapping(hgnc_file: Path) -> dict[str, str]:
 
 
 def _query_with_backoff(
-    disgenet: object,
+    disgenet: DisGeNETTool,
     ncbi_id: str,
     max_results: int,
     max_retries: int = 5,
     initial_delay: float = 2.0,
-) -> list[object]:
+) -> list[GeneDiseaseAssociation]:
     """Query DisGeNET with exponential backoff on rate limiting."""
     delay = initial_delay
 
     for attempt in range(max_retries + 1):
         try:
-            return disgenet.gene_to_diseases(ncbi_id, max_results=max_results)  # type: ignore[union-attr]
+            return disgenet.gene_to_diseases(ncbi_id, max_results=max_results)
         except RuntimeError as e:
             error_msg = str(e).lower()
             is_rate_limited = (
@@ -188,9 +189,9 @@ def _query_with_backoff(
     return []
 
 
-def _ensure_gene_node(session: object, hgnc_id: str, symbol: str) -> None:
+def _ensure_gene_node(session: Neo4jSession, hgnc_id: str, symbol: str) -> None:
     """Ensure gene node exists in Neo4j."""
-    session.run(  # type: ignore[union-attr]
+    session.run(
         """
         MERGE (g:Node:Gene {id: $id})
         ON CREATE SET
@@ -217,8 +218,8 @@ def _generate_association_id(
 
 
 def _load_disgenet_associations(
-    session: object,
-    associations: list[object],
+    session: Neo4jSession,
+    associations: list[GeneDiseaseAssociation],
     hgnc_id: str,
     gene_symbol: str,
     db_version: str,
@@ -232,14 +233,14 @@ def _load_disgenet_associations(
     seen_diseases: set[str] = set()
 
     for assoc in associations:
-        disease_id = f"UMLS:{assoc.disease_id}"  # type: ignore[union-attr]
+        disease_id = f"UMLS:{assoc.disease_id}"
 
         # Create disease node data
         if disease_id not in seen_diseases:
             disease_batch.append(
                 {
                     "id": disease_id,
-                    "name": assoc.disease_id,  # type: ignore[union-attr]
+                    "name": assoc.disease_id,
                 }
             )
             seen_diseases.add(disease_id)
@@ -257,13 +258,13 @@ def _load_disgenet_associations(
                 "source_db": "disgenet",
                 "db_version": db_version,
                 "retrieved_at": retrieved_at,
-                "score": assoc.score,  # type: ignore[union-attr]
-                "disgenet_source": assoc.source,  # type: ignore[union-attr]
+                "score": assoc.score,
+                "disgenet_source": assoc.source,
             }
         )
 
     # Insert disease nodes
-    session.run(  # type: ignore[union-attr]
+    session.run(
         """
         UNWIND $diseases AS d
         MERGE (n:Node:Disease {id: d.id})
@@ -276,7 +277,7 @@ def _load_disgenet_associations(
     )
 
     # Insert associations
-    session.run(  # type: ignore[union-attr]
+    session.run(
         """
         UNWIND $associations AS a
         MATCH (s:Node {id: a.subject})

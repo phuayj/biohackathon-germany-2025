@@ -5,8 +5,9 @@ This module defines the interface that all data sources must implement.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from nerve.loader.config import Config
@@ -41,6 +42,48 @@ class LoadStats:
             parts.append(f"{self.edges_updated:,} edges updated")
         count_str = ", ".join(parts) if parts else "no changes"
         return f"{self.source}: {count_str} ({self.duration_seconds:.1f}s)"
+
+
+@runtime_checkable
+class Neo4jRecord(Protocol):
+    """Protocol for Neo4j record."""
+
+    def __getitem__(self, key: str) -> Any: ...
+
+    def get(self, key: str, default: object = None) -> Any: ...
+
+
+@runtime_checkable
+class Neo4jResult(Protocol):
+    """Protocol for Neo4j query result."""
+
+    def single(self) -> Neo4jRecord | None: ...
+
+    def __iter__(self) -> Iterator[Neo4jRecord]: ...
+
+
+@runtime_checkable
+class Neo4jSession(Protocol):
+    """Protocol for Neo4j session."""
+
+    def run(
+        self, query: str, parameters: dict[str, object] | None = None, **kwargs: object
+    ) -> Neo4jResult: ...
+
+    def close(self) -> None: ...
+
+    def __enter__(self) -> Neo4jSession: ...
+
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None: ...
+
+
+@runtime_checkable
+class Neo4jDriver(Protocol):
+    """Protocol for Neo4j driver."""
+
+    def session(self, **kwargs: Any) -> Neo4jSession: ...
+
+    def close(self) -> None: ...
 
 
 @runtime_checkable
@@ -81,7 +124,7 @@ class DataSource(Protocol):
 
     def load(
         self,
-        driver: object,
+        driver: Neo4jDriver,
         config: Config,
         mode: Literal["replace", "merge"],
     ) -> LoadStats:

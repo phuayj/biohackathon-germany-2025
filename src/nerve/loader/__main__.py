@@ -13,7 +13,11 @@ import argparse
 import sys
 import time
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from nerve.loader.config import Config
+    from nerve.loader.protocol import DataSource, LoadStats
 
 
 def main() -> int:
@@ -262,7 +266,7 @@ def _list_sources() -> int:
     return 0
 
 
-def _print_banner(config: object, args: argparse.Namespace) -> None:
+def _print_banner(config: Config, args: argparse.Namespace) -> None:
     """Print startup banner."""
     mode = "MERGE" if args.merge else "REPLACE"
 
@@ -272,8 +276,8 @@ def _print_banner(config: object, args: argparse.Namespace) -> None:
     print("╰" + "─" * 58 + "╯")
     print()
     print("Configuration:")
-    print(f"  Neo4j:     {config.neo4j_uri}")  # type: ignore[union-attr]
-    print(f"  Data dir:  {config.data_dir}")  # type: ignore[union-attr]
+    print(f"  Neo4j:     {config.neo4j_uri}")
+    print(f"  Data dir:  {config.data_dir}")
     print(f"  Mode:      {mode}")
     print()
 
@@ -290,7 +294,7 @@ def _print_credentials(cred_status: dict[str, tuple[bool, str | None]]) -> None:
 
 
 def _show_dry_run_plan(
-    execution_plan: list[list[object]],
+    execution_plan: list[list[DataSource]],
     cred_status: dict[str, tuple[bool, str | None]],
 ) -> int:
     """Show execution plan without running."""
@@ -300,18 +304,18 @@ def _show_dry_run_plan(
     for stage_num, stage_sources in enumerate(execution_plan, 1):
         print(f"\nStage {stage_num}:")
         for source in stage_sources:
-            available, reason = cred_status.get(source.name, (True, None))  # type: ignore[union-attr]
+            available, reason = cred_status.get(source.name, (True, None))
             if available:
-                print(f"  ✓ {source.display_name} ({source.name})")  # type: ignore[union-attr]
+                print(f"  ✓ {source.display_name} ({source.name})")
             else:
-                print(f"  ⊘ {source.display_name} ({source.name}) - {reason}")  # type: ignore[union-attr]
+                print(f"  ⊘ {source.display_name} ({source.name}) - {reason}")
 
     print()
     print("Run without --dry-run to execute.")
     return 0
 
 
-def _print_summary(stats: list[object], elapsed: float) -> None:
+def _print_summary(stats: list[LoadStats], elapsed: float) -> None:
     """Print execution summary."""
     print()
     print("═" * 60)
@@ -325,23 +329,23 @@ def _print_summary(stats: list[object], elapsed: float) -> None:
 
     total_nodes = 0
     total_edges = 0
-    skipped = []
+    skipped: list[str] = []
 
     for stat in stats:
-        if stat.skipped:  # type: ignore[union-attr]
-            skipped.append(f"  • {stat.source} - {stat.skip_reason}")  # type: ignore[union-attr]
-            print(f"│ {stat.source:^14} │ {'(skipped)':^11} │ {'-':^11} │ {'-':^8} │")  # type: ignore[union-attr]
+        if stat.skipped:
+            skipped.append(f"  • {stat.source} - {stat.skip_reason}")
+            print(f"│ {stat.source:^14} │ {'(skipped)':^11} │ {'-':^11} │ {'-':^8} │")
         else:
-            nodes = stat.nodes_created + stat.nodes_updated  # type: ignore[union-attr]
-            edges = stat.edges_created + stat.edges_updated  # type: ignore[union-attr]
+            nodes = stat.nodes_created + stat.nodes_updated
+            edges = stat.edges_created + stat.edges_updated
             total_nodes += nodes
             total_edges += edges
             duration = (
                 f"{stat.duration_seconds:.0f}s"
                 if stat.duration_seconds < 60
                 else f"{stat.duration_seconds / 60:.1f}m"
-            )  # type: ignore[union-attr]
-            print(f"│ {stat.source:^14} │ {nodes:^11,} │ {edges:^11,} │ {duration:^8} │")  # type: ignore[union-attr]
+            )
+            print(f"│ {stat.source:^14} │ {nodes:^11,} │ {edges:^11,} │ {duration:^8} │")
 
     print("├" + "─" * 16 + "┼" + "─" * 13 + "┼" + "─" * 13 + "┼" + "─" * 10 + "┤")
     total_time = f"{elapsed:.0f}s" if elapsed < 60 else f"{elapsed / 60:.1f}m"

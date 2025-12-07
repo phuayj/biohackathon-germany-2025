@@ -22,7 +22,7 @@ from urllib.request import Request, urlopen
 
 if TYPE_CHECKING:
     from nerve.loader.config import Config
-    from nerve.loader.protocol import LoadStats
+    from nerve.loader.protocol import LoadStats, Neo4jDriver, Neo4jSession
 
 # COSMIC API endpoint
 COSMIC_API_URL = "https://cancer.sanger.ac.uk/api/mono/products/v1/downloads/scripted"
@@ -117,7 +117,7 @@ class COSMICSource:
 
     def load(
         self,
-        driver: object,
+        driver: Neo4jDriver,
         config: Config,
         mode: Literal["replace", "merge"],
     ) -> LoadStats:
@@ -138,7 +138,7 @@ class COSMICSource:
         sample = getattr(config, "_sample", None)
         db_version = datetime.now(timezone.utc).strftime("%Y-%m")
 
-        with driver.session() as session:  # type: ignore[union-attr]
+        with driver.session() as session:
             nodes, edges = _load_cgc_data(
                 session,
                 tsv_path,
@@ -155,7 +155,7 @@ class COSMICSource:
 
 
 def _load_cgc_data(
-    session: object,
+    session: Neo4jSession,
     tsv_path: Path,
     max_rows: int | None = None,
     db_version: str = "unknown",
@@ -256,9 +256,9 @@ def _generate_association_id(
     return f"assoc:{digest}"
 
 
-def _insert_cosmic_nodes_batch(session: object, nodes: list[dict[str, object]]) -> None:
+def _insert_cosmic_nodes_batch(session: Neo4jSession, nodes: list[dict[str, object]]) -> None:
     """Insert COSMIC gene nodes with cancer role annotations."""
-    session.run(  # type: ignore[union-attr]
+    session.run(
         """
         UNWIND $nodes AS node
         MERGE (n:Node {id: node.id})
@@ -273,9 +273,9 @@ def _insert_cosmic_nodes_batch(session: object, nodes: list[dict[str, object]]) 
     )
 
 
-def _update_cosmic_gene_roles(session: object, edges: list[dict[str, object]]) -> None:
+def _update_cosmic_gene_roles(session: Neo4jSession, edges: list[dict[str, object]]) -> None:
     """Update gene nodes with COSMIC cancer role information."""
-    session.run(  # type: ignore[union-attr]
+    session.run(
         """
         UNWIND $edges AS edge
         MATCH (n:Node {id: edge.subject})

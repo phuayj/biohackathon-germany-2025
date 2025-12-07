@@ -14,7 +14,7 @@ import threading
 
 if TYPE_CHECKING:
     from nerve.loader.config import Config
-    from nerve.loader.protocol import LoadStats
+    from nerve.loader.protocol import LoadStats, Neo4jDriver, Neo4jSession
 
 
 class HPOSiblingMapSource:
@@ -36,7 +36,7 @@ class HPOSiblingMapSource:
 
     def load(
         self,
-        driver: object,
+        driver: Neo4jDriver,
         config: Config,
         mode: Literal["replace", "merge"],
     ) -> LoadStats:
@@ -54,7 +54,7 @@ class HPOSiblingMapSource:
             )
 
         # Collect phenotype IDs from Neo4j
-        with driver.session() as session:  # type: ignore[union-attr]
+        with driver.session() as session:
             phenotype_ids = _collect_phenotype_ids(session)
 
         if not phenotype_ids:
@@ -95,15 +95,15 @@ class HPOSiblingMapSource:
         )
 
 
-def _collect_phenotype_ids(session: object) -> list[str]:
+def _collect_phenotype_ids(session: Neo4jSession) -> list[str]:
     """Collect HPO phenotype IDs from Neo4j."""
     query = """
     MATCH (n:Node)
     WHERE n.id STARTS WITH 'HP:'
     RETURN n.id AS hp_id
     """
-    result = session.run(query)  # type: ignore[union-attr]
-    return sorted({record["hp_id"].upper() for record in result})
+    result = session.run(query)
+    return sorted({str(record["hp_id"]).upper() for record in result})
 
 
 def _build_hpo_ancestor_map(

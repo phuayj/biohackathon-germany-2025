@@ -16,7 +16,7 @@ from urllib.request import urlretrieve
 
 if TYPE_CHECKING:
     from nerve.loader.config import Config
-    from nerve.loader.protocol import LoadStats
+    from nerve.loader.protocol import LoadStats, Neo4jDriver, Neo4jSession
 
 # Reactome download URLs
 REACTOME_BASE_URL = "https://reactome.org/download/current"
@@ -56,7 +56,7 @@ class ReactomeSource:
 
     def load(
         self,
-        driver: object,
+        driver: Neo4jDriver,
         config: Config,
         mode: Literal["replace", "merge"],
     ) -> LoadStats:
@@ -78,7 +78,7 @@ class ReactomeSource:
 
         # Load NCBI gene-pathway mappings
         if ncbi_path.exists():
-            with driver.session() as session:  # type: ignore[union-attr]
+            with driver.session() as session:
                 nodes, edges = _load_ncbi_pathways(
                     session,
                     ncbi_path,
@@ -93,7 +93,7 @@ class ReactomeSource:
 
         # Load UniProt protein-pathway mappings
         if uniprot_path.exists():
-            with driver.session() as session:  # type: ignore[union-attr]
+            with driver.session() as session:
                 nodes, edges = _load_uniprot_pathways(
                     session,
                     uniprot_path,
@@ -133,7 +133,7 @@ def _load_hgnc_mapping(mapping_path: Path) -> dict[str, str]:
 
 
 def _load_ncbi_pathways(
-    session: object,
+    session: Neo4jSession,
     ncbi_path: Path,
     max_rows: int | None = None,
     db_version: str = "unknown",
@@ -250,7 +250,7 @@ def _load_ncbi_pathways(
 
 
 def _load_uniprot_pathways(
-    session: object,
+    session: Neo4jSession,
     uniprot_path: Path,
     max_rows: int | None = None,
     db_version: str = "unknown",
@@ -360,9 +360,9 @@ def _load_uniprot_pathways(
     return nodes_created, edges_created
 
 
-def _insert_reactome_nodes_batch(session: object, nodes: list[dict[str, object]]) -> None:
+def _insert_reactome_nodes_batch(session: Neo4jSession, nodes: list[dict[str, object]]) -> None:
     """Insert a batch of Reactome nodes into Neo4j."""
-    session.run(  # type: ignore[union-attr]
+    session.run(
         """
         UNWIND $nodes AS node
         MERGE (n:Node {id: node.id})
@@ -375,9 +375,9 @@ def _insert_reactome_nodes_batch(session: object, nodes: list[dict[str, object]]
     )
 
 
-def _insert_reactome_edges_batch(session: object, edges: list[dict[str, object]]) -> None:
+def _insert_reactome_edges_batch(session: Neo4jSession, edges: list[dict[str, object]]) -> None:
     """Insert a batch of Reactome edges into Neo4j."""
-    session.run(  # type: ignore[union-attr]
+    session.run(
         """
         UNWIND $edges AS edge
         MATCH (s:Node {id: edge.subject})

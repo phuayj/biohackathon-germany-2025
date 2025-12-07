@@ -18,7 +18,7 @@ from urllib.request import urlretrieve
 
 if TYPE_CHECKING:
     from nerve.loader.config import Config
-    from nerve.loader.protocol import LoadStats
+    from nerve.loader.protocol import LoadStats, Neo4jDriver, Neo4jSession
 
 # Monarch KG download URLs
 MONARCH_KG_BASE_URL = "https://data.monarchinitiative.org/monarch-kg/latest"
@@ -95,7 +95,7 @@ class MonarchKGSource:
 
     def load(
         self,
-        driver: object,
+        driver: Neo4jDriver,
         config: Config,
         mode: Literal["replace", "merge"],
     ) -> LoadStats:
@@ -110,20 +110,20 @@ class MonarchKGSource:
         db_version = datetime.now(timezone.utc).strftime("%Y-%m")
 
         # Create schema first
-        with driver.session() as session:  # type: ignore[union-attr]
+        with driver.session() as session:
             _create_schema(session)
 
             if mode == "replace":
                 _clear_source_data(session, self.name)
 
         # Load nodes
-        with driver.session() as session:  # type: ignore[union-attr]
+        with driver.session() as session:
             nodes_created, node_ids = _load_nodes(
                 session, nodes_path, max_rows=sample, batch_size=config.batch_size
             )
 
         # Load edges
-        with driver.session() as session:  # type: ignore[union-attr]
+        with driver.session() as session:
             direct_edges, associations, publications = _load_edges(
                 session,
                 edges_path,
@@ -159,7 +159,7 @@ def _download_file(url: str, dest: Path, desc: str) -> None:
     print()
 
 
-def _create_schema(session: object) -> None:
+def _create_schema(session: Neo4jSession) -> None:
     """Create Neo4j constraints and indexes."""
     queries = [
         "CREATE CONSTRAINT node_id_unique IF NOT EXISTS FOR (n:Node) REQUIRE n.id IS UNIQUE",
@@ -171,13 +171,13 @@ def _create_schema(session: object) -> None:
         "CREATE INDEX association_predicate_index IF NOT EXISTS FOR (n:Association) ON (n.predicate)",
     ]
     for query in queries:
-        session.run(query)  # type: ignore[union-attr]
+        session.run(query)
 
 
-def _clear_source_data(session: object, source: str) -> None:
+def _clear_source_data(session: Neo4jSession, source: str) -> None:
     """Clear existing data from a source in batches."""
     while True:
-        result = session.run(  # type: ignore[union-attr]
+        result = session.run(
             """
             MATCH (n) WHERE n.source_db = $source
             WITH n LIMIT 10000
@@ -265,7 +265,7 @@ def _parse_list_literal(value: str) -> list[str]:
 
 
 def _load_nodes(
-    session: object,
+    session: Neo4jSession,
     nodes_path: Path,
     max_rows: int | None = None,
     batch_size: int = 5000,
@@ -312,9 +312,9 @@ def _load_nodes(
     return loaded, node_ids
 
 
-def _insert_nodes_batch(session: object, nodes: list[dict[str, object]]) -> None:
+def _insert_nodes_batch(session: Neo4jSession, nodes: list[dict[str, object]]) -> None:
     """Insert a batch of nodes into Neo4j."""
-    session.run(  # type: ignore[union-attr]
+    session.run(
         """
         UNWIND $nodes AS node
         MERGE (n:Node {id: node.id})
@@ -342,7 +342,7 @@ def _generate_association_id(
 
 
 def _load_edges(
-    session: object,
+    session: Neo4jSession,
     edges_path: Path,
     valid_node_ids: set[str],
     max_rows: int | None = None,
@@ -454,9 +454,9 @@ def _load_edges(
     return direct_edges_loaded, associations_created, publications_created
 
 
-def _insert_edges_batch(session: object, edges: list[dict[str, object]]) -> None:
+def _insert_edges_batch(session: Neo4jSession, edges: list[dict[str, object]]) -> None:
     """Insert a batch of direct edges into Neo4j."""
-    session.run(  # type: ignore[union-attr]
+    session.run(
         """
         UNWIND $edges AS edge
         MATCH (s:Node {id: edge.subject})
@@ -473,9 +473,11 @@ def _insert_edges_batch(session: object, edges: list[dict[str, object]]) -> None
     )
 
 
-def _insert_associations_batch(session: object, associations: list[dict[str, object]]) -> None:
+def _insert_associations_batch(
+    session: Neo4jSession, associations: list[dict[str, object]]
+) -> None:
     """Insert reified Association nodes with SUBJECT_OF/OBJECT_OF edges."""
-    session.run(  # type: ignore[union-attr]
+    session.run(
         """
         UNWIND $associations AS a
         MATCH (s:Node {id: a.subject})
@@ -499,9 +501,9 @@ def _insert_associations_batch(session: object, associations: list[dict[str, obj
     )
 
 
-def _insert_publications_batch(session: object, pmids: list[str]) -> None:
+def _insert_publications_batch(session: Neo4jSession, pmids: list[str]) -> None:
     """Insert Publication nodes."""
-    session.run(  # type: ignore[union-attr]
+    session.run(
         """
         UNWIND $pmids AS pmid
         MERGE (p:Node:Publication {id: pmid})
@@ -513,9 +515,9 @@ def _insert_publications_batch(session: object, pmids: list[str]) -> None:
     )
 
 
-def _link_publications_batch(session: object, links: list[dict[str, str]]) -> None:
+def _link_publications_batch(session: Neo4jSession, links: list[dict[str, str]]) -> None:
     """Create SUPPORTED_BY edges from Association to Publication nodes."""
-    session.run(  # type: ignore[union-attr]
+    session.run(
         """
         UNWIND $links AS link
         MATCH (a:Association {id: link.assoc_id})

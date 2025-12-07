@@ -18,7 +18,7 @@ from urllib.request import Request, urlopen
 
 if TYPE_CHECKING:
     from nerve.loader.config import Config
-    from nerve.loader.protocol import LoadStats
+    from nerve.loader.protocol import LoadStats, Neo4jDriver, Neo4jSession
 
 # NCBI E-utilities configuration
 EFETCH_BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
@@ -58,7 +58,7 @@ class PublicationMetadataSource:
 
     def load(
         self,
-        driver: object,
+        driver: Neo4jDriver,
         config: Config,
         mode: Literal["replace", "merge"],
     ) -> LoadStats:
@@ -70,7 +70,7 @@ class PublicationMetadataSource:
         delay = RATE_LIMIT_DELAY_WITH_KEY if api_key else RATE_LIMIT_DELAY
 
         # Get PMIDs without titles
-        with driver.session() as session:  # type: ignore[union-attr]
+        with driver.session() as session:
             pmids = _get_publications_without_title(session, limit=sample)
 
         if not pmids:
@@ -85,7 +85,7 @@ class PublicationMetadataSource:
                 metadata_list = _parse_pubmed_xml(xml_text)
 
                 if metadata_list:
-                    with driver.session() as session:  # type: ignore[union-attr]
+                    with driver.session() as session:
                         updated = _update_publication_metadata(session, metadata_list)
                         total_updated += updated
 
@@ -115,7 +115,7 @@ class RetractionStatusSource:
 
     def load(
         self,
-        driver: object,
+        driver: Neo4jDriver,
         config: Config,
         mode: Literal["replace", "merge"],
     ) -> LoadStats:
@@ -127,7 +127,7 @@ class RetractionStatusSource:
         delay = RATE_LIMIT_DELAY_WITH_KEY if api_key else RATE_LIMIT_DELAY
 
         # Get PMIDs without retraction check
-        with driver.session() as session:  # type: ignore[union-attr]
+        with driver.session() as session:
             pmids = _get_publications_without_retraction(session, limit=sample)
 
         if not pmids:
@@ -143,7 +143,7 @@ class RetractionStatusSource:
                 retraction_infos = _parse_retraction_info(xml_text)
 
                 if retraction_infos:
-                    with driver.session() as session:  # type: ignore[union-attr]
+                    with driver.session() as session:
                         updated, retracted = _update_retraction_status(session, retraction_infos)
                         total_updated += updated
                         retracted_count += retracted
@@ -178,7 +178,7 @@ class CitationsSource:
 
     def load(
         self,
-        driver: object,
+        driver: Neo4jDriver,
         config: Config,
         mode: Literal["replace", "merge"],
     ) -> LoadStats:
@@ -189,7 +189,7 @@ class CitationsSource:
         delay = RATE_LIMIT_DELAY_WITH_KEY if api_key else RATE_LIMIT_DELAY
 
         # Get retracted PMIDs
-        with driver.session() as session:  # type: ignore[union-attr]
+        with driver.session() as session:
             retracted_pmids = _get_retracted_pmids(session)
 
         if not retracted_pmids:
@@ -207,7 +207,7 @@ class CitationsSource:
                 for cited_pmid, citing_pmids in citation_links.items():
                     if citing_pmids:
                         total_citing += len(citing_pmids)
-                        with driver.session() as session:  # type: ignore[union-attr]
+                        with driver.session() as session:
                             created = _create_cites_relationships(session, cited_pmid, citing_pmids)
                             total_relationships += created
 
@@ -217,7 +217,7 @@ class CitationsSource:
 
         # Update cites_retracted_count
         if total_relationships > 0:
-            with driver.session() as session:  # type: ignore[union-attr]
+            with driver.session() as session:
                 _update_cites_retracted_counts(session)
 
         return LoadStats(
@@ -236,7 +236,7 @@ def _batch_pmids(pmids: list[str], batch_size: int) -> Iterator[list[str]]:
         yield pmids[i : i + batch_size]
 
 
-def _get_publications_without_title(session: object, limit: int | None = None) -> list[str]:
+def _get_publications_without_title(session: Neo4jSession, limit: int | None = None) -> list[str]:
     """Get PMIDs of publications that don't have a title yet."""
     query = """
     MATCH (p:Publication)
@@ -246,10 +246,10 @@ def _get_publications_without_title(session: object, limit: int | None = None) -
     if limit:
         query += f" LIMIT {limit}"
 
-    result = session.run(query)  # type: ignore[union-attr]
+    result = session.run(query)
     pmids: list[str] = []
     for record in result:
-        pmid = record.get("pmid", "")
+        pmid = str(record.get("pmid", "") or "")
         if pmid:
             if pmid.upper().startswith("PMID:"):
                 pmid = pmid[5:]
@@ -257,7 +257,9 @@ def _get_publications_without_title(session: object, limit: int | None = None) -
     return pmids
 
 
-def _get_publications_without_retraction(session: object, limit: int | None = None) -> list[str]:
+def _get_publications_without_retraction(
+    session: Neo4jSession, limit: int | None = None
+) -> list[str]:
     """Get PMIDs that haven't been checked for retraction status."""
     query = """
     MATCH (p:Publication)
@@ -268,11 +270,11 @@ def _get_publications_without_retraction(session: object, limit: int | None = No
     if limit:
         query += f" LIMIT {limit}"
 
-    result = session.run(query)  # type: ignore[union-attr]
-    return [record["pmid"].replace("PMID:", "") for record in result]
+    result = session.run(query)
+    return [str(record["pmid"]).replace("PMID:", "") for record in result]
 
 
-def _get_retracted_pmids(session: object) -> list[str]:
+def _get_retracted_pmids(session: Neo4jSession) -> list[str]:
     """Get all retracted PMIDs."""
     query = """
     MATCH (p:Publication)
@@ -280,8 +282,8 @@ def _get_retracted_pmids(session: object) -> list[str]:
     AND p.retracted = true
     RETURN p.id AS pmid
     """
-    result = session.run(query)  # type: ignore[union-attr]
-    return [record["pmid"].replace("PMID:", "") for record in result]
+    result = session.run(query)
+    return [str(record["pmid"]).replace("PMID:", "") for record in result]
 
 
 def _fetch_pubmed_metadata(pmids: list[str], api_key: str | None = None, timeout: int = 60) -> str:
@@ -301,7 +303,8 @@ def _fetch_pubmed_metadata(pmids: list[str], api_key: str | None = None, timeout
 
     try:
         with urlopen(request, timeout=timeout) as response:
-            return response.read().decode("utf-8")
+            content: bytes = response.read()
+            return content.decode("utf-8")
     except (URLError, HTTPError) as e:
         raise RuntimeError(f"Failed to fetch PubMed metadata: {e}") from e
 
@@ -369,7 +372,9 @@ def _parse_pubmed_xml(xml_text: str) -> list[PublicationMetadata]:
     return results
 
 
-def _update_publication_metadata(session: object, metadata_list: list[PublicationMetadata]) -> int:
+def _update_publication_metadata(
+    session: Neo4jSession, metadata_list: list[PublicationMetadata]
+) -> int:
     """Update Publication nodes with metadata."""
     if not metadata_list:
         return 0
@@ -385,7 +390,7 @@ def _update_publication_metadata(session: object, metadata_list: list[Publicatio
         for m in metadata_list
     ]
 
-    result = session.run(  # type: ignore[union-attr]
+    result = session.run(
         """
         UNWIND $metadata AS meta
         MATCH (p:Publication)
@@ -399,7 +404,7 @@ def _update_publication_metadata(session: object, metadata_list: list[Publicatio
         metadata=params,
     )
     record = result.single()
-    return record["updated"] if record else 0
+    return int(record["updated"]) if record else 0
 
 
 def _parse_retraction_info(xml_text: str) -> list[dict[str, object]]:
@@ -436,7 +441,9 @@ def _parse_retraction_info(xml_text: str) -> list[dict[str, object]]:
     return results
 
 
-def _update_retraction_status(session: object, infos: list[dict[str, object]]) -> tuple[int, int]:
+def _update_retraction_status(
+    session: Neo4jSession, infos: list[dict[str, object]]
+) -> tuple[int, int]:
     """Update Publication nodes with retraction status."""
     if not infos:
         return 0, 0
@@ -445,7 +452,7 @@ def _update_retraction_status(session: object, infos: list[dict[str, object]]) -
         {"pmid": f"PMID:{info['pmid']}", "retracted": info["retracted"]} for info in infos
     ]
 
-    result = session.run(  # type: ignore[union-attr]
+    result = session.run(
         """
         UNWIND $batch AS item
         MATCH (p:Publication {id: item.pmid})
@@ -456,7 +463,7 @@ def _update_retraction_status(session: object, infos: list[dict[str, object]]) -
         batch=batch_data,
     )
     record = result.single()
-    updated = record["updated"] if record else 0
+    updated = int(record["updated"]) if record else 0
     retracted = sum(1 for info in infos if info["retracted"])
     return updated, retracted
 
@@ -486,7 +493,8 @@ def _fetch_citations(
 
     try:
         with urlopen(request, timeout=timeout) as response:
-            return response.read().decode("utf-8")
+            content: bytes = response.read()
+            return content.decode("utf-8")
     except (URLError, HTTPError) as e:
         raise RuntimeError(f"Failed to fetch citation data: {e}") from e
 
@@ -516,12 +524,14 @@ def _parse_citation_links(xml_text: str) -> dict[str, list[str]]:
     return results
 
 
-def _create_cites_relationships(session: object, cited_pmid: str, citing_pmids: list[str]) -> int:
+def _create_cites_relationships(
+    session: Neo4jSession, cited_pmid: str, citing_pmids: list[str]
+) -> int:
     """Create CITES relationships from citing papers to cited paper."""
     if not citing_pmids:
         return 0
 
-    result = session.run(  # type: ignore[union-attr]
+    result = session.run(
         """
         MERGE (cited:Publication {id: $cited_pmid})
         WITH cited
@@ -536,12 +546,12 @@ def _create_cites_relationships(session: object, cited_pmid: str, citing_pmids: 
         citing_pmids=[f"PMID:{p}" for p in citing_pmids],
     )
     record = result.single()
-    return record["created"] if record else 0
+    return int(record["created"]) if record else 0
 
 
-def _update_cites_retracted_counts(session: object) -> int:
+def _update_cites_retracted_counts(session: Neo4jSession) -> int:
     """Update cites_retracted_count on publications citing retracted papers."""
-    result = session.run(  # type: ignore[union-attr]
+    result = session.run(
         """
         MATCH (p:Publication)-[:CITES]->(retracted:Publication {retracted: true})
         WITH p, count(retracted) AS retracted_count
@@ -550,4 +560,4 @@ def _update_cites_retracted_counts(session: object) -> int:
         """
     )
     record = result.single()
-    return record["updated"] if record else 0
+    return int(record["updated"]) if record else 0

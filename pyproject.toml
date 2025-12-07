@@ -43,6 +43,19 @@ exclude = ["^scripts/"]
 line-length = 100
 target-version = ['py313']
 
+[tool.pyright]
+include = ["src", "scripts", "tests"]
+exclude = ["**/__pycache__"]
+pythonVersion = "3.13"
+venvPath = "."
+venv = ".venv"
+stubPath = "stubs"
+extraPaths = ["src"]
+typeCheckingMode = "standard"
+reportMissingImports = "error"
+reportMissingTypeStubs = "warning"
+reportMissingModuleSource = "none"  # xgboost is an optional dependency
+
 [tool.pytest.ini_options]
 markers = [
     "e2e: end-to-end tests that make network requests (deselect with '-m not e2e')",

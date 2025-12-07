@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 if TYPE_CHECKING:
     from nerve.loader.config import Config
-    from nerve.loader.protocol import DataSource, LoadStats
+    from nerve.loader.protocol import DataSource, LoadStats, Neo4jDriver
 
 
 class StageExecutor:
@@ -21,7 +21,7 @@ class StageExecutor:
     def __init__(
         self,
         config: Config,
-        driver: object,
+        driver: Neo4jDriver | object,
         mode: Literal["replace", "merge"] = "replace",
         parallel: bool = True,
         max_workers: int = 4,
@@ -39,7 +39,7 @@ class StageExecutor:
         """
         self.config = config
         self.driver = driver
-        self.mode = mode
+        self.mode: Literal["replace", "merge"] = mode
         self.parallel = parallel
         self.max_workers = max_workers
         self.verbose = verbose
@@ -224,7 +224,7 @@ class StageExecutor:
                 setattr(self.config, "_sample", sample)
 
             try:
-                stat = source.load(self.driver, self.config, self.mode)
+                stat = source.load(cast("Neo4jDriver", self.driver), self.config, self.mode)
             finally:
                 if sample is not None:
                     if original_sample is not None:

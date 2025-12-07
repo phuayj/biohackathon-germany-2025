@@ -16,7 +16,7 @@ from urllib.request import urlretrieve
 
 if TYPE_CHECKING:
     from nerve.loader.config import Config
-    from nerve.loader.protocol import LoadStats
+    from nerve.loader.protocol import LoadStats, Neo4jDriver, Neo4jSession
 
 # HPO download URLs
 HPO_BASE_URL = "https://github.com/obophenotype/human-phenotype-ontology/releases/latest/download"
@@ -56,7 +56,7 @@ class HPOSource:
 
     def load(
         self,
-        driver: object,
+        driver: Neo4jDriver,
         config: Config,
         mode: Literal["replace", "merge"],
     ) -> LoadStats:
@@ -78,7 +78,7 @@ class HPOSource:
 
         # Load gene-phenotype associations
         if genes_path.exists():
-            with driver.session() as session:  # type: ignore[union-attr]
+            with driver.session() as session:
                 nodes, edges = _load_gene_phenotypes(
                     session,
                     genes_path,
@@ -92,7 +92,7 @@ class HPOSource:
 
         # Load disease-phenotype associations
         if hpoa_path.exists():
-            with driver.session() as session:  # type: ignore[union-attr]
+            with driver.session() as session:
                 nodes, direct_edges, assocs, pubs = _load_disease_phenotypes(
                     session,
                     hpoa_path,
@@ -137,7 +137,7 @@ def _load_hgnc_mapping(mapping_path: Path) -> dict[str, str]:
 
 
 def _load_gene_phenotypes(
-    session: object,
+    session: Neo4jSession,
     genes_path: Path,
     max_rows: int | None = None,
     db_version: str = "unknown",
@@ -253,7 +253,7 @@ def _load_gene_phenotypes(
 
 
 def _load_disease_phenotypes(
-    session: object,
+    session: Neo4jSession,
     hpoa_path: Path,
     max_rows: int | None = None,
     db_version: str = "unknown",
@@ -457,9 +457,9 @@ def _generate_association_id(
     return f"assoc:{digest}"
 
 
-def _insert_hpo_nodes_batch(session: object, nodes: list[dict[str, object]]) -> None:
+def _insert_hpo_nodes_batch(session: Neo4jSession, nodes: list[dict[str, object]]) -> None:
     """Insert a batch of HPO nodes into Neo4j."""
-    session.run(  # type: ignore[union-attr]
+    session.run(
         """
         UNWIND $nodes AS node
         MERGE (n:Node {id: node.id})
@@ -471,9 +471,9 @@ def _insert_hpo_nodes_batch(session: object, nodes: list[dict[str, object]]) -> 
     )
 
 
-def _insert_hpo_edges_batch(session: object, edges: list[dict[str, object]]) -> None:
+def _insert_hpo_edges_batch(session: Neo4jSession, edges: list[dict[str, object]]) -> None:
     """Insert a batch of HPO edges into Neo4j."""
-    session.run(  # type: ignore[union-attr]
+    session.run(
         """
         UNWIND $edges AS edge
         MATCH (s:Node {id: edge.subject})
@@ -489,9 +489,9 @@ def _insert_hpo_edges_batch(session: object, edges: list[dict[str, object]]) -> 
     )
 
 
-def _insert_publications_batch(session: object, pmids: list[str]) -> None:
+def _insert_publications_batch(session: Neo4jSession, pmids: list[str]) -> None:
     """Insert Publication nodes."""
-    session.run(  # type: ignore[union-attr]
+    session.run(
         """
         UNWIND $pmids AS pmid
         MERGE (p:Node:Publication {id: pmid})
@@ -503,9 +503,11 @@ def _insert_publications_batch(session: object, pmids: list[str]) -> None:
     )
 
 
-def _insert_associations_batch(session: object, associations: list[dict[str, object]]) -> None:
+def _insert_associations_batch(
+    session: Neo4jSession, associations: list[dict[str, object]]
+) -> None:
     """Insert reified Association nodes."""
-    session.run(  # type: ignore[union-attr]
+    session.run(
         """
         UNWIND $associations AS a
         MATCH (s:Node {id: a.subject})
@@ -529,9 +531,9 @@ def _insert_associations_batch(session: object, associations: list[dict[str, obj
     )
 
 
-def _link_publications_batch(session: object, links: list[dict[str, str]]) -> None:
+def _link_publications_batch(session: Neo4jSession, links: list[dict[str, str]]) -> None:
     """Create SUPPORTED_BY edges from Association to Publication nodes."""
-    session.run(  # type: ignore[union-attr]
+    session.run(
         """
         UNWIND $links AS link
         MATCH (a:Association {id: link.assoc_id})

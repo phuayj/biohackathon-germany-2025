@@ -647,9 +647,10 @@ def build_pair_subgraph(
                     )
 
         # Fetch citation network if backend supports it (additional enrichment)
-        if all_pmids and hasattr(backend, "get_citation_subgraph"):
+        get_citation_subgraph = getattr(backend, "get_citation_subgraph", None)
+        if all_pmids and get_citation_subgraph is not None:
             try:
-                pub_nodes, cites_edges = backend.get_citation_subgraph(list(all_pmids), k_hops=k)
+                pub_nodes, cites_edges = get_citation_subgraph(list(all_pmids), k_hops=k)
 
                 # Update publication nodes with richer data from backend
                 for pub_node in pub_nodes:
