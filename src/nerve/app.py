@@ -15,6 +15,38 @@ import uuid
 from pathlib import Path
 from dataclasses import replace
 
+
+# Load .env file before any other imports that might use env vars
+def _load_dotenv(path: Path) -> None:
+    """Load .env file into environment variables (does not override existing)."""
+    try:
+        with path.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    key, _, value = line.partition("=")
+                    key = key.strip()
+                    value = value.strip()
+                    if value.startswith('"') and value.endswith('"'):
+                        value = value[1:-1]
+                    elif value.startswith("'") and value.endswith("'"):
+                        value = value[1:-1]
+                    if key and key not in os.environ:
+                        os.environ[key] = value
+    except OSError:
+        pass
+
+
+# Try to load .env from current directory or project root
+_env_paths = [Path(".env"), Path(__file__).parent.parent.parent / ".env"]
+for _env_path in _env_paths:
+    if _env_path.exists():
+        _load_dotenv(_env_path)
+        break
+
+# ruff: noqa: E402
 import streamlit as st
 import streamlit.components.v1 as components
 from collections.abc import Iterable, Mapping
