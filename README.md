@@ -220,6 +220,7 @@ The sidebar will show "Using Neo4j KG backend" when connected. If configuration 
 
 - **`src/nerve/`** — Core library: pipeline orchestration, data models, rule engine, NER, and provenance handling.
 - **`src/nerve/mcp/`** — MCP tool adapters for external services (Europe PMC, CrossRef, ID normalization) and the knowledge graph backends.
+- **`src/nerve/loader/`** — Unified data loader CLI for downloading and loading biomedical data into Neo4j.
 - **`rules.yaml`** — Declarative audit rules (type constraints, ontology checks, evidence scoring).
 - **`tests/`** — Unit and integration tests for models, rules, MCP tools, and the full pipeline.
 - **`docs/`** — Design notes, architecture decisions, and roadmap.
@@ -401,6 +402,91 @@ subgraph = kg.ego(node_id="HGNC:1100", hops=2)
 - **Calibration**: Grid-search rule weights and isotonic scaling.
 - **Batch mode UI**: Upload claim list, download CSV of audit results.
 
+## Loading Data into Neo4j
+
+NERVE provides a unified data loader CLI to download and load all biomedical data sources into Neo4j with a single command.
+
+### Quick start
+
+```bash
+# List available data sources
+uv run python -m nerve.loader --list-sources
+
+# Load all data (default REPLACE mode - fast, clean slate)
+uv run python -m nerve.loader
+
+# Use MERGE mode (idempotent, slower but safe for incremental updates)
+uv run python -m nerve.loader --merge
+```
+
+### Configuration
+
+Create a `.env` file with your credentials:
+
+```bash
+# .env
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=password
+
+# Optional: COSMIC Cancer Gene Census (requires registration)
+COSMIC_EMAIL=your_email@example.com
+COSMIC_PASSWORD=your_cosmic_password
+
+# Optional: DisGeNET API (for enhanced gene-disease associations)
+DISGENET_API_KEY=your_disgenet_token
+
+# Optional: NCBI API key (for higher rate limits on PubMed/citation queries)
+# Register at https://www.ncbi.nlm.nih.gov/account/ to get a key
+# Without key: 3 requests/sec; with key: 10 requests/sec
+NCBI_API_KEY=your_ncbi_api_key
+```
+
+### Data sources and stages
+
+The loader organizes sources into 4 stages based on dependencies:
+
+| Stage | Source | Description | Credentials |
+|-------|--------|-------------|-------------|
+| 1 | `monarch` | Monarch KG (genes, diseases, phenotypes) | None |
+| 1 | `hpo` | HPO annotations | None |
+| 1 | `reactome` | Reactome pathways | None |
+| 1 | `hgnc` | HGNC ID mappings | None |
+| 2 | `disgenet` | DisGeNET gene-disease associations | None (API optional) |
+| 2 | `cosmic` | COSMIC Cancer Gene Census | COSMIC_EMAIL, COSMIC_PASSWORD |
+| 3 | `pub_metadata` | Publication metadata enrichment | NCBI_API_KEY (optional) |
+| 3 | `retractions` | Retraction status from CrossRef | None |
+| 3 | `citations` | Citation network from PubMed | NCBI_API_KEY (optional) |
+| 4 | `hpo_siblings` | HPO sibling map for GNN training | None |
+
+### Common usage patterns
+
+```bash
+# Load only specific sources
+uv run python -m nerve.loader --sources monarch,hpo,disgenet
+
+# Skip sources that require credentials
+uv run python -m nerve.loader --skip cosmic
+
+# Run only specific stages
+uv run python -m nerve.loader --stages 1,2
+
+# Download files only (no Neo4j loading)
+uv run python -m nerve.loader --download-only
+
+# Skip download, use existing files
+uv run python -m nerve.loader --skip-download
+
+# Force re-download even if files exist
+uv run python -m nerve.loader --force-download
+
+# Dry run (show what would be done)
+uv run python -m nerve.loader --dry-run
+
+# Load a small sample for testing
+uv run python -m nerve.loader --sample 100
+```
+
 ## Training the Suspicion GNN
 
 A small synthetic dataset and training loop live in `scripts/train_suspicion_gnn.py`:
@@ -414,22 +500,14 @@ The script builds 2-hop subgraphs from the mini KG, adds perturbed variants (dir
 
 ### Pre-building the HPO Sibling Map (Recommended)
 
-The GNN training requires HPO ontology information to detect phenotype sibling swaps. By default, it queries the OLS API for each HPO term, which is **very slow** (hours for large datasets). To avoid this:
-
-**Step 1: Build the HPO sibling map once**
+The GNN training requires HPO ontology information to detect phenotype sibling swaps. Use the unified data loader to build this:
 
 ```bash
-uv run python scripts/build_hpo_sibling_map.py
+# Build HPO sibling map (Stage 4, requires HPO data from Stage 1)
+uv run python -m nerve.loader --sources hpo,hpo_siblings
 ```
 
-This creates `data/hpo_sibling_map.json` (shows progress bar with ETA). Run once; reuse many times.
-
-**Step 2: Training automatically uses the cache**
-
-```bash
-# The training script automatically looks for data/hpo_sibling_map.json
-uv run python scripts/train_suspicion_gnn.py
-```
+This creates `data/hpo_sibling_map.json`. The training script automatically uses this cache.
 
 **Alternative: Skip online lookups entirely**
 
@@ -443,32 +521,14 @@ uv run python scripts/train_suspicion_gnn.py --skip-hpo-online
 
 The GNN can learn citation-based suspicion patterns by including the PubMed citation network in subgraphs. This enables detection of suspicious edges supported by papers that cite retracted work.
 
-**Step 1: Enrich retraction status**
-
-Mark publications in Neo4j as retracted/not retracted:
+**Load citation and retraction data:**
 
 ```bash
-uv run python scripts/enrich_retraction_status.py
+# Load publication metadata, retraction status, and citations (Stage 3)
+uv run python -m nerve.loader --sources pub_metadata,retractions,citations
 ```
 
-**Step 2: Build citation network**
-
-Fetch citation relationships from PubMed and create `CITES` edges:
-
-```bash
-# Fast: only find papers that cite retracted publications
-uv run python scripts/enrich_citations.py --mode retracted
-
-# Comprehensive: build full citation network (slower)
-uv run python scripts/enrich_citations.py --mode full --limit 1000
-
-# With NCBI API key for higher rate limits (10 req/sec vs 3 req/sec)
-uv run python scripts/enrich_citations.py --ncbi-api-key YOUR_KEY --mode retracted
-```
-
-**Step 3: Train GNN**
-
-Publication nodes and citation edges are included by default:
+**Train the GNN:**
 
 ```bash
 uv run python scripts/train_suspicion_gnn.py
