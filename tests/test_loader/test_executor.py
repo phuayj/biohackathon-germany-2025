@@ -315,3 +315,120 @@ class TestMergeMode:
         executor.execute_stages([[source]])
 
         assert source.received_mode == "merge"
+
+
+class TestDependencyLayers:
+    """Tests for dependency layer splitting to prevent deadlocks."""
+
+    def test_sources_without_dependencies_same_layer(self) -> None:
+        """Test that sources without dependencies are in the same layer."""
+        config = make_test_config()
+        driver = Mock()
+        source1 = MockSource("s1", stage=1)
+        source2 = MockSource("s2", stage=1)
+        source3 = MockSource("s3", stage=1)
+
+        executor = StageExecutor(config, driver, mode="replace", verbose=False)
+        layers = executor._split_into_dependency_layers([source1, source2, source3])
+
+        # All sources should be in one layer since no dependencies
+        assert len(layers) == 1
+        assert len(layers[0]) == 3
+
+    def test_sources_with_dependencies_split_into_layers(self) -> None:
+        """Test that sources with dependencies are split into separate layers."""
+        config = make_test_config()
+        driver = Mock()
+
+        # Create sources where s2 and s3 depend on s1
+        source1 = MockSource("s1", stage=1)
+        source1.dependencies = []
+
+        source2 = MockSource("s2", stage=1)
+        source2.dependencies = ["s1"]
+
+        source3 = MockSource("s3", stage=1)
+        source3.dependencies = ["s1"]
+
+        executor = StageExecutor(config, driver, mode="replace", verbose=False)
+        layers = executor._split_into_dependency_layers([source1, source2, source3])
+
+        # Should be 2 layers: [s1], then [s2, s3]
+        assert len(layers) == 2
+        assert len(layers[0]) == 1
+        assert layers[0][0].name == "s1"
+        assert len(layers[1]) == 2
+        assert {s.name for s in layers[1]} == {"s2", "s3"}
+
+    def test_chained_dependencies(self) -> None:
+        """Test sources with chained dependencies."""
+        config = make_test_config()
+        driver = Mock()
+
+        # s1 -> s2 -> s3 (chain)
+        source1 = MockSource("s1", stage=1)
+        source1.dependencies = []
+
+        source2 = MockSource("s2", stage=1)
+        source2.dependencies = ["s1"]
+
+        source3 = MockSource("s3", stage=1)
+        source3.dependencies = ["s2"]
+
+        executor = StageExecutor(config, driver, mode="replace", verbose=False)
+        layers = executor._split_into_dependency_layers([source1, source2, source3])
+
+        # Should be 3 layers: [s1], [s2], [s3]
+        assert len(layers) == 3
+        assert layers[0][0].name == "s1"
+        assert layers[1][0].name == "s2"
+        assert layers[2][0].name == "s3"
+
+    def test_dependencies_outside_stage_ignored(self) -> None:
+        """Test that dependencies on sources outside the stage are ignored."""
+        config = make_test_config()
+        driver = Mock()
+
+        # s1 depends on "external" which is not in this stage
+        source1 = MockSource("s1", stage=1)
+        source1.dependencies = ["external"]
+
+        source2 = MockSource("s2", stage=1)
+        source2.dependencies = []
+
+        executor = StageExecutor(config, driver, mode="replace", verbose=False)
+        layers = executor._split_into_dependency_layers([source1, source2])
+
+        # Both should be in the same layer since "external" is not in this stage
+        assert len(layers) == 1
+        assert len(layers[0]) == 2
+
+    def test_execute_respects_dependency_order(self) -> None:
+        """Test that execution respects dependency order between layers."""
+        config = make_test_config()
+        driver = Mock()
+
+        execution_order: list[str] = []
+
+        class OrderTrackingSource(MockSource):
+            def load(
+                self,
+                driver: object,
+                config: Config,
+                mode: Literal["replace", "merge"],
+            ) -> LoadStats:
+                execution_order.append(self.name)
+                return LoadStats(source=self.name, nodes_created=1)
+
+        # monarch must run before hpo
+        monarch = OrderTrackingSource("monarch", stage=1)
+        monarch.dependencies = []
+
+        hpo = OrderTrackingSource("hpo", stage=1)
+        hpo.dependencies = ["monarch"]
+
+        executor = StageExecutor(config, driver, mode="replace", parallel=False, verbose=False)
+        executor.execute_stages([[monarch, hpo]])
+
+        # Monarch should execute before HPO
+        assert execution_order.index("monarch") < execution_order.index("hpo")

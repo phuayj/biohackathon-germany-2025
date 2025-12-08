@@ -1,9 +1,8 @@
 """Publication enrichment data sources.
 
 This module contains sources that enrich Publication nodes with:
-- PublicationMetadataSource: Title, authors, journal, year
-- RetractionStatusSource: Retraction status
-- CitationsSource: CITES relationships
+- PublicationEnrichmentSource: Title, authors, journal, year, AND retraction status (single API call)
+- CitationsSource: CITES relationships for retracted publications
 """
 
 from __future__ import annotations
@@ -30,22 +29,27 @@ RATE_LIMIT_DELAY_WITH_KEY = 0.1  # ~10 requests/sec with API key
 
 @dataclass
 class PublicationMetadata:
-    """Metadata for a publication."""
+    """Metadata for a publication including retraction status."""
 
     pmid: str
     title: str | None = None
     authors: str | None = None
     journal: str | None = None
     year: int | None = None
+    retracted: bool = False
 
 
-class PublicationMetadataSource:
-    """Publication metadata enrichment source."""
+class PublicationEnrichmentSource:
+    """Publication enrichment source - fetches metadata AND retraction status in one API call.
 
-    name = "pub_metadata"
-    display_name = "Publication Metadata"
+    This consolidated source replaces the separate PublicationMetadataSource and
+    RetractionStatusSource to avoid redundant API calls to PubMed.
+    """
+
+    name = "pub_enrichment"
+    display_name = "Publication Enrichment"
     stage = 3
-    requires_credentials: list[str] = []  # NCBI_API_KEY is optional
+    requires_credentials: list[str] = []  # NCBI_API_KEY is optional but recommended
     dependencies = ["monarch"]
 
     def check_credentials(self, config: Config) -> tuple[bool, str | None]:
@@ -62,111 +66,74 @@ class PublicationMetadataSource:
         config: Config,
         mode: Literal["replace", "merge"],
     ) -> LoadStats:
-        """Enrich Publication nodes with metadata."""
-        from nerve.loader.protocol import LoadStats
+        """Enrich Publication nodes with metadata and retraction status."""
+        from nerve.loader.protocol import LoadStats, ProgressReporter
 
         sample = getattr(config, "_sample", None)
         api_key = config.ncbi_api_key
         delay = RATE_LIMIT_DELAY_WITH_KEY if api_key else RATE_LIMIT_DELAY
 
-        # Get PMIDs without titles
+        # Get PMIDs that need enrichment (no title yet)
         with driver.session() as session:
-            pmids = _get_publications_without_title(session, limit=sample)
+            pmids = _get_publications_needing_enrichment(session, limit=sample)
 
         if not pmids:
-            return LoadStats(source=self.name, nodes_updated=0)
-
-        total_updated = 0
-        batches = list(_batch_pmids(pmids, BATCH_SIZE))
-
-        for batch in batches:
-            try:
-                xml_text = _fetch_pubmed_metadata(batch, api_key=api_key)
-                metadata_list = _parse_pubmed_xml(xml_text)
-
-                if metadata_list:
-                    with driver.session() as session:
-                        updated = _update_publication_metadata(session, metadata_list)
-                        total_updated += updated
-
-                time.sleep(delay)
-            except Exception:
-                continue
-
-        return LoadStats(source=self.name, nodes_updated=total_updated)
-
-
-class RetractionStatusSource:
-    """Retraction status enrichment source."""
-
-    name = "retractions"
-    display_name = "Retraction Status"
-    stage = 3
-    requires_credentials: list[str] = []
-    dependencies = ["monarch"]
-
-    def check_credentials(self, config: Config) -> tuple[bool, str | None]:
-        """No required credentials."""
-        return True, None
-
-    def download(self, config: Config, force: bool = False) -> None:
-        """API-only, no download needed."""
-        pass
-
-    def load(
-        self,
-        driver: Neo4jDriver,
-        config: Config,
-        mode: Literal["replace", "merge"],
-    ) -> LoadStats:
-        """Enrich Publication nodes with retraction status."""
-        from nerve.loader.protocol import LoadStats
-
-        sample = getattr(config, "_sample", None)
-        api_key = config.ncbi_api_key
-        delay = RATE_LIMIT_DELAY_WITH_KEY if api_key else RATE_LIMIT_DELAY
-
-        # Get PMIDs without retraction check
-        with driver.session() as session:
-            pmids = _get_publications_without_retraction(session, limit=sample)
-
-        if not pmids:
+            print("    [Pub Enrichment] No publications to enrich", flush=True)
             return LoadStats(source=self.name, nodes_updated=0)
 
         total_updated = 0
         retracted_count = 0
         batches = list(_batch_pmids(pmids, BATCH_SIZE))
+        total_batches = len(batches)
 
-        for batch in batches:
+        print(
+            f"    [Pub Enrichment] Found {len(pmids):,} publications to enrich "
+            f"({total_batches} batches)",
+            flush=True,
+        )
+        progress = ProgressReporter(
+            "Pub Enrichment", operation="Fetching from PubMed", report_interval=10
+        )
+
+        for i, batch in enumerate(batches):
             try:
                 xml_text = _fetch_pubmed_metadata(batch, api_key=api_key)
-                retraction_infos = _parse_retraction_info(xml_text)
+                metadata_list = _parse_pubmed_xml_full(xml_text)
 
-                if retraction_infos:
+                if metadata_list:
                     with driver.session() as session:
-                        updated, retracted = _update_retraction_status(session, retraction_infos)
+                        updated, retracted = _update_publication_full(session, metadata_list)
                         total_updated += updated
                         retracted_count += retracted
 
+                progress.update(count=i + 1)
                 time.sleep(delay)
             except Exception:
                 continue
 
+        progress.finish(total_batches)
         return LoadStats(
             source=self.name,
             nodes_updated=total_updated,
-            extra={"retracted": retracted_count},
+            extra={"retracted_found": retracted_count},
         )
 
 
 class CitationsSource:
-    """Citation relationships enrichment source."""
+    """Citation relationships enrichment source.
+
+    Note: This source depends on pub_enrichment because it looks for
+    publications marked as retracted to find their citations.
+    """
 
     name = "citations"
     display_name = "Citations"
     stage = 3
     requires_credentials: list[str] = []
-    dependencies = ["monarch"]
+    dependencies = [
+        "monarch",
+        "pub_enrichment",
+    ]  # Need enrichment to run first (sets retracted flag)
 
     def check_credentials(self, config: Config) -> tuple[bool, str | None]:
         """No required credentials."""
@@ -183,7 +150,7 @@ class CitationsSource:
         mode: Literal["replace", "merge"],
     ) -> LoadStats:
         """Create CITES relationships for retracted publications."""
-        from nerve.loader.protocol import LoadStats
+        from nerve.loader.protocol import LoadStats, ProgressReporter
 
         api_key = config.ncbi_api_key
         delay = RATE_LIMIT_DELAY_WITH_KEY if api_key else RATE_LIMIT_DELAY
@@ -193,13 +160,20 @@ class CitationsSource:
             retracted_pmids = _get_retracted_pmids(session)
 
         if not retracted_pmids:
+            print("    [Citations] No retracted publications to process", flush=True)
             return LoadStats(source=self.name, edges_created=0)
 
         total_citing = 0
         total_relationships = 0
         batches = list(_batch_pmids(retracted_pmids, BATCH_SIZE))
+        total_batches = len(batches)
 
-        for batch in batches:
+        print(
+            f"    [Citations] Processing {len(retracted_pmids)} retracted publications", flush=True
+        )
+        progress = ProgressReporter("Citations", operation="Fetching citations", report_interval=5)
+
+        for i, batch in enumerate(batches):
             try:
                 xml_text = _fetch_citations(batch, api_key=api_key, direction="cited_by")
                 citation_links = _parse_citation_links(xml_text)
@@ -211,12 +185,16 @@ class CitationsSource:
                             created = _create_cites_relationships(session, cited_pmid, citing_pmids)
                             total_relationships += created
 
+                progress.update(count=i + 1)
                 time.sleep(delay)
             except Exception:
                 continue
 
+        progress.finish(total_batches)
+
         # Update cites_retracted_count
         if total_relationships > 0:
+            print("    [Citations] Updating citation counts...", flush=True)
             with driver.session() as session:
                 _update_cites_retracted_counts(session)
 
@@ -234,6 +212,159 @@ def _batch_pmids(pmids: list[str], batch_size: int) -> Iterator[list[str]]:
     """Yield batches of PMIDs."""
     for i in range(0, len(pmids), batch_size):
         yield pmids[i : i + batch_size]
+
+
+def _get_publications_needing_enrichment(
+    session: Neo4jSession, limit: int | None = None
+) -> list[str]:
+    """Get PMIDs of publications that need enrichment (no title yet)."""
+    query = """
+    MATCH (p:Publication)
+    WHERE p.title IS NULL
+    RETURN p.id AS pmid
+    """
+    if limit:
+        query += f" LIMIT {limit}"
+
+    result = session.run(query)
+    pmids: list[str] = []
+    for record in result:
+        pmid = str(record.get("pmid", "") or "")
+        if pmid:
+            if pmid.upper().startswith("PMID:"):
+                pmid = pmid[5:]
+            pmids.append(pmid)
+    return pmids
+
+
+def _parse_pubmed_xml_full(xml_text: str) -> list[PublicationMetadata]:
+    """Parse PubMed XML response into metadata objects including retraction status."""
+    results: list[PublicationMetadata] = []
+
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return results
+
+    for article in root.findall(".//PubmedArticle"):
+        pmid_elem = article.find(".//PMID")
+        if pmid_elem is None or not pmid_elem.text:
+            continue
+        pmid = pmid_elem.text.strip()
+
+        # Get title
+        title = None
+        title_elem = article.find(".//ArticleTitle")
+        if title_elem is not None and title_elem.text:
+            title = title_elem.text.strip()
+
+        # Get authors
+        authors = None
+        author_list = article.findall(".//Author")
+        if author_list:
+            author_names: list[str] = []
+            for author in author_list[:3]:
+                last_name = author.find("LastName")
+                initials = author.find("Initials")
+                if last_name is not None and last_name.text:
+                    name = last_name.text
+                    if initials is not None and initials.text:
+                        name += f" {initials.text}"
+                    author_names.append(name)
+
+            if author_names:
+                if len(author_list) > 3:
+                    authors = f"{author_names[0]} et al."
+                else:
+                    authors = ", ".join(author_names)
+
+        # Get journal
+        journal = None
+        journal_elem = article.find(".//Journal/Title")
+        if journal_elem is not None and journal_elem.text:
+            journal = journal_elem.text.strip()
+
+        # Get year
+        year = None
+        year_elem = article.find(".//PubDate/Year")
+        if year_elem is not None and year_elem.text:
+            try:
+                year = int(year_elem.text.strip())
+            except ValueError:
+                pass
+
+        # Check retraction status
+        retracted = False
+        pub_types = article.findall(".//PublicationType")
+        for pt in pub_types:
+            if pt.text and "Retracted Publication" in pt.text:
+                retracted = True
+                break
+
+        if not retracted:
+            comments = article.findall(".//CommentsCorrections")
+            for comment in comments:
+                ref_type = comment.get("RefType", "")
+                if ref_type == "RetractionIn":
+                    retracted = True
+                    break
+
+        results.append(
+            PublicationMetadata(
+                pmid=pmid,
+                title=title,
+                authors=authors,
+                journal=journal,
+                year=year,
+                retracted=retracted,
+            )
+        )
+
+    return results
+
+
+def _update_publication_full(
+    session: Neo4jSession, metadata_list: list[PublicationMetadata]
+) -> tuple[int, int]:
+    """Update Publication nodes with metadata AND retraction status.
+
+    Returns:
+        Tuple of (total_updated, retracted_count)
+    """
+    if not metadata_list:
+        return 0, 0
+
+    params = [
+        {
+            "pmid": m.pmid,
+            "title": m.title,
+            "authors": m.authors,
+            "journal": m.journal,
+            "year": m.year,
+            "retracted": m.retracted,
+        }
+        for m in metadata_list
+    ]
+
+    result = session.run(
+        """
+        UNWIND $metadata AS meta
+        MATCH (p:Publication)
+        WHERE p.id = meta.pmid OR p.id = 'PMID:' + meta.pmid
+        SET p.title = meta.title,
+            p.authors = meta.authors,
+            p.journal = meta.journal,
+            p.year = meta.year,
+            p.retracted = meta.retracted,
+            p.enriched_at = datetime()
+        RETURN count(p) AS updated
+        """,
+        metadata=params,
+    )
+    record = result.single()
+    updated = int(record["updated"]) if record else 0
+    retracted_count = sum(1 for m in metadata_list if m.retracted)
+    return updated, retracted_count
 
 
 def _get_publications_without_title(session: Neo4jSession, limit: int | None = None) -> list[str]:

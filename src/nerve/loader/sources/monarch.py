@@ -269,11 +269,18 @@ def _load_nodes(
     nodes_path: Path,
     max_rows: int | None = None,
     batch_size: int = 5000,
+    verbose: bool = True,
 ) -> tuple[int, set[str]]:
     """Load nodes into Neo4j."""
+    from nerve.loader.protocol import ProgressReporter
+
     loaded = 0
     node_ids: set[str] = set()
     batch: list[dict[str, object]] = []
+
+    progress = ProgressReporter(
+        "Monarch", operation="Loading nodes", report_interval=10000, verbose=verbose
+    )
 
     for row in _read_tsv(nodes_path, max_rows):
         if not _filter_node(row):
@@ -303,12 +310,14 @@ def _load_nodes(
         if len(batch) >= batch_size:
             _insert_nodes_batch(session, batch)
             loaded += len(batch)
+            progress.update(loaded)
             batch = []
 
     if batch:
         _insert_nodes_batch(session, batch)
         loaded += len(batch)
 
+    progress.finish(loaded)
     return loaded, node_ids
 
 
@@ -348,8 +357,11 @@ def _load_edges(
     max_rows: int | None = None,
     db_version: str = "unknown",
     batch_size: int = 5000,
+    verbose: bool = True,
 ) -> tuple[int, int, int]:
     """Load edges into Neo4j."""
+    from nerve.loader.protocol import ProgressReporter
+
     direct_edges_loaded = 0
     associations_created = 0
     publications_created = 0
@@ -360,8 +372,15 @@ def _load_edges(
     pub_links: list[dict[str, str]] = []
 
     retrieved_at = datetime.now(timezone.utc).isoformat()
+    rows_processed = 0
+
+    progress = ProgressReporter(
+        "Monarch", operation="Loading edges", report_interval=50000, verbose=verbose
+    )
 
     for row in _read_tsv(edges_path, max_rows):
+        rows_processed += 1
+        progress.update(rows_processed)
         subject = row.get("subject", "")
         obj = row.get("object", "")
         predicate = row.get("predicate", "")
@@ -451,6 +470,7 @@ def _load_edges(
     if pub_links:
         _link_publications_batch(session, pub_links)
 
+    progress.finish(rows_processed)
     return direct_edges_loaded, associations_created, publications_created
 
 
@@ -482,7 +502,7 @@ def _insert_associations_batch(
         UNWIND $associations AS a
         MATCH (s:Node {id: a.subject})
         MATCH (o:Node {id: a.object})
-        MERGE (assoc:Node:Association {id: a.assoc_id})
+        MERGE (assoc:Node {id: a.assoc_id})
         ON CREATE SET
             assoc.category = 'biolink:Association',
             assoc.predicate = a.predicate,
@@ -494,6 +514,7 @@ def _insert_associations_batch(
             assoc.record_hash = a.record_hash,
             assoc.primary_knowledge_source = a.primary_knowledge_source,
             assoc.aggregator_knowledge_source = a.aggregator_knowledge_source
+        SET assoc:Association
         MERGE (s)-[:SUBJECT_OF]->(assoc)
         MERGE (assoc)-[:OBJECT_OF]->(o)
         """,
@@ -506,10 +527,11 @@ def _insert_publications_batch(session: Neo4jSession, pmids: list[str]) -> None:
     session.run(
         """
         UNWIND $pmids AS pmid
-        MERGE (p:Node:Publication {id: pmid})
+        MERGE (p:Node {id: pmid})
         ON CREATE SET
             p.category = 'biolink:Publication',
             p.name = pmid
+        SET p:Publication
         """,
         pmids=pmids,
     )

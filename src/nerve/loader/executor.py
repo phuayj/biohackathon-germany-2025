@@ -77,25 +77,31 @@ class StageExecutor:
                 print(f" STAGE {stage_num}: {stage_names}")
                 print(f"{'═' * 60}")
 
-            # Check if stage can run in parallel
-            can_parallel = self.parallel and len(stage_sources) > 1
+            # Split sources into dependency layers to avoid deadlocks
+            # Sources in the same layer have no dependencies on each other
+            layers = self._split_into_dependency_layers(stage_sources)
 
-            if can_parallel:
-                stats = self._execute_parallel(
-                    stage_sources,
-                    download_only=download_only,
-                    skip_download=skip_download,
-                    force_download=force_download,
-                    sample=sample,
-                )
-            else:
-                stats = self._execute_sequential(
-                    stage_sources,
-                    download_only=download_only,
-                    skip_download=skip_download,
-                    force_download=force_download,
-                    sample=sample,
-                )
+            stats: list[LoadStats] = []
+            for layer in layers:
+                can_parallel = self.parallel and len(layer) > 1
+
+                if can_parallel:
+                    layer_stats = self._execute_parallel(
+                        layer,
+                        download_only=download_only,
+                        skip_download=skip_download,
+                        force_download=force_download,
+                        sample=sample,
+                    )
+                else:
+                    layer_stats = self._execute_sequential(
+                        layer,
+                        download_only=download_only,
+                        skip_download=skip_download,
+                        force_download=force_download,
+                        sample=sample,
+                    )
+                stats.extend(layer_stats)
 
             all_stats.extend(stats)
 
@@ -108,6 +114,54 @@ class StageExecutor:
                 pass
 
         return all_stats
+
+    def _split_into_dependency_layers(self, sources: list[DataSource]) -> list[list[DataSource]]:
+        """Split sources into dependency layers.
+
+        Sources in the same layer have no dependencies on each other,
+        so they can run in parallel without causing deadlocks.
+
+        Args:
+            sources: List of sources to split.
+
+        Returns:
+            List of layers, where each layer contains sources that
+            can be executed in parallel.
+        """
+        if not sources:
+            return []
+
+        source_names = {s.name for s in sources}
+        remaining = list(sources)
+        layers: list[list[DataSource]] = []
+        completed: set[str] = set()
+
+        while remaining:
+            # Find sources whose dependencies are all completed
+            ready = []
+            not_ready = []
+
+            for source in remaining:
+                # Get dependencies that are within this stage
+                stage_deps = [d for d in source.dependencies if d in source_names]
+                # Check if all stage dependencies are completed
+                if all(d in completed for d in stage_deps):
+                    ready.append(source)
+                else:
+                    not_ready.append(source)
+
+            if not ready:
+                # No sources ready - circular dependency or bug
+                # Fall back to running remaining sources sequentially
+                for source in not_ready:
+                    layers.append([source])
+                break
+
+            layers.append(ready)
+            completed.update(s.name for s in ready)
+            remaining = not_ready
+
+        return layers
 
     def _execute_sequential(
         self,
@@ -188,6 +242,7 @@ class StageExecutor:
     ) -> LoadStats:
         """Execute a single source."""
         from nerve.loader.protocol import LoadStats
+        from nerve.loader.retry import RetryHandler
 
         if self.verbose:
             print(f"\n[{source.display_name}]")
@@ -224,7 +279,16 @@ class StageExecutor:
                 setattr(self.config, "_sample", sample)
 
             try:
-                stat = source.load(cast("Neo4jDriver", self.driver), self.config, self.mode)
+                # Use retry handler to handle Neo4j transient errors (deadlocks, etc.)
+                retry_handler = RetryHandler(
+                    max_retries=5,  # More retries for deadlocks
+                    initial_delay=1.0,  # Shorter initial delay for transient errors
+                    verbose=self.verbose,
+                )
+                stat = retry_handler.execute(
+                    lambda: source.load(cast("Neo4jDriver", self.driver), self.config, self.mode),
+                    operation_name=f"Load {source.display_name}",
+                )
             finally:
                 if sample is not None:
                     if original_sample is not None:

@@ -192,10 +192,26 @@ Examples:
     try:
         from neo4j import GraphDatabase
 
-        driver = GraphDatabase.driver(
-            config.neo4j_uri,
-            auth=(config.neo4j_user, config.neo4j_password),
-        )
+        # Try to import notification filtering (neo4j 5.x+)
+        try:
+            from neo4j import NotificationDisabledClassification
+
+            # Suppress "property key does not exist" warnings - these are expected
+            # when querying for properties that haven't been set yet
+            driver = GraphDatabase.driver(
+                config.neo4j_uri,
+                auth=(config.neo4j_user, config.neo4j_password),
+                notifications_disabled_classifications=[
+                    NotificationDisabledClassification.UNRECOGNIZED
+                ],
+            )
+        except ImportError:
+            # Older neo4j driver version without notification filtering
+            driver = GraphDatabase.driver(
+                config.neo4j_uri,
+                auth=(config.neo4j_user, config.neo4j_password),
+            )
+
         # Test connection
         with driver.session() as session:
             session.run("RETURN 1")

@@ -44,6 +44,70 @@ class LoadStats:
         return f"{self.source}: {count_str} ({self.duration_seconds:.1f}s)"
 
 
+class ProgressReporter:
+    """Reports progress during long-running operations.
+
+    This class provides periodic progress updates during batch processing,
+    with configurable reporting intervals.
+    """
+
+    def __init__(
+        self,
+        source_name: str,
+        operation: str = "Processing",
+        report_interval: int = 10000,
+        verbose: bool = True,
+    ) -> None:
+        """Initialize the progress reporter.
+
+        Args:
+            source_name: Name of the data source.
+            operation: Description of the operation (e.g., "Loading nodes").
+            report_interval: Report progress every N items.
+            verbose: Whether to print progress messages.
+        """
+        self.source_name = source_name
+        self.operation = operation
+        self.report_interval = report_interval
+        self.verbose = verbose
+        self._count = 0
+        self._last_reported = 0
+
+    def update(self, count: int | None = None, increment: int = 1) -> None:
+        """Update progress count.
+
+        Args:
+            count: Set absolute count (if provided).
+            increment: Increment by this amount (if count not provided).
+        """
+        if count is not None:
+            self._count = count
+        else:
+            self._count += increment
+
+        if self.verbose and self._count - self._last_reported >= self.report_interval:
+            self._report()
+            self._last_reported = self._count
+
+    def _report(self) -> None:
+        """Print progress message."""
+        print(f"    [{self.source_name}] {self.operation}: {self._count:,} items...", flush=True)
+
+    def finish(self, final_count: int | None = None) -> None:
+        """Report final count.
+
+        Args:
+            final_count: Override final count (if different from tracked count).
+        """
+        if final_count is not None:
+            self._count = final_count
+        if self.verbose and self._count > self._last_reported:
+            print(
+                f"    [{self.source_name}] {self.operation}: {self._count:,} items complete.",
+                flush=True,
+            )
+
+
 @runtime_checkable
 class Neo4jRecord(Protocol):
     """Protocol for Neo4j record."""

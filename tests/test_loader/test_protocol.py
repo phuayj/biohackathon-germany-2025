@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from nerve.loader.protocol import LoadStats
+import io
+import sys
+
+from nerve.loader.protocol import LoadStats, ProgressReporter
 
 
 class TestLoadStats:
@@ -95,3 +98,105 @@ class TestLoadStats:
         assert "update_test" in result
         assert "50 nodes updated" in result
         assert "100 edges updated" in result
+
+
+class TestProgressReporter:
+    """Tests for ProgressReporter class."""
+
+    def test_progress_reporter_creation(self) -> None:
+        """Test ProgressReporter initialization."""
+        reporter = ProgressReporter(
+            source_name="test",
+            operation="Loading",
+            report_interval=1000,
+            verbose=True,
+        )
+        assert reporter.source_name == "test"
+        assert reporter.operation == "Loading"
+        assert reporter.report_interval == 1000
+        assert reporter.verbose is True
+
+    def test_progress_reporter_no_output_when_not_verbose(self) -> None:
+        """Test that no output is produced when verbose=False."""
+        reporter = ProgressReporter(
+            source_name="test",
+            operation="Loading",
+            report_interval=10,
+            verbose=False,
+        )
+
+        # Capture stdout
+        captured = io.StringIO()
+        sys.stdout = captured
+        try:
+            for i in range(100):
+                reporter.update()
+            reporter.finish()
+        finally:
+            sys.stdout = sys.__stdout__
+
+        assert captured.getvalue() == ""
+
+    def test_progress_reporter_reports_at_interval(self) -> None:
+        """Test that progress is reported at intervals."""
+        reporter = ProgressReporter(
+            source_name="test",
+            operation="Processing",
+            report_interval=10,
+            verbose=True,
+        )
+
+        captured = io.StringIO()
+        sys.stdout = captured
+        try:
+            for i in range(25):
+                reporter.update()
+        finally:
+            sys.stdout = sys.__stdout__
+
+        output = captured.getvalue()
+        # Should have reported at 10 and 20
+        assert output.count("[test]") == 2
+        assert "10" in output
+        assert "20" in output
+
+    def test_progress_reporter_finish_reports_final_count(self) -> None:
+        """Test that finish reports the final count."""
+        reporter = ProgressReporter(
+            source_name="test",
+            operation="Loading",
+            report_interval=100,
+            verbose=True,
+        )
+
+        captured = io.StringIO()
+        sys.stdout = captured
+        try:
+            for i in range(50):
+                reporter.update()
+            reporter.finish()
+        finally:
+            sys.stdout = sys.__stdout__
+
+        output = captured.getvalue()
+        assert "50" in output
+        assert "complete" in output
+
+    def test_progress_reporter_update_with_absolute_count(self) -> None:
+        """Test update with absolute count."""
+        reporter = ProgressReporter(
+            source_name="test",
+            operation="Loading",
+            report_interval=10,
+            verbose=True,
+        )
+
+        captured = io.StringIO()
+        sys.stdout = captured
+        try:
+            reporter.update(count=15)
+        finally:
+            sys.stdout = sys.__stdout__
+
+        output = captured.getvalue()
+        assert "15" in output

@@ -11,8 +11,10 @@ from nerve.loader.retry import (
     DownloadError,
     FatalLoadError,
     LoadError,
+    Neo4jTransientError,
     RateLimitError,
     RetryHandler,
+    is_neo4j_transient_error,
     with_retry,
 )
 
@@ -210,3 +212,99 @@ class TestExceptions:
         """Test RateLimitError exception."""
         error = RateLimitError("Rate limited")
         assert str(error) == "Rate limited"
+
+    def test_neo4j_transient_error(self) -> None:
+        """Test Neo4jTransientError exception."""
+        error = Neo4jTransientError("Deadlock detected")
+        assert str(error) == "Deadlock detected"
+
+
+class TestNeo4jTransientErrorDetection:
+    """Tests for Neo4j transient error detection."""
+
+    def test_is_neo4j_transient_error_deadlock(self) -> None:
+        """Test detection of Neo4j deadlock error."""
+        exc = Exception(
+            "{neo4j_code: Neo.TransientError.Transaction.DeadlockDetected} "
+            "ForsetiClient can't acquire ExclusiveLock"
+        )
+        assert is_neo4j_transient_error(exc) is True
+
+    def test_is_neo4j_transient_error_lock_stopped(self) -> None:
+        """Test detection of Neo4j lock client stopped error."""
+        exc = Exception("Neo.TransientError.Transaction.LockClientStopped")
+        assert is_neo4j_transient_error(exc) is True
+
+    def test_is_neo4j_transient_error_terminated(self) -> None:
+        """Test detection of Neo4j transaction terminated error."""
+        exc = Exception("Neo.TransientError.Transaction.Terminated")
+        assert is_neo4j_transient_error(exc) is True
+
+    def test_is_neo4j_transient_error_database_unavailable(self) -> None:
+        """Test detection of Neo4j database unavailable error."""
+        exc = Exception("Neo.TransientError.Database.DatabaseUnavailable")
+        assert is_neo4j_transient_error(exc) is True
+
+    def test_is_neo4j_transient_error_not_transient(self) -> None:
+        """Test that non-transient errors are not detected."""
+        exc = Exception("Some other database error")
+        assert is_neo4j_transient_error(exc) is False
+
+    def test_is_neo4j_transient_error_by_type_name(self) -> None:
+        """Test detection by exception type name."""
+
+        class TransientError(Exception):
+            pass
+
+        exc = TransientError("some transient error")
+        assert is_neo4j_transient_error(exc) is True
+
+
+class TestRetryHandlerNeo4jErrors:
+    """Tests for RetryHandler with Neo4j transient errors."""
+
+    def test_execute_neo4j_deadlock_retries(self) -> None:
+        """Test that Neo4j deadlock errors trigger retry."""
+        handler = RetryHandler(max_retries=2, initial_delay=0.01, verbose=False)
+
+        # Simulate a deadlock error message like the one from Neo4j
+        deadlock_exc = Exception(
+            "{neo4j_code: Neo.TransientError.Transaction.DeadlockDetected} "
+            "ForsetiClient[transactionId=39] can't acquire ExclusiveLock"
+        )
+        mock_func = Mock(side_effect=[deadlock_exc, "success"])
+
+        result = handler.execute(mock_func, "test_op")
+
+        assert result == "success"
+        assert mock_func.call_count == 2
+
+    def test_execute_neo4j_deadlock_fails_after_max_retries(self) -> None:
+        """Test that Neo4j deadlock errors fail after max retries."""
+        handler = RetryHandler(max_retries=2, initial_delay=0.01, verbose=False)
+
+        deadlock_exc = Exception(
+            "{neo4j_code: Neo.TransientError.Transaction.DeadlockDetected} "
+            "ForsetiClient can't acquire lock"
+        )
+        mock_func = Mock(side_effect=deadlock_exc)
+
+        with pytest.raises(FatalLoadError, match="DeadlockDetected"):
+            handler.execute(mock_func, "test_op")
+
+        # Initial attempt + 2 retries = 3 calls
+        assert mock_func.call_count == 3
+
+    def test_execute_non_transient_neo4j_error_no_retry(self) -> None:
+        """Test that non-transient errors are not retried."""
+        handler = RetryHandler(max_retries=2, initial_delay=0.01, verbose=False)
+
+        # A non-transient Neo4j error
+        exc = ValueError("Invalid query syntax")
+        mock_func = Mock(side_effect=exc)
+
+        with pytest.raises(ValueError, match="Invalid query syntax"):
+            handler.execute(mock_func, "test_op")
+
+        # Should fail immediately, no retries
+        assert mock_func.call_count == 1

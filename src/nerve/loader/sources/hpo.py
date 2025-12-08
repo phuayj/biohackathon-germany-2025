@@ -143,8 +143,11 @@ def _load_gene_phenotypes(
     db_version: str = "unknown",
     ncbi_to_hgnc: dict[str, str] | None = None,
     batch_size: int = 5000,
+    verbose: bool = True,
 ) -> tuple[int, int]:
     """Load HPO gene-to-phenotype annotations."""
+    from nerve.loader.protocol import ProgressReporter
+
     nodes_created = 0
     edges_created = 0
 
@@ -153,6 +156,11 @@ def _load_gene_phenotypes(
     seen_ids: set[str] = set()
 
     retrieved_at = datetime.now(timezone.utc).isoformat()
+    rows_processed = 0
+
+    progress = ProgressReporter(
+        "HPO", operation="Loading gene-phenotypes", report_interval=10000, verbose=verbose
+    )
 
     with genes_path.open("r", encoding="utf-8") as f:
         # Skip comment lines
@@ -169,6 +177,9 @@ def _load_gene_phenotypes(
         for i, row in enumerate(reader):
             if max_rows is not None and i >= max_rows:
                 break
+
+            rows_processed += 1
+            progress.update(rows_processed)
 
             gene_ncbi = row.get("gene_id", "").strip()
             gene_symbol = row.get("gene_symbol", "").strip()
@@ -249,6 +260,7 @@ def _load_gene_phenotypes(
         _insert_hpo_edges_batch(session, edge_batch)
         edges_created += len(edge_batch)
 
+    progress.finish(rows_processed)
     return nodes_created, edges_created
 
 
@@ -258,8 +270,11 @@ def _load_disease_phenotypes(
     max_rows: int | None = None,
     db_version: str = "unknown",
     batch_size: int = 5000,
+    verbose: bool = True,
 ) -> tuple[int, int, int, int]:
     """Load HPO disease-to-phenotype annotations."""
+    from nerve.loader.protocol import ProgressReporter
+
     nodes_created = 0
     direct_edges_created = 0
     associations_created = 0
@@ -273,6 +288,11 @@ def _load_disease_phenotypes(
     seen_ids: set[str] = set()
 
     retrieved_at = datetime.now(timezone.utc).isoformat()
+    rows_processed = 0
+
+    progress = ProgressReporter(
+        "HPO", operation="Loading disease-phenotypes", report_interval=20000, verbose=verbose
+    )
 
     with hpoa_path.open("r", encoding="utf-8") as f:
         # Skip header/comment lines
@@ -292,6 +312,9 @@ def _load_disease_phenotypes(
         for i, row in enumerate(reader):
             if max_rows is not None and i >= max_rows:
                 break
+
+            rows_processed += 1
+            progress.update(rows_processed)
 
             disease_id = row.get("database_id", "").strip()
             disease_name = row.get("disease_name", "").strip()
@@ -441,6 +464,7 @@ def _load_disease_phenotypes(
     if pub_links:
         _link_publications_batch(session, pub_links)
 
+    progress.finish(rows_processed)
     return nodes_created, direct_edges_created, associations_created, publications_created
 
 
@@ -494,10 +518,11 @@ def _insert_publications_batch(session: Neo4jSession, pmids: list[str]) -> None:
     session.run(
         """
         UNWIND $pmids AS pmid
-        MERGE (p:Node:Publication {id: pmid})
+        MERGE (p:Node {id: pmid})
         ON CREATE SET
             p.category = 'biolink:Publication',
             p.name = pmid
+        SET p:Publication
         """,
         pmids=pmids,
     )
@@ -512,7 +537,7 @@ def _insert_associations_batch(
         UNWIND $associations AS a
         MATCH (s:Node {id: a.subject})
         MATCH (o:Node {id: a.object})
-        MERGE (assoc:Node:Association {id: a.assoc_id})
+        MERGE (assoc:Node {id: a.assoc_id})
         ON CREATE SET
             assoc.category = 'biolink:Association',
             assoc.predicate = a.predicate,
@@ -524,6 +549,7 @@ def _insert_associations_batch(
             assoc.record_hash = a.record_hash,
             assoc.evidence = a.evidence,
             assoc.frequency = a.frequency
+        SET assoc:Association
         MERGE (s)-[:SUBJECT_OF]->(assoc)
         MERGE (assoc)-[:OBJECT_OF]->(o)
         """,

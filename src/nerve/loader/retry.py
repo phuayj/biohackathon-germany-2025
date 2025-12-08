@@ -16,6 +16,17 @@ DEFAULT_MAX_RETRIES = 3
 DEFAULT_INITIAL_DELAY = 2.0  # seconds
 MAX_DELAY_CAP = 60.0  # cap exponential backoff
 
+# Neo4j transient error codes that should trigger retry
+NEO4J_TRANSIENT_ERROR_CODES = frozenset(
+    {
+        "Neo.TransientError.Transaction.DeadlockDetected",
+        "Neo.TransientError.Transaction.LockClientStopped",
+        "Neo.TransientError.Transaction.Terminated",
+        "Neo.TransientError.General.TransactionMemoryLimit",
+        "Neo.TransientError.Database.DatabaseUnavailable",
+    }
+)
+
 
 class DownloadError(Exception):
     """Raised when a download operation fails after all retries."""
@@ -41,6 +52,33 @@ class RateLimitError(Exception):
     pass
 
 
+class Neo4jTransientError(Exception):
+    """Raised when Neo4j returns a transient error (e.g., deadlock)."""
+
+    pass
+
+
+def is_neo4j_transient_error(exc: BaseException) -> bool:
+    """Check if an exception is a Neo4j transient error.
+
+    Args:
+        exc: The exception to check.
+
+    Returns:
+        True if this is a retryable Neo4j transient error.
+    """
+    exc_str = str(exc)
+    # Check for neo4j driver exceptions
+    for code in NEO4J_TRANSIENT_ERROR_CODES:
+        if code in exc_str:
+            return True
+    # Also check the exception type name for neo4j library exceptions
+    exc_type = type(exc).__name__
+    if "TransientError" in exc_type or "Deadlock" in exc_type:
+        return True
+    return False
+
+
 # Errors that should trigger retry
 RETRYABLE_ERRORS = (
     URLError,
@@ -50,6 +88,7 @@ RETRYABLE_ERRORS = (
     RateLimitError,
     IncompleteRead,
     OSError,  # Includes various network-related errors
+    Neo4jTransientError,
 )
 
 
@@ -121,6 +160,23 @@ class RetryHandler:
                     )
                 time.sleep(delay)
                 delay = min(delay * 2, self.max_delay)
+            except Exception as e:
+                # Check if this is a Neo4j transient error (e.g., deadlock)
+                if is_neo4j_transient_error(e):
+                    last_error = e
+                    if attempt == self.max_retries:
+                        break
+
+                    if self.verbose:
+                        print(
+                            f"  ⚠ {operation_name} hit Neo4j transient error "
+                            f"(attempt {attempt + 1}/{self.max_retries + 1}), "
+                            f"retrying in {delay:.1f}s..."
+                        )
+                    time.sleep(delay)
+                    delay = min(delay * 2, self.max_delay)
+                else:
+                    raise
 
         raise FatalLoadError(
             f"{operation_name} failed after {self.max_retries + 1} attempts: {last_error}"

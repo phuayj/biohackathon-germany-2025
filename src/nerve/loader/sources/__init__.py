@@ -19,8 +19,7 @@ from nerve.loader.sources.hgnc import HGNCSource
 from nerve.loader.sources.cosmic import COSMICSource
 from nerve.loader.sources.disgenet import DisGeNETSource
 from nerve.loader.sources.publications import (
-    PublicationMetadataSource,
-    RetractionStatusSource,
+    PublicationEnrichmentSource,
     CitationsSource,
 )
 from nerve.loader.sources.hpo_siblings import HPOSiblingMapSource
@@ -33,8 +32,7 @@ ALL_SOURCES: list[type[DataSource]] = [
     HGNCSource,
     COSMICSource,
     DisGeNETSource,
-    PublicationMetadataSource,
-    RetractionStatusSource,
+    PublicationEnrichmentSource,  # Combines metadata + retraction status in one API call
     CitationsSource,
     HPOSiblingMapSource,
 ]
@@ -47,8 +45,7 @@ __all__ = [
     "HGNCSource",
     "COSMICSource",
     "DisGeNETSource",
-    "PublicationMetadataSource",
-    "RetractionStatusSource",
+    "PublicationEnrichmentSource",
     "CitationsSource",
     "HPOSiblingMapSource",
 ]

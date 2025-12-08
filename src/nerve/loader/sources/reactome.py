@@ -140,8 +140,11 @@ def _load_ncbi_pathways(
     species_filter: str | None = "Homo sapiens",
     ncbi_to_hgnc: dict[str, str] | None = None,
     batch_size: int = 5000,
+    verbose: bool = True,
 ) -> tuple[int, int]:
     """Load Reactome NCBI gene-to-pathway mappings."""
+    from nerve.loader.protocol import ProgressReporter
+
     nodes_created = 0
     edges_created = 0
 
@@ -150,6 +153,11 @@ def _load_ncbi_pathways(
     seen_ids: set[str] = set()
 
     retrieved_at = datetime.now(timezone.utc).isoformat()
+    rows_processed = 0
+
+    progress = ProgressReporter(
+        "Reactome", operation="Loading NCBI pathways", report_interval=50000, verbose=verbose
+    )
 
     with ncbi_path.open("r", encoding="utf-8") as f:
         reader = csv.reader(f, delimiter="\t")
@@ -157,6 +165,9 @@ def _load_ncbi_pathways(
         for i, row in enumerate(reader):
             if max_rows is not None and i >= max_rows:
                 break
+
+            rows_processed += 1
+            progress.update(rows_processed)
 
             if len(row) < 6:
                 continue
@@ -246,6 +257,7 @@ def _load_ncbi_pathways(
         _insert_reactome_edges_batch(session, edge_batch)
         edges_created += len(edge_batch)
 
+    progress.finish(rows_processed)
     return nodes_created, edges_created
 
 
@@ -256,8 +268,11 @@ def _load_uniprot_pathways(
     db_version: str = "unknown",
     species_filter: str | None = "Homo sapiens",
     batch_size: int = 5000,
+    verbose: bool = True,
 ) -> tuple[int, int]:
     """Load Reactome UniProt-to-pathway mappings."""
+    from nerve.loader.protocol import ProgressReporter
+
     nodes_created = 0
     edges_created = 0
 
@@ -266,6 +281,11 @@ def _load_uniprot_pathways(
     seen_ids: set[str] = set()
 
     retrieved_at = datetime.now(timezone.utc).isoformat()
+    rows_processed = 0
+
+    progress = ProgressReporter(
+        "Reactome", operation="Loading UniProt pathways", report_interval=100000, verbose=verbose
+    )
 
     with uniprot_path.open("r", encoding="utf-8") as f:
         reader = csv.reader(f, delimiter="\t")
@@ -273,6 +293,9 @@ def _load_uniprot_pathways(
         for i, row in enumerate(reader):
             if max_rows is not None and i >= max_rows:
                 break
+
+            rows_processed += 1
+            progress.update(rows_processed)
 
             if len(row) < 6:
                 continue
@@ -357,6 +380,7 @@ def _load_uniprot_pathways(
         _insert_reactome_edges_batch(session, edge_batch)
         edges_created += len(edge_batch)
 
+    progress.finish(rows_processed)
     return nodes_created, edges_created
 
 

@@ -191,13 +191,16 @@ def _query_with_backoff(
 
 def _ensure_gene_node(session: Neo4jSession, hgnc_id: str, symbol: str) -> None:
     """Ensure gene node exists in Neo4j."""
+    # First MERGE on Node label only (to find existing nodes from Monarch)
+    # Then add Gene label and set properties if needed
     session.run(
         """
-        MERGE (g:Node:Gene {id: $id})
+        MERGE (g:Node {id: $id})
         ON CREATE SET
             g.name = $symbol,
             g.category = 'biolink:Gene',
             g.source_db = 'disgenet_enrichment'
+        SET g:Gene
         """,
         id=hgnc_id,
         symbol=symbol,
@@ -263,26 +266,27 @@ def _load_disgenet_associations(
             }
         )
 
-    # Insert disease nodes
+    # Insert disease nodes - MERGE on Node first, then add Disease label
     session.run(
         """
         UNWIND $diseases AS d
-        MERGE (n:Node:Disease {id: d.id})
+        MERGE (n:Node {id: d.id})
         ON CREATE SET
             n.name = d.name,
             n.category = 'biolink:Disease',
             n.source_db = 'disgenet'
+        SET n:Disease
         """,
         diseases=disease_batch,
     )
 
-    # Insert associations
+    # Insert associations - MERGE on Node first, then add Association label
     session.run(
         """
         UNWIND $associations AS a
         MATCH (s:Node {id: a.subject})
         MATCH (o:Node {id: a.object})
-        MERGE (assoc:Node:Association {id: a.assoc_id})
+        MERGE (assoc:Node {id: a.assoc_id})
         ON CREATE SET
             assoc.category = 'biolink:Association',
             assoc.predicate = a.predicate,
@@ -293,6 +297,7 @@ def _load_disgenet_associations(
             assoc.retrieved_at = a.retrieved_at,
             assoc.score = a.score,
             assoc.disgenet_source = a.disgenet_source
+        SET assoc:Association
         MERGE (s)-[:SUBJECT_OF]->(assoc)
         MERGE (assoc)-[:OBJECT_OF]->(o)
         """,
