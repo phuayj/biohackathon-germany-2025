@@ -457,10 +457,14 @@ def render_entity_badge(entity: EntityMention) -> None:
     source_badge = _get_entity_source_badge(entity.source)
 
     if entity.norm_id:
+        monarch_url = f"https://monarchinitiative.org/{entity.norm_id}"
+        
         st.markdown(
+            f'<a href="{monarch_url}" target="_blank" style="text-decoration: none;">'
             f'<span style="background-color: #1a472a; color: #98fb98; '
             f'padding: 2px 8px; border-radius: 4px; font-size: 0.9em;">'
-            f"**{entity.mention}** → `{entity.norm_id}`</span>{source_badge}",
+            f'**{entity.mention}** → <code>{entity.norm_id}</code>'
+            f'</span></a>{source_badge}',
             unsafe_allow_html=True,
         )
         if entity.norm_label:
